@@ -1,13 +1,15 @@
 """Community API — shared novels, tags, and co-creation settings."""
 
+import logging
 import random
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.rate_limiter import limiter
 from app.database import get_db
 from app.models.community import CommunityNovel, CommunityTag
 from app.models.project import Chapter, Project
@@ -18,6 +20,8 @@ from app.schemas.models import (
     CommunityNovelUpdate,
     CommunityTagResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/community", tags=["community"])
 
@@ -173,11 +177,14 @@ async def get_random_novels(
 
 
 @router.post("/novels", response_model=CommunityNovelResponse)
+@limiter.limit("20/minute")
 async def upload_novel(
+    request: Request,
     data: CommunityNovelCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Publish a novel to the community."""
+    logger.info("Uploading novel: %s by %s", data.title, data.author_name)
     novel = CommunityNovel(
         title=data.title,
         author_name=data.author_name,
@@ -286,7 +293,9 @@ async def update_novel(
 
 
 @router.delete("/novels/{novel_id}")
+@limiter.limit("20/minute")
 async def delete_novel(
+    request: Request,
     novel_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
@@ -310,7 +319,9 @@ async def delete_novel(
 
 
 @router.post("/novels/{novel_id}/like", response_model=dict)
+@limiter.limit("30/minute")
 async def like_novel(
+    request: Request,
     novel_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):

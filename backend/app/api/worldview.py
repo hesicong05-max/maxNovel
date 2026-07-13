@@ -1,5 +1,6 @@
 """Worldview upload and parsing API."""
 
+import logging
 import os
 import tempfile
 from typing import Annotated, Any
@@ -8,6 +9,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings as app_settings
 from app.core.worldview_parser import worldview_parser
 from app.database import get_db
 from app.models.project import Project, ProjectStatus, Worldview
@@ -20,7 +22,10 @@ from app.schemas.models import (
 
 router = APIRouter(prefix="/api/worldview", tags=["worldview"])
 
+logger = logging.getLogger(__name__)
+
 ALLOWED_EXTENSIONS = {".txt", ".md", ".markdown", ".doc", ".docx"}
+MAX_UPLOAD_SIZE = app_settings.MAX_UPLOAD_SIZE
 
 
 def _extract_text_from_docx(file_bytes: bytes) -> str:
@@ -101,9 +106,18 @@ async def upload_worldview_file(
             detail=f"不支持的文件格式: {ext}，请上传 .txt / .md / .doc / .docx 文件",
         )
 
-    # Read file content
+    # Read file content with size limit
     file_bytes = await file.read()
-    if len(file_bytes) < 10:
+    file_size = len(file_bytes)
+    if file_size > MAX_UPLOAD_SIZE:
+        max_mb = MAX_UPLOAD_SIZE / (1024 * 1024)
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件过大 ({file_size / 1024:.0f}KB)，最大允许 {max_mb:.0f}MB",
+        )
+    logger.info("File upload: %s (%d bytes)", filename, file_size)
+
+    if file_size < 10:
         raise HTTPException(status_code=400, detail="文件内容为空或过短")
 
     # Extract text based on file type

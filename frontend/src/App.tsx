@@ -1,4 +1,5 @@
 import { Routes, Route, NavLink } from "react-router-dom";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import ProjectList from "@/pages/ProjectList";
 import NewProject from "@/pages/NewProject";
 import ProjectDetail from "@/pages/ProjectDetail";
@@ -9,8 +10,9 @@ import CommunityEdit from "@/pages/CommunityEdit";
 
 function App() {
   return (
-    <div className="app-layout">
-      <aside className="sidebar">
+    <ErrorBoundary>
+      <div className="app-layout">
+        <aside className="sidebar">
         <div className="sidebar-brand">
           <div className="sidebar-brand-icon">✦</div>
           <div className="sidebar-brand-title">满分小说</div>
@@ -64,6 +66,7 @@ function App() {
         </Routes>
       </main>
     </div>
+    </ErrorBoundary>
   );
 }
 

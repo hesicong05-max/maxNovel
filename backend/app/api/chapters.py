@@ -3,14 +3,16 @@
 import json
 from typing import Annotated, Any, AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings as app_settings
 from app.core.llm_client import llm_client
 from app.core.memory_store import memory_store
 from app.core.pacing_planner import pacing_planner
+from app.core.rate_limiter import limiter
 from app.database import get_db, async_session
 from app.models.project import Chapter, Outline, Project, ProjectStatus, StoryMemory, Worldview
 from app.prompts.templates import build_chapter_prompt, build_summary_prompt
@@ -310,7 +312,9 @@ async def update_chapter(
 # ============================================================================
 
 @router.post("/{project_id}/{chapter_num}/generate")
+@limiter.limit(app_settings.RATE_LIMIT_LLM)
 async def generate_chapter(
+    request: Request,
     project_id: str,
     chapter_num: int,
 ):
@@ -322,7 +326,9 @@ async def generate_chapter(
 
 
 @router.post("/{project_id}/generate-all")
+@limiter.limit(app_settings.RATE_LIMIT_LLM)
 async def generate_all_chapters(
+    request: Request,
     project_id: str,
     skip_existing: bool = True,
 ):
