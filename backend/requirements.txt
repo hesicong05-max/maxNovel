@@ -13,6 +13,7 @@ slowapi>=0.1.9
 PyJWT>=2.8.0
 bcrypt>=4.1.0
 email-validator>=2.1.0
+alembic>=1.13.0
 
 # Dev / test dependencies
 pytest>=8.0.0
