@@ -7,6 +7,11 @@ COPY package.json package-lock.json* ./
 RUN npm install
 
 COPY . .
+
+# Vite env vars are embedded at build time
+ARG VITE_SENTRY_DSN=""
+ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
+
 RUN npm run build
 
 # Production stage

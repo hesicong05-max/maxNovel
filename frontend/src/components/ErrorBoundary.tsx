@@ -1,4 +1,5 @@
 import { Component, ErrorInfo, ReactNode } from "react";
+import * as Sentry from "@sentry/react";
 
 interface Props {
   children: ReactNode;
@@ -13,6 +14,7 @@ interface State {
 /**
  * Global Error Boundary — catches unhandled React render errors
  * and displays a user-friendly fallback UI instead of a white screen.
+ * Errors are also reported to Sentry (if configured).
  */
 class ErrorBoundary extends Component<Props, State> {
   constructor(props: Props) {
@@ -26,6 +28,16 @@ class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
     console.error("[ErrorBoundary] Unhandled render error:", error, errorInfo);
+
+    // Report to Sentry (no-op if Sentry is not initialized)
+    Sentry.captureException(error, {
+      contexts: {
+        react: {
+          componentStack: errorInfo.componentStack,
+        },
+      },
+    });
+
     this.setState({ error, errorInfo });
   }
 

@@ -25,6 +25,11 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger = logging.getLogger(__name__)
     logger.info("Starting %s ...", app_settings.APP_NAME)
+
+    # Initialize Sentry error monitoring (no-op if DSN not set)
+    from app.core.sentry import init_sentry
+    init_sentry()
+
     await init_db()
     logger.info("Database initialized")
     yield

@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_DAYS: int = int(os.getenv("JWT_EXPIRE_DAYS", "7"))
 
+    # Sentry — error monitoring (empty = disabled)
+    SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
+    SENTRY_TRACES_SAMPLE_RATE: float = float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1"))
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

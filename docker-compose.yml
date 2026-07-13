@@ -13,10 +13,17 @@ services:
       - HOST=0.0.0.0
       - PORT=8000
       - CORS_ORIGINS=http://localhost:5173,http://localhost:3000,http://localhost:8080
+      # Auth / JWT — change in production!
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production-please-use-a-long-random-string}
+      # Sentry — leave empty to disable
+      - SENTRY_DSN=${SENTRY_DSN:-}
     restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        - VITE_SENTRY_DSN=${VITE_SENTRY_DSN:-}
     container_name: novel-frontend
     ports:
       - "8080:80"
