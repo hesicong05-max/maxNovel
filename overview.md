@@ -1,63 +1,94 @@
-# 社区功能模块 — 实施总结
+# 满分小说 — 安全与工程基础设施修复概览
 
-## 功能概述
+> 日期：2026-07-13  
+> 版本：v0.2.0  
+> 前置：上线就绪评估报告（31/100）
 
-为小说世界观续写 Agent 添加完整的社区功能：用户可上传小说到社区展示，自定义标签分类，主页支持无限下滑随机加载其他用户作品，专属编辑界面编写详细描述信息，并可开放「共创世界观」权限。
+---
 
-## 新增后端 API 端点
+## 修复总结
 
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/api/community/novels` | GET | 分页列表，支持 tag 筛选 + latest/popular/random 排序 |
-| `/api/community/novels/random` | GET | 随机加载（下拉刷新），支持 exclude 排除已加载 ID |
-| `/api/community/novels` | POST | 上传小说到社区（可关联项目自动填充统计） |
-| `/api/community/novels/{id}` | GET | 小说详情（自动增加阅读数） |
-| `/api/community/novels/{id}` | PUT | 编辑小说（简介/梗概/章节说明/标签/共创开关） |
-| `/api/community/novels/{id}` | DELETE | 从社区移除小说 |
-| `/api/community/novels/{id}/like` | POST | 点赞 |
-| `/api/community/tags` | GET | 标签列表（按使用量排序） |
-| `/api/community/projects/{id}/stats` | GET | 获取项目章节数和字数（上传时用） |
+### Git 版本控制
+- 已初始化 Git 并绑定 GitHub 仓库
+- 仓库地址：https://github.com/hesicong05-max/maxNovel.git
+- 提交历史：
+  - `6b536bf` feat: 满分小说 v0.1.0 初始提交（56 文件）
+  - `c1ca96c` fix: P0/P1 安全与工程基础设施修复（14 文件）
 
-## 数据模型
+### P0 致命问题修复（6/10 项）
 
-- **CommunityNovel**: title, author_name, genre, project_id, synopsis, story_outline, chapter_notes, allow_cocreation, view_count, like_count, total_chapters, total_words, tags(多对多)
-- **CommunityTag**: name(唯一), usage_count, novels(多对多)
-- **novel_tag_association**: novel_id + tag_id 关联表
+| # | 问题 | 修复方案 | 验证 |
+|---|------|---------|------|
+| 1 | Git 未初始化 | ✅ 已初始化 + 绑定 GitHub | 2 次提交已推送 |
+| 2 | Debug 模式硬编码 True | ✅ 环境变量控制，默认 False | health 返回 debug:false |
+| 3 | CORS 仅 localhost | ✅ 环境变量配置 + 限制 methods | CORS_ORIGINS 从 .env 读取 |
+| 4 | API Key 明文存储 | ✅ 环境变量优先 + 文件权限 0600 | GET 端点返回掩码 |
+| 5 | 无速率限制 | ✅ slowapi 集成 | LLM 10/min, 写入 20/min |
+| 6 | 无文件大小限制 | ✅ 10MB 上限 + 413 状态码 | MAX_UPLOAD_SIZE 配置 |
+| 7 | 无安全 Headers | ✅ 6 项安全 Headers | curl 验证全部返回 |
 
-## 前端新增页面
+### P1 重要问题修复（3/8 项）
 
-1. **Community.tsx** — 社区主页
-   - IntersectionObserver 实现无限下滑加载
-   - 标签筛选 + 最新/热门/随机排序
-   - 随机刷新按钮重新加载内容
-   - 小说卡片网格展示（标题/作者/类型/标签/简介/阅读赞/章节数/共创标识）
+| # | 问题 | 修复方案 |
+|---|------|---------|
+| 1 | 无日志框架 | ✅ 结构化 logging + 彩色控制台 + 请求日志中间件 |
+| 2 | 无异常处理中间件 | ✅ 全局 Exception/ValueError handler + request_id |
+| 3 | 无 React Error Boundary | ✅ 全局错误边界，防止白屏 |
 
-2. **CommunityNovelDetail.tsx** — 小说详情页
-   - 完整展示简介/故事梗概/章节说明
-   - 标签列表 + 阅读数/点赞/章节/总字数统计
-   - 点赞按钮 + 基于世界观共创入口
-   - 编辑/删除操作
+### 仍需后续处理的项
 
-3. **CommunityEdit.tsx** — 上传/编辑界面
-   - 关联项目选择（自动填充标题/类型/章节/字数统计）
-   - 动态标签增删（Enter/逗号添加，Backspace删除，点击移除，最多10个）
-   - 小说简介、故事梗概、章节说明三个独立文本区域（含字数计数）
-   - 「是否允许共创世界观」开关（带视觉反馈）
-   - 前端参数校验（标题必填/长度限制/简介长度限制）
+| 优先级 | 问题 | 建议 |
+|--------|------|------|
+| P0 | 用户认证系统 | 引入 JWT + 用户注册/登录 |
+| P0 | API 访问控制 | 所有写操作需验证身份和所有权 |
+| P0 | 生产级数据库 | 迁移到 PostgreSQL |
+| P0 | HTTPS 配置 | Nginx 反向代理 + TLS 证书 |
+| P0 | Docker 容器化 | Dockerfile + docker-compose |
+| P1 | 核心模块单元测试 | pytest 覆盖 pacing_planner 等 |
+| P1 | API 集成测试 | pytest + httpx AsyncClient |
+| P1 | 数据库迁移 | Alembic |
+| P1 | 监控告警 | Sentry 错误监控 |
 
-## 关键技术决策
+---
 
-- 字段存储在独立表中（CommunityNovel），不污染原有 Project 表
-- 标签使用多对多关联表，支持标签复用和使用计数
-- 无限滚动使用 IntersectionObserver + 已加载 ID 排除机制，避免重复加载
-- async SQLAlchemy 关系懒加载问题通过 `db.refresh(novel, ["tags"])` 预加载解决
+## 修复后的配置结构
 
-## 验证结果
-- 后端模块导入通过
-- 前端 TypeScript 零错误
-- 6 个社区 API 端点全部注册
-- 端到端测试通过：创建→列表→详情→点赞→标签→更新→随机加载→删除
+```
+backend/
+├── .env.example    # 完整配置模板
+├── .env.dev        # 开发环境（DEBUG=true）
+├── .env.prod       # 生产环境（DEBUG=false, 严格限制）
+├── app/
+│   ├── config.py           # 所有配置从环境变量读取
+│   ├── main.py             # 集成日志+异常处理+安全Headers+限流
+│   ├── core/
+│   │   ├── logging_config.py   # 日志框架
+│   │   ├── rate_limiter.py     # slowapi 限流器
+│   │   └── settings_store.py   # API Key 安全存储
+│   └── api/
+│       ├── chapters.py     # LLM 端点限流
+│       ├── community.py    # 写入端点限流
+│       └── worldview.py    # 文件上传大小限制
+frontend/
+└── src/
+    ├── App.tsx                    # ErrorBoundary 包裹
+    └── components/
+        └── ErrorBoundary.tsx      # 全局错误边界
+```
+
+## 安全 Headers 验证
+
+```
+x-content-type-options: nosniff
+x-frame-options: DENY
+x-xss-protection: 1; mode=block
+referrer-policy: strict-origin-when-cross-origin
+content-security-policy: default-src 'self'; ...
+x-request-id: <uuid>
+```
 
 ## 测试地址
 - 前端：http://localhost:5173
-- 后端 API 文档：http://localhost:8000/docs
+- 后端：http://localhost:8000
+- API 文档：http://localhost:8000/docs
+- GitHub：https://github.com/hesicong05-max/maxNovel
