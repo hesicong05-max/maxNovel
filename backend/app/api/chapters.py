@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings as app_settings
+from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.llm_client import llm_client
 from app.core.memory_store import memory_store
 from app.core.pacing_planner import pacing_planner
@@ -38,12 +39,10 @@ MAX_WORD_COUNT = 10000
 async def get_word_counts(
     project_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Get word count configuration for all chapters."""
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    project = await get_project_for_owner(project_id, current_user, db)
 
     # Load outline to get chapter entries with target_word_count
     ol_result = await db.execute(select(Outline).where(Outline.project_id == project_id))
@@ -94,12 +93,10 @@ async def update_word_counts(
     project_id: str,
     data: WordCountConfigRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Save word count configuration."""
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    project = await get_project_for_owner(project_id, current_user, db)
 
     # Validate total_word_count
     if data.total_word_count is not None:
@@ -161,7 +158,7 @@ async def update_word_counts(
     await db.commit()
 
     # Return updated config
-    return await get_word_counts(project_id, db)
+    return await get_word_counts(project_id, db, current_user)
 
 
 # ============================================================================
@@ -169,7 +166,13 @@ async def update_word_counts(
 # ============================================================================
 
 @router.get("/{project_id}")
-async def list_chapters(project_id: str, db: Annotated[AsyncSession, Depends(get_db)]):
+async def list_chapters(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    await get_project_for_owner(project_id, current_user, db)
+
     result = await db.execute(
         select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.chapter_num)
     )
@@ -188,12 +191,13 @@ async def list_chapters(project_id: str, db: Annotated[AsyncSession, Depends(get
 
 
 @router.get("/{project_id}/progress")
-async def get_progress(project_id: str, db: Annotated[AsyncSession, Depends(get_db)]):
+async def get_progress(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
     """Get worldview reveal progress and story state."""
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    project = await get_project_for_owner(project_id, current_user, db)
 
     # Query worldview directly
     wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
@@ -245,7 +249,14 @@ async def get_progress(project_id: str, db: Annotated[AsyncSession, Depends(get_
 
 
 @router.get("/{project_id}/{chapter_num}")
-async def get_chapter(project_id: str, chapter_num: int, db: Annotated[AsyncSession, Depends(get_db)]):
+async def get_chapter(
+    project_id: str,
+    chapter_num: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    await get_project_for_owner(project_id, current_user, db)
+
     result = await db.execute(
         select(Chapter).where(
             Chapter.project_id == project_id,
@@ -275,8 +286,11 @@ async def update_chapter(
     chapter_num: int,
     data: ChapterUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Edit a generated chapter."""
+    await get_project_for_owner(project_id, current_user, db)
+
     result = await db.execute(
         select(Chapter).where(
             Chapter.project_id == project_id,
@@ -317,8 +331,13 @@ async def generate_chapter(
     request: Request,
     project_id: str,
     chapter_num: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Generate a single chapter with streaming output."""
+    # Verify ownership before streaming starts
+    await get_project_for_owner(project_id, current_user, db)
+
     return StreamingResponse(
         _stream_single_chapter(project_id, chapter_num),
         media_type="text/event-stream",
@@ -330,9 +349,14 @@ async def generate_chapter(
 async def generate_all_chapters(
     request: Request,
     project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
     skip_existing: bool = True,
 ):
     """Batch generate all chapters with streaming progress via SSE."""
+    # Verify ownership before streaming starts
+    await get_project_for_owner(project_id, current_user, db)
+
     return StreamingResponse(
         _stream_batch_generate(project_id, skip_existing=skip_existing),
         media_type="text/event-stream",

@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.rate_limiter import limiter
 from app.database import get_db
 from app.models.community import CommunityNovel, CommunityTag
@@ -108,6 +109,12 @@ async def _novel_to_response(novel: CommunityNovel) -> CommunityNovelResponse:
     )
 
 
+def _check_novel_ownership(novel: CommunityNovel, user: User) -> None:
+    """Verify that the user owns the novel. Raises 403 if not."""
+    if novel.owner_id is not None and novel.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="无权操作此小说")
+
+
 # ── Novel CRUD ───────────────────────────────────────────
 
 @router.get("/novels", response_model=list[CommunityNovelBrief])
@@ -118,7 +125,7 @@ async def list_novels(
     tag: str | None = Query(None),
     sort: str = Query("latest", pattern="^(latest|popular|random)$"),
 ):
-    """List community novels with pagination, optional tag filter, and sort order."""
+    """List community novels with pagination, optional tag filter, and sort order. Public."""
     query = select(CommunityNovel).options(selectinload(CommunityNovel.tags))
 
     if tag:
@@ -146,7 +153,7 @@ async def get_random_novels(
     limit: int = Query(6, ge=1, le=30),
     exclude: str | None = Query(None, description="Comma-separated novel IDs to exclude"),
 ):
-    """Return random novels for infinite scroll refresh, excluding already-loaded IDs."""
+    """Return random novels for infinite scroll refresh. Public."""
     exclude_ids = set()
     if exclude:
         exclude_ids = {eid.strip() for eid in exclude.split(",") if eid.strip()}
@@ -182,9 +189,15 @@ async def upload_novel(
     request: Request,
     data: CommunityNovelCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
-    """Publish a novel to the community."""
+    """Publish a novel to the community. Requires authentication."""
     logger.info("Uploading novel: %s by %s", data.title, data.author_name)
+
+    # If project_id is provided, verify ownership
+    if data.project_id:
+        await get_project_for_owner(data.project_id, current_user, db)
+
     novel = CommunityNovel(
         title=data.title,
         author_name=data.author_name,
@@ -196,6 +209,7 @@ async def upload_novel(
         allow_cocreation=data.allow_cocreation,
         total_chapters=data.total_chapters,
         total_words=data.total_words,
+        owner_id=current_user.id,
     )
     db.add(novel)
     await db.flush()
@@ -222,7 +236,7 @@ async def get_novel(
     novel_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Get a single novel's full details. Increments view count."""
+    """Get a single novel's full details. Increments view count. Public."""
     result = await db.execute(
         select(CommunityNovel)
         .options(selectinload(CommunityNovel.tags))
@@ -250,8 +264,9 @@ async def update_novel(
     novel_id: str,
     data: CommunityNovelUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
-    """Edit a community novel's details."""
+    """Edit a community novel's details. Requires authentication + ownership."""
     result = await db.execute(
         select(CommunityNovel)
         .options(selectinload(CommunityNovel.tags))
@@ -260,6 +275,8 @@ async def update_novel(
     novel = result.scalar_one_or_none()
     if not novel:
         raise HTTPException(status_code=404, detail="小说不存在")
+
+    _check_novel_ownership(novel, current_user)
 
     if data.title is not None:
         novel.title = data.title
@@ -298,8 +315,9 @@ async def delete_novel(
     request: Request,
     novel_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
-    """Remove a novel from the community."""
+    """Remove a novel from the community. Requires authentication + ownership."""
     result = await db.execute(
         select(CommunityNovel)
         .options(selectinload(CommunityNovel.tags))
@@ -308,6 +326,8 @@ async def delete_novel(
     novel = result.scalar_one_or_none()
     if not novel:
         raise HTTPException(status_code=404, detail="小说不存在")
+
+    _check_novel_ownership(novel, current_user)
 
     # Decrement tag usage counts
     for tag in list(novel.tags):
@@ -325,7 +345,7 @@ async def like_novel(
     novel_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Like a novel (increments like_count)."""
+    """Like a novel (increments like_count). Public."""
     result = await db.execute(select(CommunityNovel).where(CommunityNovel.id == novel_id))
     novel = result.scalar_one_or_none()
     if not novel:
@@ -343,7 +363,7 @@ async def list_tags(
     db: Annotated[AsyncSession, Depends(get_db)],
     limit: int = Query(50, ge=1, le=200),
 ):
-    """List all tags sorted by usage count descending."""
+    """List all tags sorted by usage count descending. Public."""
     result = await db.execute(
         select(CommunityTag)
         .where(CommunityTag.usage_count > 0)
@@ -359,12 +379,10 @@ async def list_tags(
 async def get_project_stats(
     project_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
-    """Get chapter count and total word count for a project, used during upload."""
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    """Get chapter count and total word count for a project. Requires auth + ownership."""
+    project = await get_project_for_owner(project_id, current_user, db)
 
     ch_result = await db.execute(
         select(func.count(Chapter.id), func.coalesce(func.sum(Chapter.word_count), 0))

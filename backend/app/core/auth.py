@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
+from app.models.project import Project
 from app.models.user import User
 
 security = HTTPBearer(auto_error=False)
@@ -101,3 +102,24 @@ async def get_optional_user(
         return result.scalar_one_or_none()
     except HTTPException:
         return None
+
+
+async def get_project_for_owner(
+    project_id: str,
+    user: User,
+    db: AsyncSession,
+) -> Project:
+    """Load a project and verify ownership.
+
+    Raises:
+        404 if project not found.
+        403 if user is not the owner (and owner_id is not NULL).
+    Projects with owner_id=NULL (legacy data) are accessible to all authenticated users.
+    """
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    if project.owner_id is not None and project.owner_id != user.id:
+        raise HTTPException(status_code=403, detail="无权操作此项目")
+    return project

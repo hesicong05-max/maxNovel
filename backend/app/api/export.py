@@ -3,13 +3,14 @@
 from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import User, get_current_user, get_project_for_owner
 from app.database import get_db
-from app.models.project import Chapter, Project
+from app.models.project import Chapter
 
 router = APIRouter(prefix="/api/export", tags=["export"])
 
@@ -21,11 +22,12 @@ def _content_disposition(filename: str) -> str:
 
 
 @router.get("/{project_id}/txt")
-async def export_txt(project_id: str, db: Annotated[AsyncSession, Depends(get_db)]):
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+async def export_txt(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    project = await get_project_for_owner(project_id, current_user, db)
 
     result = await db.execute(
         select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.chapter_num)
@@ -50,11 +52,12 @@ async def export_txt(project_id: str, db: Annotated[AsyncSession, Depends(get_db
 
 
 @router.get("/{project_id}/markdown")
-async def export_markdown(project_id: str, db: Annotated[AsyncSession, Depends(get_db)]):
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+async def export_markdown(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    project = await get_project_for_owner(project_id, current_user, db)
 
     result = await db.execute(
         select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.chapter_num)

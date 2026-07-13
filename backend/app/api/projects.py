@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import User, get_current_user, get_project_for_owner
 from app.database import get_db
 from app.models.project import Chapter, Outline, Project, ProjectStatus, Worldview
 from app.schemas.models import ProjectCreate, ProjectResponse
@@ -26,8 +27,15 @@ async def _project_extras(db: AsyncSession, project_id: str) -> dict:
 
 
 @router.get("", response_model=list[ProjectResponse])
-async def list_projects(db: Annotated[AsyncSession, Depends(get_db)]):
-    result = await db.execute(select(Project).order_by(Project.updated_at.desc()))
+async def list_projects(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    result = await db.execute(
+        select(Project)
+        .where(Project.owner_id == current_user.id)
+        .order_by(Project.updated_at.desc())
+    )
     projects = result.scalars().all()
 
     responses = []
@@ -42,7 +50,11 @@ async def list_projects(db: Annotated[AsyncSession, Depends(get_db)]):
 
 
 @router.post("", response_model=ProjectResponse)
-async def create_project(data: ProjectCreate, db: Annotated[AsyncSession, Depends(get_db)]):
+async def create_project(
+    data: ProjectCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
     project = Project(
         title=data.title,
         genre=data.genre,
@@ -50,6 +62,7 @@ async def create_project(data: ProjectCreate, db: Annotated[AsyncSession, Depend
         chapter_word_count=data.chapter_word_count,
         style_intensity=data.style_intensity,
         status=ProjectStatus.DRAFT,
+        owner_id=current_user.id,
     )
     db.add(project)
     await db.commit()
@@ -63,11 +76,12 @@ async def create_project(data: ProjectCreate, db: Annotated[AsyncSession, Depend
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
-async def get_project(project_id: str, db: Annotated[AsyncSession, Depends(get_db)]):
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+async def get_project(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    project = await get_project_for_owner(project_id, current_user, db)
 
     resp = ProjectResponse.model_validate(project, from_attributes=True)
     extras = await _project_extras(db, project.id)
@@ -78,11 +92,12 @@ async def get_project(project_id: str, db: Annotated[AsyncSession, Depends(get_d
 
 
 @router.delete("/{project_id}")
-async def delete_project(project_id: str, db: Annotated[AsyncSession, Depends(get_db)]):
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+async def delete_project(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    project = await get_project_for_owner(project_id, current_user, db)
 
     await db.delete(project)
     await db.commit()
@@ -94,11 +109,9 @@ async def update_project(
     project_id: str,
     data: ProjectCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    project = await get_project_for_owner(project_id, current_user, db)
 
     project.title = data.title
     project.genre = data.genre

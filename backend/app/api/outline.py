@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.llm_client import llm_client
 from app.core.pacing_planner import pacing_planner
 from app.core.memory_store import memory_store
@@ -22,12 +23,10 @@ router = APIRouter(prefix="/api/outline", tags=["outline"])
 async def generate_outline(
     project_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Generate a story outline based on worldview and pacing plan."""
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    project = await get_project_for_owner(project_id, current_user, db)
 
     # Query worldview directly (avoid lazy loading)
     wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
@@ -92,7 +91,13 @@ async def generate_outline(
 
 
 @router.get("/{project_id}")
-async def get_outline(project_id: str, db: Annotated[AsyncSession, Depends(get_db)]):
+async def get_outline(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    await get_project_for_owner(project_id, current_user, db)
+
     result = await db.execute(select(Outline).where(Outline.project_id == project_id))
     outline = result.scalar_one_or_none()
     if not outline:
@@ -114,8 +119,11 @@ async def update_outline(
     project_id: str,
     data: OutlineCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Update outline (user-edited)."""
+    project = await get_project_for_owner(project_id, current_user, db)
+
     result = await db.execute(select(Outline).where(Outline.project_id == project_id))
     outline = result.scalar_one_or_none()
     if not outline:
@@ -125,18 +133,15 @@ async def update_outline(
     outline.chapters = [c.model_dump() for c in data.chapters]
 
     # Rebuild reveal plan based on edited chapters
-    result2 = await db.execute(select(Project).where(Project.id == project_id))
-    project = result2.scalar_one_or_none()
-    if project:
-        wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
-        worldview = wv_result.scalar_one_or_none()
-        if worldview:
-            elements = worldview.parsed_elements or []
-            outline.reveal_plan = pacing_planner.plan(
-                elements=elements,
-                total_chapters=project.total_chapters,
-                chapter_word_count=project.chapter_word_count,
-            )
+    wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
+    worldview = wv_result.scalar_one_or_none()
+    if worldview:
+        elements = worldview.parsed_elements or []
+        outline.reveal_plan = pacing_planner.plan(
+            elements=elements,
+            total_chapters=project.total_chapters,
+            chapter_word_count=project.chapter_word_count,
+        )
 
     await db.commit()
     await db.refresh(outline)
@@ -154,12 +159,10 @@ async def update_outline(
 async def confirm_outline(
     project_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Confirm the outline and move to writing phase."""
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    project = await get_project_for_owner(project_id, current_user, db)
 
     # Check outline exists (query directly)
     ol_result = await db.execute(select(Outline).where(Outline.project_id == project_id).limit(1))

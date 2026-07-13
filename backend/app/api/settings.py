@@ -1,8 +1,11 @@
 """LLM settings API — manage API key, model, and connection testing."""
 
-from fastapi import APIRouter
+from typing import Annotated
+
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from app.core.auth import User, get_current_user
 from app.core.llm_client import llm_client
 from app.core.settings_store import load_settings, save_settings
 
@@ -69,8 +72,10 @@ PROVIDER_PRESETS = [
 
 
 @router.get("/llm", response_model=LLMSettingsResponse)
-async def get_llm_settings():
-    """Get current LLM settings (API key is masked)."""
+async def get_llm_settings(
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Get current LLM settings (API key is masked). Requires authentication."""
     s = load_settings()
     api_key = s.get("api_key", "")
     # Mask the key: show first 8 and last 4 chars
@@ -92,8 +97,11 @@ async def get_llm_settings():
 
 
 @router.post("/llm", response_model=LLMSettingsResponse)
-async def update_llm_settings(req: LLMSettingsRequest):
-    """Save LLM settings. If api_key is all stars (masked), keep the existing key."""
+async def update_llm_settings(
+    req: LLMSettingsRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Save LLM settings. Requires authentication."""
     current = load_settings()
 
     # If the submitted key looks like a masked key (contains *), keep the existing one
@@ -128,13 +136,15 @@ async def update_llm_settings(req: LLMSettingsRequest):
 
 
 @router.post("/llm/test", response_model=TestConnectionResponse)
-async def test_llm_connection():
-    """Test the LLM API connection with current settings."""
+async def test_llm_connection(
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Test the LLM API connection with current settings. Requires authentication."""
     result = await llm_client.test_connection()
     return TestConnectionResponse(**result)
 
 
 @router.get("/llm/providers")
 async def get_providers():
-    """Get predefined provider presets."""
+    """Get predefined provider presets. Public (static data)."""
     return {"providers": PROVIDER_PRESETS}

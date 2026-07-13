@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings as app_settings
+from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.worldview_parser import worldview_parser
 from app.database import get_db
 from app.models.project import Project, ProjectStatus, Worldview
@@ -91,12 +92,17 @@ async def _extract_text_from_doc(file_bytes: bytes, filename: str) -> str:
 @router.post("/{project_id}/upload-file")
 async def upload_worldview_file(
     project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
     file: UploadFile = File(...),
 ):
     """
     Upload a document file (.txt, .md, .doc, .docx) and extract its text content.
     Returns the extracted text for the frontend to review before calling /import.
     """
+    # Verify project ownership
+    await get_project_for_owner(project_id, current_user, db)
+
     # Validate file extension
     filename = file.filename or ""
     _, ext = os.path.splitext(filename.lower())
@@ -166,6 +172,7 @@ async def import_worldview(
     project_id: str,
     data: WorldviewImportRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
     """
     Import worldview from a free-form document.
@@ -173,10 +180,7 @@ async def import_worldview(
     Does NOT save to database — returns extracted elements for user review.
     The user then saves via POST /{project_id} with the extracted data.
     """
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    project = await get_project_for_owner(project_id, current_user, db)
 
     if not data.document_text or len(data.document_text.strip()) < 10:
         raise HTTPException(status_code=400, detail="文档内容过短，至少需要 10 个字符")
@@ -218,11 +222,9 @@ async def set_worldview(
     project_id: str,
     data: WorldviewCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
-    result = await db.execute(select(Project).where(Project.id == project_id))
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="项目不存在")
+    project = await get_project_for_owner(project_id, current_user, db)
 
     # Delete existing worldview if any (query directly to avoid lazy loading)
     wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
@@ -272,7 +274,13 @@ async def set_worldview(
 
 
 @router.get("/{project_id}", response_model=WorldviewResponse)
-async def get_worldview(project_id: str, db: Annotated[AsyncSession, Depends(get_db)]):
+async def get_worldview(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    await get_project_for_owner(project_id, current_user, db)
+
     result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
     worldview = result.scalar_one_or_none()
     if not worldview:
@@ -296,7 +304,13 @@ async def get_worldview(project_id: str, db: Annotated[AsyncSession, Depends(get
 
 
 @router.get("/{project_id}/summary")
-async def get_worldview_summary(project_id: str, db: Annotated[AsyncSession, Depends(get_db)]):
+async def get_worldview_summary(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    await get_project_for_owner(project_id, current_user, db)
+
     result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
     worldview = result.scalar_one_or_none()
     if not worldview:

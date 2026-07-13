@@ -27,7 +27,7 @@ app.dependency_overrides[get_db] = override_get_db
 async def setup_database():
     """Create tables once for all tests in this module."""
     # Import all models to ensure they are registered
-    from app.models import project, community  # noqa: F401
+    from app.models import project, community, user  # noqa: F401
 
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -52,6 +52,42 @@ async def clean_db():
     async with test_engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
             await conn.execute(text(f"DELETE FROM {table.name}"))
+
+
+@pytest.fixture
+async def auth_token(client):
+    """Register a test user and return a Bearer token."""
+    resp = await client.post("/api/auth/register", json={
+        "email": "testuser@example.com",
+        "username": "testuser",
+        "password": "testpass123",
+    })
+    assert resp.status_code == 200
+    return resp.json()["token"]
+
+
+@pytest.fixture
+async def auth_headers(auth_token):
+    """Return Authorization headers for an authenticated test user."""
+    return {"Authorization": f"Bearer {auth_token}"}
+
+
+@pytest.fixture
+async def second_auth_token(client):
+    """Register a second test user and return a Bearer token (for ownership tests)."""
+    resp = await client.post("/api/auth/register", json={
+        "email": "user2@example.com",
+        "username": "user2",
+        "password": "pass123456",
+    })
+    assert resp.status_code == 200
+    return resp.json()["token"]
+
+
+@pytest.fixture
+async def second_auth_headers(second_auth_token):
+    """Return Authorization headers for a second test user."""
+    return {"Authorization": f"Bearer {second_auth_token}"}
 
 
 # ─── Health check ─────────────────────────────────────────────
@@ -79,14 +115,14 @@ class TestHealthCheck:
 
 class TestProjectsAPI:
     @pytest.mark.usefixtures("clean_db")
-    async def test_create_project(self, client):
+    async def test_create_project(self, client, auth_headers):
         resp = await client.post("/api/projects", json={
             "title": "测试小说",
             "genre": "玄幻",
             "total_chapters": 30,
             "chapter_word_count": 3000,
             "style_intensity": "standard",
-        })
+        }, headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert data["title"] == "测试小说"
@@ -98,48 +134,98 @@ class TestProjectsAPI:
         assert data["chapter_count"] == 0
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_list_projects_empty(self, client):
-        resp = await client.get("/api/projects")
+    async def test_create_project_without_auth_401(self, client):
+        resp = await client.post("/api/projects", json={
+            "title": "无认证", "genre": "玄幻", "total_chapters": 30,
+            "chapter_word_count": 3000, "style_intensity": "standard",
+        })
+        assert resp.status_code == 401
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_list_projects_empty(self, client, auth_headers):
+        resp = await client.get("/api/projects", headers=auth_headers)
         assert resp.status_code == 200
         assert resp.json() == []
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_list_projects_after_create(self, client):
+    async def test_list_projects_without_auth_401(self, client):
+        resp = await client.get("/api/projects")
+        assert resp.status_code == 401
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_list_projects_after_create(self, client, auth_headers):
         await client.post("/api/projects", json={
             "title": "小说A", "genre": "都市", "total_chapters": 20, "chapter_word_count": 2000, "style_intensity": "standard",
-        })
+        }, headers=auth_headers)
         await client.post("/api/projects", json={
             "title": "小说B", "genre": "科幻", "total_chapters": 40, "chapter_word_count": 4000, "style_intensity": "intense",
-        })
-        resp = await client.get("/api/projects")
+        }, headers=auth_headers)
+        resp = await client.get("/api/projects", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 2
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_get_project_by_id(self, client):
+    async def test_list_projects_only_own(self, client, auth_headers, second_auth_headers):
+        """User A creates 2 projects, User B creates 1 — each should only see their own."""
+        # User A creates 2 projects
+        await client.post("/api/projects", json={
+            "title": "A1", "genre": "都市", "total_chapters": 20, "chapter_word_count": 2000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        await client.post("/api/projects", json={
+            "title": "A2", "genre": "科幻", "total_chapters": 40, "chapter_word_count": 4000, "style_intensity": "intense",
+        }, headers=auth_headers)
+        # User B creates 1 project
+        await client.post("/api/projects", json={
+            "title": "B1", "genre": "玄幻", "total_chapters": 10, "chapter_word_count": 1000, "style_intensity": "mild",
+        }, headers=second_auth_headers)
+
+        # User A should see only their 2 projects
+        resp_a = await client.get("/api/projects", headers=auth_headers)
+        assert resp_a.status_code == 200
+        assert len(resp_a.json()) == 2
+
+        # User B should see only their 1 project
+        resp_b = await client.get("/api/projects", headers=second_auth_headers)
+        assert resp_b.status_code == 200
+        assert len(resp_b.json()) == 1
+        assert resp_b.json()[0]["title"] == "B1"
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_get_project_by_id(self, client, auth_headers):
         create_resp = await client.post("/api/projects", json={
             "title": "获取测试", "genre": "武侠", "total_chapters": 15, "chapter_word_count": 2500, "style_intensity": "mild",
-        })
+        }, headers=auth_headers)
         pid = create_resp.json()["id"]
-        resp = await client.get(f"/api/projects/{pid}")
+        resp = await client.get(f"/api/projects/{pid}", headers=auth_headers)
         assert resp.status_code == 200
         assert resp.json()["title"] == "获取测试"
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_get_nonexistent_project_404(self, client):
-        resp = await client.get("/api/projects/nonexistent-id")
+    async def test_get_nonexistent_project_404(self, client, auth_headers):
+        resp = await client.get("/api/projects/nonexistent-id", headers=auth_headers)
         assert resp.status_code == 404
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_update_project(self, client):
+    async def test_get_other_user_project_403(self, client, auth_headers, second_auth_headers):
+        """User A should not access User B's project."""
+        create_resp = await client.post("/api/projects", json={
+            "title": "A的项目", "genre": "玄幻", "total_chapters": 10, "chapter_word_count": 1000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = create_resp.json()["id"]
+        # User B tries to access
+        resp = await client.get(f"/api/projects/{pid}", headers=second_auth_headers)
+        assert resp.status_code == 403
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_update_project(self, client, auth_headers):
         create_resp = await client.post("/api/projects", json={
             "title": "原标题", "genre": "玄幻", "total_chapters": 30, "chapter_word_count": 3000, "style_intensity": "standard",
-        })
+        }, headers=auth_headers)
         pid = create_resp.json()["id"]
         resp = await client.put(f"/api/projects/{pid}", json={
             "title": "新标题", "genre": "都市", "total_chapters": 20, "chapter_word_count": 2000, "style_intensity": "intense",
-        })
+        }, headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert data["title"] == "新标题"
@@ -147,28 +233,38 @@ class TestProjectsAPI:
         assert data["total_chapters"] == 20
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_delete_project(self, client):
+    async def test_delete_project(self, client, auth_headers):
         create_resp = await client.post("/api/projects", json={
             "title": "删除测试", "genre": "玄幻", "total_chapters": 10, "chapter_word_count": 1000, "style_intensity": "standard",
-        })
+        }, headers=auth_headers)
         pid = create_resp.json()["id"]
-        resp = await client.delete(f"/api/projects/{pid}")
+        resp = await client.delete(f"/api/projects/{pid}", headers=auth_headers)
         assert resp.status_code == 200
         # Verify deleted
-        resp = await client.get(f"/api/projects/{pid}")
+        resp = await client.get(f"/api/projects/{pid}", headers=auth_headers)
         assert resp.status_code == 404
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_delete_nonexistent_404(self, client):
-        resp = await client.delete("/api/projects/nonexistent")
+    async def test_delete_nonexistent_404(self, client, auth_headers):
+        resp = await client.delete("/api/projects/nonexistent", headers=auth_headers)
         assert resp.status_code == 404
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_create_project_missing_title_422(self, client):
+    async def test_create_project_missing_title_422(self, client, auth_headers):
         resp = await client.post("/api/projects", json={
             "genre": "玄幻", "total_chapters": 30, "chapter_word_count": 3000, "style_intensity": "standard",
-        })
+        }, headers=auth_headers)
         assert resp.status_code == 422
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_delete_other_user_project_403(self, client, auth_headers, second_auth_headers):
+        """User B should not delete User A's project."""
+        create_resp = await client.post("/api/projects", json={
+            "title": "A的项目", "genre": "玄幻", "total_chapters": 10, "chapter_word_count": 1000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = create_resp.json()["id"]
+        resp = await client.delete(f"/api/projects/{pid}", headers=second_auth_headers)
+        assert resp.status_code == 403
 
 
 # ─── Community API ───────────────────────────────────────────
@@ -176,12 +272,13 @@ class TestProjectsAPI:
 class TestCommunityAPI:
     @pytest.mark.usefixtures("clean_db")
     async def test_list_novels_empty(self, client):
+        """Public: list novels without auth."""
         resp = await client.get("/api/community/novels")
         assert resp.status_code == 200
         assert resp.json() == []
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_create_novel(self, client):
+    async def test_create_novel(self, client, auth_headers):
         resp = await client.post("/api/community/novels", json={
             "title": "星辰大海",
             "author_name": "测试作者",
@@ -193,7 +290,7 @@ class TestCommunityAPI:
             "tags": ["星际", "冒险"],
             "total_chapters": 30,
             "total_words": 90000,
-        })
+        }, headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert data["title"] == "星辰大海"
@@ -205,14 +302,23 @@ class TestCommunityAPI:
         assert data["like_count"] == 0
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_get_novel_increments_views(self, client):
+    async def test_create_novel_without_auth_401(self, client):
+        resp = await client.post("/api/community/novels", json={
+            "title": "无认证", "author_name": "作者", "genre": "玄幻",
+            "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
+            "allow_cocreation": False, "tags": [], "total_chapters": 10, "total_words": 30000,
+        })
+        assert resp.status_code == 401
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_get_novel_increments_views(self, client, auth_headers):
         create_resp = await client.post("/api/community/novels", json={
             "title": "测试", "author_name": "作者", "genre": "玄幻",
             "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
             "allow_cocreation": False, "tags": ["tag1"], "total_chapters": 10, "total_words": 30000,
-        })
+        }, headers=auth_headers)
         novel_id = create_resp.json()["id"]
-        # Initial view
+        # Initial view (public, no auth needed)
         resp = await client.get(f"/api/community/novels/{novel_id}")
         assert resp.status_code == 200
         assert resp.json()["view_count"] == 1
@@ -226,30 +332,30 @@ class TestCommunityAPI:
         assert resp.status_code == 404
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_like_novel(self, client):
+    async def test_like_novel(self, client, auth_headers):
         create_resp = await client.post("/api/community/novels", json={
             "title": "点赞测试", "author_name": "作者", "genre": "玄幻",
             "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
             "allow_cocreation": False, "tags": [], "total_chapters": 10, "total_words": 30000,
-        })
+        }, headers=auth_headers)
         novel_id = create_resp.json()["id"]
         resp = await client.post(f"/api/community/novels/{novel_id}/like")
         assert resp.status_code == 200
         assert resp.json()["like_count"] == 1
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_update_novel(self, client):
+    async def test_update_novel(self, client, auth_headers):
         create_resp = await client.post("/api/community/novels", json={
             "title": "原标题", "author_name": "作者", "genre": "玄幻",
             "synopsis": "原简介", "story_outline": "原梗概", "chapter_notes": "原说明",
             "allow_cocreation": False, "tags": ["tag1"], "total_chapters": 10, "total_words": 30000,
-        })
+        }, headers=auth_headers)
         novel_id = create_resp.json()["id"]
         resp = await client.put(f"/api/community/novels/{novel_id}", json={
             "synopsis": "新简介",
             "tags": ["tag1", "tag2", "tag3"],
             "allow_cocreation": True,
-        })
+        }, headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert data["synopsis"] == "新简介"
@@ -257,31 +363,57 @@ class TestCommunityAPI:
         assert len(data["tags"]) == 3
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_delete_novel(self, client):
+    async def test_update_other_user_novel_403(self, client, auth_headers, second_auth_headers):
+        """User B should not update User A's novel."""
+        create_resp = await client.post("/api/community/novels", json={
+            "title": "A的小说", "author_name": "作者", "genre": "玄幻",
+            "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
+            "allow_cocreation": False, "tags": [], "total_chapters": 10, "total_words": 30000,
+        }, headers=auth_headers)
+        novel_id = create_resp.json()["id"]
+        resp = await client.put(f"/api/community/novels/{novel_id}", json={
+            "synopsis": "篡改内容",
+        }, headers=second_auth_headers)
+        assert resp.status_code == 403
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_delete_novel(self, client, auth_headers):
         create_resp = await client.post("/api/community/novels", json={
             "title": "删除", "author_name": "作者", "genre": "玄幻",
             "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
             "allow_cocreation": False, "tags": [], "total_chapters": 10, "total_words": 30000,
-        })
+        }, headers=auth_headers)
         novel_id = create_resp.json()["id"]
-        resp = await client.delete(f"/api/community/novels/{novel_id}")
+        resp = await client.delete(f"/api/community/novels/{novel_id}", headers=auth_headers)
         assert resp.status_code == 200
         # Verify deleted
         resp = await client.get(f"/api/community/novels/{novel_id}")
         assert resp.status_code == 404
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_list_tags(self, client):
+    async def test_delete_other_user_novel_403(self, client, auth_headers, second_auth_headers):
+        """User B should not delete User A's novel."""
+        create_resp = await client.post("/api/community/novels", json={
+            "title": "A的小说", "author_name": "作者", "genre": "玄幻",
+            "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
+            "allow_cocreation": False, "tags": [], "total_chapters": 10, "total_words": 30000,
+        }, headers=auth_headers)
+        novel_id = create_resp.json()["id"]
+        resp = await client.delete(f"/api/community/novels/{novel_id}", headers=second_auth_headers)
+        assert resp.status_code == 403
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_list_tags(self, client, auth_headers):
         await client.post("/api/community/novels", json={
             "title": "小说A", "author_name": "作者", "genre": "玄幻",
             "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
             "allow_cocreation": False, "tags": ["修仙", "冒险"], "total_chapters": 10, "total_words": 30000,
-        })
+        }, headers=auth_headers)
         await client.post("/api/community/novels", json={
             "title": "小说B", "author_name": "作者", "genre": "科幻",
             "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
             "allow_cocreation": False, "tags": ["修仙", "星际"], "total_chapters": 10, "total_words": 30000,
-        })
+        }, headers=auth_headers)
         resp = await client.get("/api/community/tags")
         assert resp.status_code == 200
         data = resp.json()
@@ -294,30 +426,30 @@ class TestCommunityAPI:
         assert xiuxian_tag["usage_count"] >= 2
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_random_novels(self, client):
+    async def test_random_novels(self, client, auth_headers):
         for i in range(3):
             await client.post("/api/community/novels", json={
                 "title": f"小说{i}", "author_name": "作者", "genre": "玄幻",
                 "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
                 "allow_cocreation": False, "tags": [], "total_chapters": 10, "total_words": 30000,
-            })
+            }, headers=auth_headers)
         resp = await client.get("/api/community/novels/random?limit=2")
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 2
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_filter_by_tag(self, client):
+    async def test_filter_by_tag(self, client, auth_headers):
         await client.post("/api/community/novels", json={
             "title": "修仙文", "author_name": "作者", "genre": "仙侠",
             "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
             "allow_cocreation": False, "tags": ["修仙"], "total_chapters": 10, "total_words": 30000,
-        })
+        }, headers=auth_headers)
         await client.post("/api/community/novels", json={
             "title": "科幻文", "author_name": "作者", "genre": "科幻",
             "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
             "allow_cocreation": False, "tags": ["星际"], "total_chapters": 10, "total_words": 30000,
-        })
+        }, headers=auth_headers)
         resp = await client.get("/api/community/novels?tag=修仙")
         assert resp.status_code == 200
         data = resp.json()
@@ -329,23 +461,37 @@ class TestCommunityAPI:
 
 class TestSettingsAPI:
     @pytest.mark.usefixtures("clean_db")
-    async def test_get_llm_settings(self, client):
-        resp = await client.get("/api/settings/llm")
+    async def test_get_llm_settings(self, client, auth_headers):
+        resp = await client.get("/api/settings/llm", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         # API key should be masked or empty
         assert "api_key" in data or "masked_key" in data or "configured" in data
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_update_llm_settings(self, client):
+    async def test_get_llm_settings_without_auth_401(self, client):
+        resp = await client.get("/api/settings/llm")
+        assert resp.status_code == 401
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_update_llm_settings(self, client, auth_headers):
         resp = await client.post("/api/settings/llm", json={
             "api_key": "sk-test-key-12345",
             "base_url": "https://api.openai.com/v1",
             "model": "gpt-4o",
             "temperature": 0.8,
             "max_tokens": 4096,
-        })
+        }, headers=auth_headers)
         assert resp.status_code == 200
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_get_providers_public(self, client):
+        """Providers endpoint is public (static data)."""
+        resp = await client.get("/api/settings/llm/providers")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "providers" in data
+        assert len(data["providers"]) > 0
 
 
 # ─── Auth API ───────────────────────────────────────────────
