@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     RATE_LIMIT_DEFAULT: str = os.getenv("RATE_LIMIT_DEFAULT", "60/minute")
     RATE_LIMIT_LLM: str = os.getenv("RATE_LIMIT_LLM", "10/minute")
 
+    # Auth / JWT
+    JWT_SECRET: str = os.getenv("JWT_SECRET", "change-me-in-production-please-use-a-long-random-string")
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRE_DAYS: int = int(os.getenv("JWT_EXPIRE_DAYS", "7"))
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

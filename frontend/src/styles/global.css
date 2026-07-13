@@ -708,3 +708,195 @@ input, select, textarea { font-family: inherit; }
   .wv-entry { grid-template-columns: 1fr; }
   .stat-grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* ═══ 登录/注册页面 ═══ */
+.login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--bg);
+  padding: 2rem 1rem;
+}
+
+.login-card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl, 16px);
+  padding: 2.5rem 2rem;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: var(--shadow-lg, 0 8px 32px rgba(0,0,0,0.08));
+}
+
+.login-brand {
+  text-align: center;
+  margin-bottom: 1.75rem;
+}
+
+.login-brand-icon {
+  font-size: 40px;
+  color: var(--gold);
+  margin-bottom: 0.5rem;
+}
+
+.login-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-1);
+  letter-spacing: -0.01em;
+}
+
+.login-subtitle {
+  font-size: 13px;
+  color: var(--text-3);
+  margin-top: 0.25rem;
+}
+
+.login-tabs {
+  display: flex;
+  background: var(--bg-soft);
+  border-radius: var(--r-md);
+  padding: 3px;
+  margin-bottom: 1.5rem;
+}
+
+.login-tab {
+  flex: 1;
+  padding: 0.5rem;
+  border: none;
+  background: transparent;
+  border-radius: var(--r-sm, 4px);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: all var(--ease);
+}
+
+.login-tab.active {
+  background: var(--white);
+  color: var(--gold-dark);
+  box-shadow: var(--shadow-xs);
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.login-error {
+  background: var(--red-light);
+  color: var(--red);
+  padding: 0.625rem 0.875rem;
+  border-radius: var(--r-md);
+  font-size: 13px;
+  border: 1px solid #f5c6ce;
+}
+
+.login-submit {
+  margin-top: 0.5rem;
+  padding: 0.625rem 1rem;
+  background: var(--gold);
+  color: var(--white);
+  border: none;
+  border-radius: var(--r-md);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--ease);
+}
+
+.login-submit:hover:not(:disabled) {
+  background: var(--gold-dark);
+}
+
+.login-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.login-switch {
+  text-align: center;
+  margin-top: 1.25rem;
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+.login-switch span {
+  cursor: pointer;
+  color: var(--gold);
+  font-weight: 500;
+}
+
+.login-switch span:hover {
+  text-decoration: underline;
+}
+
+/* ═══ 侧边栏用户信息 ═══ */
+.sidebar-user {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.625rem 0.75rem;
+  background: var(--bg-soft);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+}
+
+.sidebar-user-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sidebar-user-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-user-email {
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-logout {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  border-radius: var(--r-sm, 4px);
+  cursor: pointer;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--ease);
+  flex-shrink: 0;
+}
+
+.sidebar-logout:hover {
+  background: var(--red-light);
+  color: var(--red);
+}
+
+/* ═══ 加载中 ═══ */
+.app-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  font-size: 14px;
+  color: var(--text-3);
+}

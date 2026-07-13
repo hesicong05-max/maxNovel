@@ -45,6 +45,7 @@ class CommunityNovel(Base):
     like_count = Column(Integer, default=0)
     total_chapters = Column(Integer, default=0)
     total_words = Column(Integer, default=0)
+    owner_id = Column(String(32), ForeignKey("users.id"), nullable=True)  # nullable for backward compat
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

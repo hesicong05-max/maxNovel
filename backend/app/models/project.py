@@ -42,9 +42,11 @@ class Project(Base):
     total_chapters = Column(Integer, default=30)
     chapter_word_count = Column(Integer, default=3000)
     style_intensity = Column(String(20), default="standard")  # mild / standard / intense
+    owner_id = Column(String(32), ForeignKey("users.id"), nullable=True)  # nullable for backward compat
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    owner = relationship("User", back_populates="projects")
     worldview = relationship("Worldview", back_populates="project", uselist=False, cascade="all, delete-orphan")
     outline = relationship("Outline", back_populates="project", uselist=False, cascade="all, delete-orphan")
     chapters = relationship("Chapter", back_populates="project", cascade="all, delete-orphan")

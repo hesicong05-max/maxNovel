@@ -1,4 +1,5 @@
 import type {
+  AuthResponse,
   BatchStreamMessage,
   ChapterData,
   ChapterListItem,
@@ -7,10 +8,12 @@ import type {
   CommunityNovelDetail,
   CommunityNovelUpdate,
   CommunityTag,
+  LoginRequest,
   OutlineData,
   ProgressData,
   Project,
   ProjectStats,
+  RegisterRequest,
   StreamMessage,
   WordCountConfig,
   WorldviewData,
@@ -20,11 +23,35 @@ import type {
 
 const API_BASE = "/api";
 
+// === Auth Token Management ===
+
+const TOKEN_KEY = "novel_auth_token";
+
+export function getAuthToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setAuthToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearAuthToken(): void {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(`${API_BASE}${url}`, {
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     ...options,
   });
+  if (resp.status === 401) {
+    clearAuthToken();
+  }
   if (!resp.ok) {
     const error = await resp.json().catch(() => ({ detail: resp.statusText }));
     throw new Error(error.detail || `HTTP ${resp.status}`);
@@ -32,9 +59,26 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   return resp.json();
 }
 
+// === Auth ===
+
 // === Projects ===
 
 export const api = {
+  // ── Authentication ──
+  register: (data: RegisterRequest) =>
+    fetchJSON<AuthResponse>("/auth/register", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  login: (data: LoginRequest) =>
+    fetchJSON<AuthResponse>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  getMe: () => fetchJSON<{ id: string; email: string; username: string; created_at: string }>("/auth/me"),
+
   // Projects
   listProjects: () => fetchJSON<Project[]>("/projects"),
   createProject: (data: {

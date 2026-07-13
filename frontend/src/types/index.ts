@@ -302,3 +302,28 @@ export interface ProjectStats {
   chapter_count: number;
   total_words: number;
 }
+
+// ═══ Auth Types ═══
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  username: string;
+  created_at: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: AuthUser;
+}
+
+export interface RegisterRequest {
+  email: string;
+  username: string;
+  password: string;
+}
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}

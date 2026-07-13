@@ -346,3 +346,89 @@ class TestSettingsAPI:
             "max_tokens": 4096,
         })
         assert resp.status_code == 200
+
+
+# ─── Auth API ───────────────────────────────────────────────
+
+class TestAuthAPI:
+    @pytest.mark.usefixtures("clean_db")
+    async def test_register(self, client):
+        resp = await client.post("/api/auth/register", json={
+            "email": "test@example.com",
+            "username": "testuser",
+            "password": "test123456",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "token" in data
+        assert data["user"]["email"] == "test@example.com"
+        assert data["user"]["username"] == "testuser"
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_register_duplicate_email_409(self, client):
+        await client.post("/api/auth/register", json={
+            "email": "dup@example.com", "username": "user1", "password": "pass123456",
+        })
+        resp = await client.post("/api/auth/register", json={
+            "email": "dup@example.com", "username": "user2", "password": "pass123456",
+        })
+        assert resp.status_code == 409
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_register_short_password_422(self, client):
+        resp = await client.post("/api/auth/register", json={
+            "email": "short@example.com", "username": "user", "password": "123",
+        })
+        assert resp.status_code == 422
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_login_success(self, client):
+        await client.post("/api/auth/register", json={
+            "email": "login@example.com", "username": "loginuser", "password": "pass123456",
+        })
+        resp = await client.post("/api/auth/login", json={
+            "email": "login@example.com", "password": "pass123456",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "token" in data
+        assert data["user"]["email"] == "login@example.com"
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_login_wrong_password_401(self, client):
+        await client.post("/api/auth/register", json={
+            "email": "wrong@example.com", "username": "wronguser", "password": "pass123456",
+        })
+        resp = await client.post("/api/auth/login", json={
+            "email": "wrong@example.com", "password": "wrongpassword",
+        })
+        assert resp.status_code == 401
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_login_nonexistent_user_401(self, client):
+        resp = await client.post("/api/auth/login", json={
+            "email": "nobody@example.com", "password": "pass123456",
+        })
+        assert resp.status_code == 401
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_get_me_with_token(self, client):
+        register_resp = await client.post("/api/auth/register", json={
+            "email": "me@example.com", "username": "meuser", "password": "pass123456",
+        })
+        token = register_resp.json()["token"]
+        resp = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["email"] == "me@example.com"
+        assert data["username"] == "meuser"
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_get_me_without_token_401(self, client):
+        resp = await client.get("/api/auth/me")
+        assert resp.status_code == 401
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_get_me_with_invalid_token_401(self, client):
+        resp = await client.get("/api/auth/me", headers={"Authorization": "Bearer invalid-token-here"})
+        assert resp.status_code == 401
