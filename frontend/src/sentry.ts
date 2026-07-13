@@ -21,8 +21,8 @@ export function initSentry(): boolean {
     integrations: [
       Sentry.browserTracingIntegration(),
       Sentry.replayIntegration({
-        maskAllText: false,
-        blockAllMedia: false,
+        maskAllText: import.meta.env.PROD,
+        blockAllMedia: import.meta.env.PROD,
       }),
     ],
     // Performance Monitoring: capture 10% of transactions

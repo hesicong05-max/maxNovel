@@ -510,9 +510,21 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
                   </button>
                 )}
                 {streamContent && (
-                  <a href={api.exportUrl(projectId, "txt")} download>
-                    <button className="btn">导出全文</button>
-                  </a>
+                  <button className="btn" onClick={async () => {
+                    try {
+                      const blob = await api.exportNovel(projectId, "txt");
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `${projectId}.txt`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    } catch (e) {
+                      alert(`导出失败: ${(e as Error).message}`);
+                    }
+                  }}>
+                    导出全文
+                  </button>
                 )}
               </>
             )}

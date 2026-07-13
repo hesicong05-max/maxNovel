@@ -1,22 +1,35 @@
-version: "3.9"
-
 services:
   backend:
     build: ./backend
     container_name: novel-backend
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     volumes:
       - backend-data:/app/data
+    env_file:
+      - backend/.env.prod
     environment:
       - DEBUG=false
       - HOST=0.0.0.0
       - PORT=8000
-      - CORS_ORIGINS=http://localhost:5173,http://localhost:3000,http://localhost:8080
-      # Auth / JWT — change in production!
-      - JWT_SECRET=${JWT_SECRET:-change-me-in-production-please-use-a-long-random-string}
-      # Sentry — leave empty to disable
+      - JWT_SECRET=${JWT_SECRET:?ERROR: JWT_SECRET must be set}
       - SENTRY_DSN=${SENTRY_DSN:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   frontend:
@@ -28,7 +41,19 @@ services:
     ports:
       - "8080:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
 volumes:

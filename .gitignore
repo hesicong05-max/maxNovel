@@ -35,6 +35,9 @@ frontend/build/
 .env.local
 .env.*.local
 backend/.env
+backend/.env.dev
+backend/.env.prod
+backend/.env.staging
 
 # Database
 *.db

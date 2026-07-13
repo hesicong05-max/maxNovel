@@ -56,10 +56,10 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=app_settings.CORS_ORIGINS,
+    allow_origins=app_settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Request-ID"],
 )
 
 
@@ -75,7 +75,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Restrict API endpoints — no iframe embedding
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: https:; "
             "font-src 'self' data:; "
@@ -192,10 +192,5 @@ app.include_router(community.router)
 
 @app.get("/api/health")
 async def health_check():
-    s = load_settings()
-    return {
-        "status": "ok",
-        "app": app_settings.APP_NAME,
-        "debug": app_settings.DEBUG,
-        "llm_configured": bool(s.get("api_key", "")),
-    }
+    """Health check — minimal info, no sensitive data."""
+    return {"status": "ok"}

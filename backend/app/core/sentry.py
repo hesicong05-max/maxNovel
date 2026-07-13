@@ -33,8 +33,8 @@ def init_sentry() -> bool:
             FastApiIntegration(transaction_style="endpoint"),
         ],
         environment="production" if not settings.DEBUG else "development",
-        # Send PII (email, username) for better error context
-        send_default_pii=True,
+        # PII is configurable — default False for GDPR/PIPL compliance
+        send_default_pii=settings.SENTRY_SEND_PII,
     )
 
     logger.info("Sentry initialized successfully (env=%s)", "production" if not settings.DEBUG else "development")

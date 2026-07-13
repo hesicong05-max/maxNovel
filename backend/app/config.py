@@ -1,59 +1,79 @@
 import os
+import warnings
 from pathlib import Path
 
-from pydantic_settings import BaseSettings
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     # App
     APP_NAME: str = "小说世界观续写 Agent"
-    DEBUG: bool = os.getenv("DEBUG", "false").lower() in ("true", "1", "yes")
-    HOST: str = os.getenv("HOST", "0.0.0.0")
-    PORT: int = int(os.getenv("PORT", "8000"))
+    DEBUG: bool = False
+    HOST: str = "0.0.0.0"
+    PORT: int = 8000
 
     # Database
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./data/novel_agent.db")
+    DATABASE_URL: str = "sqlite+aiosqlite:///./data/novel_agent.db"
 
     # LLM API — default to OpenAI-compatible endpoint
-    # User can set any OpenAI-compatible provider (OpenAI, DeepSeek, Moonshot, etc.)
-    LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
-    LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o")
+    LLM_API_KEY: str = ""
+    LLM_BASE_URL: str = "https://api.openai.com/v1"
+    LLM_MODEL: str = "gpt-4o"
     LLM_MAX_TOKENS: int = 4096
     LLM_TEMPERATURE: float = 0.8
 
-    # CORS — comma-separated origins in env, or default localhost
-    CORS_ORIGINS: list[str] = [
-        o.strip()
-        for o in os.getenv(
-            "CORS_ORIGINS",
-            "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173",
-        ).split(",")
-        if o.strip()
-    ]
+    # CORS — comma-separated origins (stored as string, parsed via property)
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
 
     # File upload
-    MAX_UPLOAD_SIZE: int = int(os.getenv("MAX_UPLOAD_SIZE", str(10 * 1024 * 1024)))  # 10MB
+    MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10MB
 
     # Rate limiting
-    RATE_LIMIT_DEFAULT: str = os.getenv("RATE_LIMIT_DEFAULT", "60/minute")
-    RATE_LIMIT_LLM: str = os.getenv("RATE_LIMIT_LLM", "10/minute")
+    RATE_LIMIT_DEFAULT: str = "60/minute"
+    RATE_LIMIT_LLM: str = "10/minute"
+    RATE_LIMIT_STORAGE_URI: str = "memory://"
 
     # Auth / JWT
-    JWT_SECRET: str = os.getenv("JWT_SECRET", "change-me-in-production-please-use-a-long-random-string")
+    JWT_SECRET: str = ""
     JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRE_DAYS: int = int(os.getenv("JWT_EXPIRE_DAYS", "7"))
+    JWT_EXPIRE_DAYS: int = 7
 
     # Sentry — error monitoring (empty = disabled)
-    SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
-    SENTRY_TRACES_SAMPLE_RATE: float = float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1"))
+    SENTRY_DSN: str = ""
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.1
+    SENTRY_SEND_PII: bool = False
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(
+        env_file=os.getenv("ENV_FILE", ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parse CORS_ORIGINS string into a list."""
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+
+    def validate_security(self) -> None:
+        """Validate security-critical settings at startup."""
+        if not self.JWT_SECRET:
+            if not self.DEBUG:
+                raise RuntimeError(
+                    "JWT_SECRET must be set in production! "
+                    "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+                )
+            warnings.warn(
+                "JWT_SECRET not set — using insecure default for development only. "
+                "DO NOT use in production!",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            self.JWT_SECRET = "dev-only-insecure-secret-change-in-production"
 
 
 settings = Settings()
+settings.validate_security()
 
 # Ensure data directory exists
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"

@@ -2,16 +2,20 @@
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import create_access_token, get_current_user, hash_password, verify_password
+from app.core.rate_limiter import limiter
 from app.database import get_db
 from app.models.user import User
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+# Pre-computed dummy hash for constant-time login response
+_DUMMY_HASH = hash_password("dummy-password-for-timing-protection")
 
 
 class RegisterRequest(BaseModel):
@@ -38,7 +42,8 @@ class AuthResponse(BaseModel):
 
 
 @router.post("/register", response_model=AuthResponse)
-async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def register(request: Request, req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     """Register a new user account."""
     # Check if email already exists
     existing = await db.execute(select(User).where(User.email == req.email))
@@ -73,12 +78,20 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/login", response_model=AuthResponse)
-async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
-    """Login with email and password."""
+@limiter.limit("10/minute")
+async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(get_db)):
+    """Login with email and password.
+
+    Uses constant-time comparison to prevent user enumeration via timing attacks.
+    """
     result = await db.execute(select(User).where(User.email == req.email))
     user = result.scalar_one_or_none()
 
-    if not user or not verify_password(req.password, user.hashed_password):
+    # Always verify a hash (even if user doesn't exist) to prevent timing attacks
+    hashed = user.hashed_password if user else _DUMMY_HASH
+    password_ok = verify_password(req.password, hashed)
+
+    if not user or not password_ok:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="邮箱或密码错误")
 
     token = create_access_token(user.id, user.username)

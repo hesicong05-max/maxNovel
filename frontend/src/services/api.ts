@@ -1,5 +1,6 @@
 import type {
   AuthResponse,
+  AuthUser,
   BatchStreamMessage,
   ChapterData,
   ChapterListItem,
@@ -21,7 +22,7 @@ import type {
   WorldviewImportResult,
 } from "@/types";
 
-const API_BASE = "/api";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 
 // === Auth Token Management ===
 
@@ -44,13 +45,28 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// === Global 401 handler ===
+
+let onUnauthorized: (() => void) | null = null;
+
+export function setOnUnauthorized(cb: (() => void) | null): void {
+  onUnauthorized = cb;
+}
+
+// === Core fetch helpers ===
+
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(`${API_BASE}${url}`, {
-    headers: { "Content-Type": "application/json", ...authHeaders() },
     ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+      ...options?.headers,
+    },
   });
   if (resp.status === 401) {
     clearAuthToken();
+    onUnauthorized?.();
   }
   if (!resp.ok) {
     const error = await resp.json().catch(() => ({ detail: resp.statusText }));
@@ -59,7 +75,21 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   return resp.json();
 }
 
-// === Auth ===
+/** Fetch with auth headers but no JSON content-type (for FormData uploads) */
+async function fetchWithAuth(url: string, options?: RequestInit): Promise<Response> {
+  const resp = await fetch(`${API_BASE}${url}`, {
+    ...options,
+    headers: {
+      ...authHeaders(),
+      ...options?.headers,
+    },
+  });
+  if (resp.status === 401) {
+    clearAuthToken();
+    onUnauthorized?.();
+  }
+  return resp;
+}
 
 // === Projects ===
 
@@ -77,7 +107,7 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  getMe: () => fetchJSON<{ id: string; email: string; username: string; created_at: string }>("/auth/me"),
+  getMe: () => fetchJSON<AuthUser>("/auth/me"),
 
   // Projects
   listProjects: () => fetchJSON<Project[]>("/projects"),
@@ -110,7 +140,7 @@ export const api = {
   uploadWorldviewFile: async (projectId: string, file: File) => {
     const formData = new FormData();
     formData.append("file", file);
-    const resp = await fetch(`${API_BASE}/worldview/${projectId}/upload-file`, {
+    const resp = await fetchWithAuth(`/worldview/${projectId}/upload-file`, {
       method: "POST",
       body: formData,
     });
@@ -146,9 +176,15 @@ export const api = {
   getProgress: (projectId: string) =>
     fetchJSON<ProgressData>(`/chapters/${projectId}/progress`),
 
-  // Export
-  exportUrl: (projectId: string, format: "txt" | "markdown") =>
-    `${API_BASE}/export/${projectId}/${format}`,
+  // Export — uses fetchWithAuth to include Authorization header
+  exportNovel: async (projectId: string, format: "txt" | "markdown"): Promise<Blob> => {
+    const resp = await fetchWithAuth(`/export/${projectId}/${format}`);
+    if (!resp.ok) {
+      const error = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(error.detail || `HTTP ${resp.status}`);
+    }
+    return resp.blob();
+  },
 
   // Settings
   getLLMSettings: () =>
@@ -192,11 +228,12 @@ export const api = {
   // Chapter streaming
   streamChapter: async function* (
     projectId: string,
-    chapterNum: number
+    chapterNum: number,
+    signal?: AbortSignal
   ): AsyncGenerator<StreamMessage> {
-    const resp = await fetch(
-      `${API_BASE}/chapters/${projectId}/${chapterNum}/generate`,
-      { method: "POST" }
+    const resp = await fetchWithAuth(
+      `/chapters/${projectId}/${chapterNum}/generate`,
+      { method: "POST", signal }
     );
 
     if (!resp.ok) {
@@ -226,7 +263,7 @@ export const api = {
 
       buffer += decoder.decode(value, { stream: true });
 
-      // Process SSE events — split on double newline (SSS event boundary)
+      // Process SSE events — split on double newline (SSE event boundary)
       const events = buffer.split("\n\n");
       buffer = events.pop() || "";
 
@@ -265,11 +302,12 @@ export const api = {
 
   streamBatchGenerate: async function* (
     projectId: string,
-    skipExisting: boolean = true
+    skipExisting: boolean = true,
+    signal?: AbortSignal
   ): AsyncGenerator<BatchStreamMessage> {
-    const resp = await fetch(
-      `${API_BASE}/chapters/${projectId}/generate-all?skip_existing=${skipExisting}`,
-      { method: "POST" }
+    const resp = await fetchWithAuth(
+      `/chapters/${projectId}/generate-all?skip_existing=${skipExisting}`,
+      { method: "POST", signal }
     );
 
     if (!resp.ok) {

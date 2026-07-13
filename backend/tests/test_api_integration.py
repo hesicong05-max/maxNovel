@@ -47,11 +47,15 @@ async def client():
 
 @pytest.fixture
 async def clean_db():
-    """Clean all tables before each test."""
+    """Clean all tables and reset rate limiter before each test."""
     from sqlalchemy import text
     async with test_engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
             await conn.execute(text(f"DELETE FROM {table.name}"))
+
+    # Reset rate limiter state to prevent cross-test interference
+    from app.core.rate_limiter import limiter
+    limiter.reset()
 
 
 @pytest.fixture
@@ -99,8 +103,6 @@ class TestHealthCheck:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
-        assert "app" in data
-        assert "debug" in data
 
     @pytest.mark.usefixtures("clean_db")
     async def test_security_headers_present(self, client):

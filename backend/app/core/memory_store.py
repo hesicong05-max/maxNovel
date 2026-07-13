@@ -34,8 +34,7 @@ class MemoryStore:
             chapter_summaries=[],
         )
         db.add(memory)
-        await db.commit()
-        await db.refresh(memory)
+        await db.flush()  # flush to get ID, but don't commit — let caller manage transaction
         return memory
 
     async def mark_revealed(self, db: AsyncSession, memory: StoryMemory, element_ids: list[str], chapter_num: int):

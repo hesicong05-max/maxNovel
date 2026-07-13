@@ -1,7 +1,8 @@
-"""add foreign key constraints for owner_id
+"""fix duplicate FK constraints
 
-Adds FK constraints from projects.owner_id and community_novels.owner_id
-to users.id. Uses batch mode for SQLite compatibility.
+The previous migration (f65673b6a290) already created the FK constraints
+for owner_id. This migration was originally meant to add them but they
+already exist. Making it a no-op to avoid errors on PostgreSQL.
 
 Revision ID: 4e6e60586e70
 Revises: f65673b6a290
@@ -11,7 +12,6 @@ Create Date: 2026-07-13 09:00:46.579231+00:00
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
@@ -22,21 +22,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # SQLite doesn't support ALTER TABLE ADD CONSTRAINT, use batch mode
-    with op.batch_alter_table('projects') as batch_op:
-        batch_op.create_foreign_key(
-            'fk_projects_owner', 'users', ['owner_id'], ['id']
-        )
-
-    with op.batch_alter_table('community_novels') as batch_op:
-        batch_op.create_foreign_key(
-            'fk_community_novels_owner', 'users', ['owner_id'], ['id']
-        )
+    # FK constraints were already created in migration f65673b6a290
+    # This is a no-op migration to maintain migration chain integrity
+    pass
 
 
 def downgrade() -> None:
-    with op.batch_alter_table('community_novels') as batch_op:
-        batch_op.drop_constraint('fk_community_novels_owner', type_='foreignkey')
-
-    with op.batch_alter_table('projects') as batch_op:
-        batch_op.drop_constraint('fk_projects_owner', type_='foreignkey')
+    # FK constraints are dropped in f65673b6a290's downgrade
+    pass

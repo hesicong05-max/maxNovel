@@ -50,6 +50,7 @@ export default function Community() {
         });
         setNovels(data);
         data.forEach((n) => loadedIds.current.add(n.id));
+        pageOffset.current = data.length;  // Update offset for next page
         setHasMore(data.length >= 12);
       } catch (e) {
         console.error("Failed to load community novels:", e);
@@ -94,7 +95,7 @@ export default function Community() {
         } else {
           setNovels((prev) => [...prev, ...newOnes]);
           newOnes.forEach((n) => loadedIds.current.add(n.id));
-          pageOffset.current += 12;
+          pageOffset.current += data.length;
         }
       }
     } catch (e) {

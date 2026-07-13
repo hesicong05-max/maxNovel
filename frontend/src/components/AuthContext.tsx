@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from "react";
-import { api, getAuthToken, setAuthToken, clearAuthToken } from "@/services/api";
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import { api, getAuthToken, setAuthToken, clearAuthToken, setOnUnauthorized } from "@/services/api";
 import type { AuthUser, RegisterRequest, LoginRequest } from "@/types";
 
 interface AuthContextValue {
@@ -16,6 +16,18 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const logout = useCallback(() => {
+    clearAuthToken();
+    setUser(null);
+  }, []);
+
+  // Register global 401 handler — when any API call returns 401,
+  // clear auth state and let ProtectedRoute redirect to login
+  useEffect(() => {
+    setOnUnauthorized(() => logout);
+    return () => setOnUnauthorized(null);
+  }, [logout]);
 
   useEffect(() => {
     const token = getAuthToken();
@@ -43,11 +55,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const resp = await api.register(data);
     setAuthToken(resp.token);
     setUser(resp.user);
-  };
-
-  const logout = () => {
-    clearAuthToken();
-    setUser(null);
   };
 
   return (

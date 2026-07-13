@@ -99,7 +99,7 @@ class ErrorBoundary extends Component<Props, State> {
             应用遇到了一个意外错误。你可以刷新页面重试，或者返回首页。
           </p>
 
-          {error && (
+          {error && import.meta.env.DEV && (
             <details
               style={{
                 textAlign: "left",
