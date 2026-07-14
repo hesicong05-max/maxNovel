@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     SENTRY_TRACES_SAMPLE_RATE: float = 0.1
     SENTRY_SEND_PII: bool = False
 
+    # Logging
+    LOG_LEVEL: str = "INFO"
+
     model_config = SettingsConfigDict(
         env_file=os.getenv("ENV_FILE", ".env"),
         env_file_encoding="utf-8",

@@ -20,10 +20,14 @@ FROM nginx:1.27-alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+# Run as non-root user (nginx user exists in nginx:alpine image)
+RUN chown -R nginx:nginx /usr/share/nginx/html /etc/nginx/conf.d /var/cache/nginx /var/run
+USER nginx
+
 EXPOSE 80
 
-# Health check
+# Health check — use wget compatible with BusyBox/Alpine
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget -q --spider http://localhost/ || exit 1
+    CMD wget -q -O /dev/null http://localhost/ || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]

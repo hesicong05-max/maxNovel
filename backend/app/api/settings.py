@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app.core.auth import User, get_current_user
+from app.core.auth import User, get_admin_user, get_current_user
 from app.core.llm_client import llm_client
 from app.core.settings_store import load_settings, save_settings
 
@@ -99,9 +99,9 @@ async def get_llm_settings(
 @router.post("/llm", response_model=LLMSettingsResponse)
 async def update_llm_settings(
     req: LLMSettingsRequest,
-    current_user: Annotated[User, Depends(get_current_user)],
+    admin_user: Annotated[User, Depends(get_admin_user)],
 ):
-    """Save LLM settings. Requires authentication."""
+    """Save LLM settings. Requires admin privileges."""
     current = load_settings()
 
     # If the submitted key looks like a masked key (contains *), keep the existing one
@@ -137,9 +137,9 @@ async def update_llm_settings(
 
 @router.post("/llm/test", response_model=TestConnectionResponse)
 async def test_llm_connection(
-    current_user: Annotated[User, Depends(get_current_user)],
+    admin_user: Annotated[User, Depends(get_admin_user)],
 ):
-    """Test the LLM API connection with current settings. Requires authentication."""
+    """Test the LLM API connection with current settings. Requires admin privileges."""
     result = await llm_client.test_connection()
     return TestConnectionResponse(**result)
 

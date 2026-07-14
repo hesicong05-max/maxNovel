@@ -112,15 +112,17 @@ async def upload_worldview_file(
             detail=f"不支持的文件格式: {ext}，请上传 .txt / .md / .doc / .docx 文件",
         )
 
-    # Read file content with size limit
-    file_bytes = await file.read()
+    # Read file content in chunks with size limit (prevents OOM on large uploads)
+    file_bytes = b""
+    while chunk := await file.read(1024 * 1024):  # 1MB chunks
+        file_bytes += chunk
+        if len(file_bytes) > MAX_UPLOAD_SIZE:
+            max_mb = MAX_UPLOAD_SIZE / (1024 * 1024)
+            raise HTTPException(
+                status_code=413,
+                detail=f"文件过大，最大允许 {max_mb:.0f}MB",
+            )
     file_size = len(file_bytes)
-    if file_size > MAX_UPLOAD_SIZE:
-        max_mb = MAX_UPLOAD_SIZE / (1024 * 1024)
-        raise HTTPException(
-            status_code=413,
-            detail=f"文件过大 ({file_size / 1024:.0f}KB)，最大允许 {max_mb:.0f}MB",
-        )
     logger.info("File upload: %s (%d bytes)", filename, file_size)
 
     if file_size < 10:

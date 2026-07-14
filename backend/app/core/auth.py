@@ -104,6 +104,18 @@ async def get_optional_user(
         return None
 
 
+async def get_admin_user(
+    user: User = Depends(get_current_user),
+) -> User:
+    """Dependency: require admin privileges.
+
+    Raises 403 if the user is not an admin.
+    """
+    if not user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要管理员权限")
+    return user
+
+
 async def get_project_for_owner(
     project_id: str,
     user: User,

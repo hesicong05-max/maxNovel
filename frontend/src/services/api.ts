@@ -67,6 +67,9 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   if (resp.status === 401) {
     clearAuthToken();
     onUnauthorized?.();
+    // Return a never-resolving promise to prevent error alerts from flashing
+    // before the redirect to /login takes effect
+    return new Promise<T>(() => {});
   }
   if (!resp.ok) {
     const error = await resp.json().catch(() => ({ detail: resp.statusText }));
@@ -87,6 +90,8 @@ async function fetchWithAuth(url: string, options?: RequestInit): Promise<Respon
   if (resp.status === 401) {
     clearAuthToken();
     onUnauthorized?.();
+    // Return a promise that never resolves — the redirect will unmount the component
+    return new Promise<Response>(() => {});
   }
   return resp;
 }

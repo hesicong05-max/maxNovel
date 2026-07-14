@@ -39,6 +39,13 @@ backend/.env.dev
 backend/.env.prod
 backend/.env.staging
 
+# TLS certificates
+tls/
+*.pem
+*.key
+*.crt
+*.p12
+
 # Database
 *.db
 *.sqlite
@@ -47,6 +54,11 @@ backend/data/
 
 # Logs
 *.log
+
+# Coverage
+coverage/
+.coverage
+htmlcov/
 
 # OS
 Thumbs.db

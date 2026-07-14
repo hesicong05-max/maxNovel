@@ -37,39 +37,69 @@ npx vite  # 端口 5173，代理 /api 到 8000
 
 ### Docker 部署
 
-```bash
-# 1. 生成 JWT_SECRET
-python -c "import secrets; print(secrets.token_urlsafe(64))"
+#### 前置准备
 
-# 2. 设置环境变量
+```bash
+# 1. 复制环境配置文件（env 文件不在 Git 中，需手动创建）
+cp backend/.env.example backend/.env.prod
+
+# 2. 编辑 .env.prod，设置以下必填项：
+#    - JWT_SECRET：生成方式 → python -c "import secrets; print(secrets.token_urlsafe(64))"
+#    - DATABASE_URL：PostgreSQL 连接字符串
+#    - CORS_ORIGINS：你的域名
+
+# 3. 设置环境变量
 export JWT_SECRET="your-generated-secret"
 
-# 3. 启动
+# 4. 准备 TLS 证书（生产必填）
+mkdir -p tls
+# 将你的证书文件放入 tls/ 目录：
+#   tls/fullchain.pem  — 证书链
+#   tls/privkey.pem    — 私钥
+# 推荐使用 Let's Encrypt 免费证书：https://letsencrypt.org/
+
+# 5. 运行数据库迁移
+docker compose run --rm backend alembic upgrade head
+
+# 6. 启动
 docker compose up -d
 ```
 
-访问 http://localhost:8080
+访问 https://your-domain.com
 
-## 配置说明
+#### 生产部署 Checklist
+
+- [ ] `backend/.env.prod` 已创建并配置
+- [ ] `JWT_SECRET` 已设置（强随机字符串）
+- [ ] `DATABASE_URL` 已配置为 PostgreSQL
+- [ ] `CORS_ORIGINS` 已设置为你的域名
+- [ ] TLS 证书已放入 `tls/` 目录
+- [ ] `docker compose run --rm backend alembic upgrade head` 已执行
+- [ ] `SENTRY_DSN` 已配置（可选但推荐）
+- [ ] `JWT_SECRET` 环境变量已设置
 
 ### 环境变量
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `DEBUG` | 调试模式 | false |
-| `DATABASE_URL` | 数据库连接 | sqlite+aiosqlite:///./data/novel_agent.db |
-| `JWT_SECRET` | JWT 签名密钥（生产必填） | 无 |
-| `CORS_ORIGINS` | 允许的跨域来源 | localhost:5173,3000 |
-| `LLM_API_KEY` | LLM API Key | 空 |
-| `SENTRY_DSN` | Sentry 错误监控 DSN | 空（禁用） |
-| `RATE_LIMIT_STORAGE_URI` | 限流存储 | memory://（Redis: redis://host:6379） |
-| `ENV_FILE` | 指定 .env 文件 | .env |
+| 变量 | 说明 | 必填 | 默认值 |
+|------|------|------|--------|
+| `JWT_SECRET` | JWT 签名密钥 | 生产必填 | 无（启动时校验） |
+| `DATABASE_URL` | 数据库连接 | 生产推荐 | sqlite+aiosqlite:///./data/novel_agent.db |
+| `CORS_ORIGINS` | 允许的跨域来源 | 生产必填 | localhost:5173,3000 |
+| `DEBUG` | 调试模式 | 否 | false |
+| `ENV_FILE` | 指定 .env 文件 | 否 | .env |
+| `LLM_API_KEY` | LLM API Key | 否（可 UI 配置） | 空 |
+| `SENTRY_DSN` | Sentry 错误监控 DSN | 否 | 空（禁用） |
+| `RATE_LIMIT_STORAGE_URI` | 限流存储 | 否 | memory://（生产推荐 Redis） |
+| `LOG_LEVEL` | 日志级别 | 否 | INFO |
+| `SENTRY_SEND_PII` | Sentry 发送 PII | 否 | false |
 
 ### 环境文件
 
 - `.env.dev` — 开发环境（DEBUG=true）
 - `.env.prod` — 生产环境（DEBUG=false，需设置 JWT_SECRET）
 - `.env.example` — 完整配置模板
+
+> **注意**：`.env.dev` 和 `.env.prod` 不在 Git 版本控制中。部署前需从 `.env.example` 复制并配置。
 
 ## 测试
 
@@ -84,7 +114,31 @@ ENV_FILE=.env.dev python -m pytest tests/ -v
 cd backend
 ENV_FILE=.env.dev alembic upgrade head     # 应用迁移
 ENV_FILE=.env.dev alembic revision --autogenerate -m "description"  # 生成新迁移
+ENV_FILE=.env.dev alembic downgrade -1      # 回滚一个迁移
 ```
+
+### Docker 中执行迁移
+
+```bash
+# 首次部署
+docker compose run --rm backend alembic upgrade head
+
+# 回滚
+docker compose run --rm backend alembic downgrade -1
+```
+
+## 回滚方案
+
+1. **代码回滚**：`git checkout <previous-commit> && docker compose build && docker compose up -d`
+2. **数据库回滚**：`docker compose run --rm backend alembic downgrade -1`
+3. **数据备份**（SQLite）：`cp backend/data/novel_agent.db backup/$(date +%Y%m%d).db`
+4. **数据备份**（PostgreSQL）：`pg_dump -U user novel_agent > backup/$(date +%Y%m%d).sql`
+
+## 监控
+
+- **Sentry**：配置 `SENTRY_DSN` 后自动启用错误监控
+- **健康检查**：`GET /api/health` 返回 `{"status": "ok"}`
+- **Docker 日志**：`docker compose logs -f`
 
 ## GitHub
 

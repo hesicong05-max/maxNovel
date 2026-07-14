@@ -94,6 +94,35 @@ async def second_auth_headers(second_auth_token):
     return {"Authorization": f"Bearer {second_auth_token}"}
 
 
+@pytest.fixture
+async def admin_token(client):
+    """Register a test user, promote to admin, and return a Bearer token."""
+    resp = await client.post("/api/auth/register", json={
+        "email": "admin@example.com",
+        "username": "admin",
+        "password": "adminpass123",
+    })
+    assert resp.status_code == 200
+    token = resp.json()["token"]
+
+    # Promote the user to admin directly in the test database
+    from sqlalchemy import update
+    from app.models.user import User
+
+    async with test_engine.begin() as conn:
+        await conn.execute(
+            update(User).where(User.email == "admin@example.com").values(is_admin=True)
+        )
+
+    return token
+
+
+@pytest.fixture
+async def admin_headers(admin_token):
+    """Return Authorization headers for an admin test user."""
+    return {"Authorization": f"Bearer {admin_token}"}
+
+
 # ─── Health check ─────────────────────────────────────────────
 
 class TestHealthCheck:
@@ -476,7 +505,20 @@ class TestSettingsAPI:
         assert resp.status_code == 401
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_update_llm_settings(self, client, auth_headers):
+    async def test_update_llm_settings(self, client, admin_headers):
+        """Only admin users can update LLM settings."""
+        resp = await client.post("/api/settings/llm", json={
+            "api_key": "sk-test-key-12345",
+            "base_url": "https://api.openai.com/v1",
+            "model": "gpt-4o",
+            "temperature": 0.8,
+            "max_tokens": 4096,
+        }, headers=admin_headers)
+        assert resp.status_code == 200
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_update_llm_settings_non_admin_403(self, client, auth_headers):
+        """Non-admin users cannot update LLM settings."""
         resp = await client.post("/api/settings/llm", json={
             "api_key": "sk-test-key-12345",
             "base_url": "https://api.openai.com/v1",
@@ -484,7 +526,7 @@ class TestSettingsAPI:
             "temperature": 0.8,
             "max_tokens": 4096,
         }, headers=auth_headers)
-        assert resp.status_code == 200
+        assert resp.status_code == 403
 
     @pytest.mark.usefixtures("clean_db")
     async def test_get_providers_public(self, client):

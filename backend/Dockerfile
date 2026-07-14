@@ -1,15 +1,24 @@
-FROM python:3.13-slim
+# Build stage
+FROM python:3.13-slim AS builder
 
 WORKDIR /app
 
-# Install system dependencies for python-docx
+# Install build dependencies (only needed for compilation)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# ---- Runtime stage ----
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# Copy installed packages from builder
+COPY --from=builder /root/.local /root/.local
 
 # Copy application code
 COPY . .
@@ -24,6 +33,7 @@ USER appuser
 # Environment optimization
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PATH=/root/.local/bin:$PATH
 
 # Expose port
 EXPOSE 8000

@@ -49,8 +49,12 @@ app.state.limiter = limiter
 # Rate limit exceeded handler
 from slowapi.errors import RateLimitExceeded  # noqa: E402
 from slowapi import _rate_limit_exceeded_handler  # noqa: E402
+from slowapi.middleware import SlowAPIMiddleware  # noqa: E402
 
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Register SlowAPI middleware — enables default_limits for all routes
+app.add_middleware(SlowAPIMiddleware)
 
 # ---- Middleware ----
 
