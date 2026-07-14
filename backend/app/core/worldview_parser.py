@@ -127,7 +127,7 @@ class WorldviewParser:
         meta: dict[str, Any],
         counter: int = 0,
     ) -> dict[str, Any]:
-        eid = hashlib.md5(f"{category}_{name}_{counter}".encode()).hexdigest()[:12]
+        eid = hashlib.sha256(f"{category}_{name}_{counter}".encode()).hexdigest()[:12]
         return {
             "id": eid,
             "category": category,

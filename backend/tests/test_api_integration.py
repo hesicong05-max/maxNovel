@@ -57,6 +57,15 @@ async def clean_db():
     from app.core.rate_limiter import limiter
     limiter.reset()
 
+    # Clear LLM settings to prevent test pollution (mock mode by default)
+    from app.core.settings_store import SETTINGS_FILE
+    if SETTINGS_FILE.exists():
+        SETTINGS_FILE.unlink()
+
+    # Reset the LLM client's cached state
+    from app.core.llm_client import llm_client
+    llm_client._client = None
+
 
 @pytest.fixture
 async def auth_token(client):
@@ -627,3 +636,219 @@ class TestAuthAPI:
     async def test_get_me_with_invalid_token_401(self, client):
         resp = await client.get("/api/auth/me", headers={"Authorization": "Bearer invalid-token-here"})
         assert resp.status_code == 401
+
+
+# ─── Worldview API ───────────────────────────────────────────
+
+class TestWorldviewAPI:
+    @pytest.mark.usefixtures("clean_db")
+    async def test_set_worldview(self, client, auth_headers):
+        """Create a project, then set its worldview."""
+        proj = await client.post("/api/projects", json={
+            "title": "世界观测试", "genre": "玄幻", "total_chapters": 10,
+            "chapter_word_count": 2000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = proj.json()["id"]
+        resp = await client.post(f"/api/worldview/{pid}", json={
+            "characters": [{"name": "林远", "personality": "坚韧", "background": "孤儿", "motivation": "寻真相", "ability": "灵觉", "relations": []}],
+            "geography": [{"name": "苍澜大陆", "description": "主大陆", "significance": "故事舞台"}],
+            "factions": [{"name": "天玄宗", "stance": "正道", "power_level": "顶级", "relations": []}],
+            "power_system": [{"name": "灵气修炼", "levels": "聚气→筑基", "rules": "吸灵气", "limitations": "有瓶颈"}],
+            "history": [{"event": "远古大战", "time": "万年前", "description": "上古大战", "impact": "灵气枯竭"}],
+            "conflicts": [{"name": "正邪之争", "type": "阵营冲突", "parties": "正道vs魔道", "stakes": "控制权", "resolution_hint": "第三条路"}],
+            "special_settings": [{"name": "灵根", "description": "天赋", "rules": "五行灵根"}],
+            "source": "manual",
+        }, headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["project_id"] == pid
+        assert len(data["parsed_elements"]) > 0
+        assert "林远" in [c["name"] for c in data["characters"]]
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_get_worldview(self, client, auth_headers):
+        """Set worldview then get it back."""
+        proj = await client.post("/api/projects", json={
+            "title": "获取世界观", "genre": "玄幻", "total_chapters": 10,
+            "chapter_word_count": 2000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = proj.json()["id"]
+        await client.post(f"/api/worldview/{pid}", json={
+            "characters": [{"name": "角色A", "personality": "冷静", "background": "", "motivation": "", "ability": "", "relations": []}],
+            "geography": [], "factions": [], "power_system": [], "history": [],
+            "conflicts": [], "special_settings": [], "source": "manual",
+        }, headers=auth_headers)
+        resp = await client.get(f"/api/worldview/{pid}", headers=auth_headers)
+        assert resp.status_code == 200
+        assert len(resp.json()["characters"]) == 1
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_get_worldview_not_set_404(self, client, auth_headers):
+        """Get worldview before setting should return 404."""
+        proj = await client.post("/api/projects", json={
+            "title": "无世界观", "genre": "玄幻", "total_chapters": 10,
+            "chapter_word_count": 2000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = proj.json()["id"]
+        resp = await client.get(f"/api/worldview/{pid}", headers=auth_headers)
+        assert resp.status_code == 404
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_worldview_without_auth_401(self, client, auth_headers):
+        proj = await client.post("/api/projects", json={
+            "title": "权限测试", "genre": "玄幻", "total_chapters": 10,
+            "chapter_word_count": 2000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = proj.json()["id"]
+        resp = await client.post(f"/api/worldview/{pid}", json={
+            "characters": [], "geography": [], "factions": [], "power_system": [],
+            "history": [], "conflicts": [], "special_settings": [], "source": "manual",
+        })
+        assert resp.status_code == 401
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_worldview_summary(self, client, auth_headers):
+        proj = await client.post("/api/projects", json={
+            "title": "摘要测试", "genre": "玄幻", "total_chapters": 10,
+            "chapter_word_count": 2000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = proj.json()["id"]
+        await client.post(f"/api/worldview/{pid}", json={
+            "characters": [{"name": "主角", "personality": "勇敢", "background": "", "motivation": "", "ability": "", "relations": []}],
+            "geography": [{"name": "城镇", "description": "起始地", "significance": ""}],
+            "factions": [], "power_system": [], "history": [],
+            "conflicts": [], "special_settings": [], "source": "manual",
+        }, headers=auth_headers)
+        resp = await client.get(f"/api/worldview/{pid}/summary", headers=auth_headers)
+        assert resp.status_code == 200
+
+
+# ─── Outline API ─────────────────────────────────────────────
+
+class TestOutlineAPI:
+    @pytest.mark.usefixtures("clean_db")
+    async def test_generate_outline(self, client, auth_headers):
+        """Generate outline for a project with worldview (mock LLM)."""
+        proj = await client.post("/api/projects", json={
+            "title": "大纲测试", "genre": "玄幻", "total_chapters": 5,
+            "chapter_word_count": 2000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = proj.json()["id"]
+        # Set worldview first
+        await client.post(f"/api/worldview/{pid}", json={
+            "characters": [{"name": "林远", "personality": "坚韧", "background": "", "motivation": "", "ability": "", "relations": []}],
+            "geography": [{"name": "大陆", "description": "", "significance": ""}],
+            "factions": [], "power_system": [], "history": [],
+            "conflicts": [], "special_settings": [], "source": "manual",
+        }, headers=auth_headers)
+        # Mock the LLM client to return a mock outline (avoid real API call)
+        from unittest.mock import AsyncMock, patch
+        mock_outline = '```json\n{"story_arc": "测试故事弧", "chapters": [{"chapter_num": 1, "title": "觉醒", "summary": "主角觉醒", "key_events": ["事件"], "reveal_elements": ["el_1"]}]}\n```'
+        with patch("app.core.llm_client.load_settings") as mock_load:
+            mock_load.return_value = {"api_key": "", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+            # Generate outline (will use mock response since no API key)
+            resp = await client.post(f"/api/outline/{pid}/generate", headers=auth_headers)
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "story_arc" in data or "chapters" in data or "reveal_plan" in data
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_get_outline_not_found_404(self, client, auth_headers):
+        proj = await client.post("/api/projects", json={
+            "title": "无大纲", "genre": "玄幻", "total_chapters": 5,
+            "chapter_word_count": 2000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = proj.json()["id"]
+        resp = await client.get(f"/api/outline/{pid}", headers=auth_headers)
+        assert resp.status_code == 404
+
+
+# ─── Chapter API ─────────────────────────────────────────────
+
+class TestChapterAPI:
+    @pytest.mark.usefixtures("clean_db")
+    async def test_list_chapters_empty(self, client, auth_headers):
+        """List chapters for a new project should return empty list."""
+        proj = await client.post("/api/projects", json={
+            "title": "章节测试", "genre": "玄幻", "total_chapters": 5,
+            "chapter_word_count": 2000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = proj.json()["id"]
+        resp = await client.get(f"/api/chapters/{pid}", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_get_word_counts(self, client, auth_headers):
+        """Get word count configuration for a project."""
+        proj = await client.post("/api/projects", json={
+            "title": "字数配置", "genre": "玄幻", "total_chapters": 5,
+            "chapter_word_count": 2000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = proj.json()["id"]
+        resp = await client.get(f"/api/chapters/{pid}/word-counts", headers=auth_headers)
+        assert resp.status_code == 200
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_list_chapters_without_auth_401(self, client, auth_headers):
+        proj = await client.post("/api/projects", json={
+            "title": "权限测试", "genre": "玄幻", "total_chapters": 5,
+            "chapter_word_count": 2000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = proj.json()["id"]
+        resp = await client.get(f"/api/chapters/{pid}")
+        assert resp.status_code == 401
+
+
+# ─── Export API ──────────────────────────────────────────────
+
+class TestExportAPI:
+    @pytest.mark.usefixtures("clean_db")
+    async def test_export_empty_project_txt(self, client, auth_headers):
+        """Export a project with no chapters as txt."""
+        proj = await client.post("/api/projects", json={
+            "title": "导出测试", "genre": "玄幻", "total_chapters": 5,
+            "chapter_word_count": 2000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = proj.json()["id"]
+        resp = await client.get(f"/api/export/{pid}/txt", headers=auth_headers)
+        assert resp.status_code == 200
+        assert "导出测试" in resp.text
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_export_empty_project_markdown(self, client, auth_headers):
+        """Export a project with no chapters as markdown."""
+        proj = await client.post("/api/projects", json={
+            "title": "MD导出", "genre": "玄幻", "total_chapters": 5,
+            "chapter_word_count": 2000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = proj.json()["id"]
+        resp = await client.get(f"/api/export/{pid}/markdown", headers=auth_headers)
+        assert resp.status_code == 200
+        assert "# MD导出" in resp.text
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_export_nonexistent_project_404(self, client, auth_headers):
+        resp = await client.get("/api/export/nonexistent/txt", headers=auth_headers)
+        assert resp.status_code == 404
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_export_without_auth_401(self, client, auth_headers):
+        proj = await client.post("/api/projects", json={
+            "title": "导出权限", "genre": "玄幻", "total_chapters": 5,
+            "chapter_word_count": 2000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = proj.json()["id"]
+        resp = await client.get(f"/api/export/{pid}/txt")
+        assert resp.status_code == 401
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_export_other_user_project_403(self, client, auth_headers, second_auth_headers):
+        """User B should not export User A's project."""
+        proj = await client.post("/api/projects", json={
+            "title": "A的项目", "genre": "玄幻", "total_chapters": 5,
+            "chapter_word_count": 2000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = proj.json()["id"]
+        resp = await client.get(f"/api/export/{pid}/txt", headers=second_auth_headers)
+        assert resp.status_code == 403
