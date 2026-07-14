@@ -1,8 +1,8 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum as PyEnum
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.sqlite import JSON
 
@@ -32,6 +32,10 @@ class ProjectStatus(str, PyEnum):
     COMPLETED = "completed"
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class Project(Base):
     __tablename__ = "projects"
 
@@ -43,8 +47,8 @@ class Project(Base):
     chapter_word_count = Column(Integer, default=3000)
     style_intensity = Column(String(20), default="standard")  # mild / standard / intense
     owner_id = Column(String(32), ForeignKey("users.id"), nullable=True)  # nullable for backward compat
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     owner = relationship("User", back_populates="projects")
     worldview = relationship("Worldview", back_populates="project", uselist=False, cascade="all, delete-orphan")
@@ -70,7 +74,7 @@ class Worldview(Base):
     source = Column(String(20), default="manual")  # manual / imported / hybrid
     # Parsed elements with priority tags
     parsed_elements = Column(JSON, default=list)    # [{id, category, name, priority, revealed, reveal_chapter}]
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     project = relationship("Project", back_populates="worldview")
 
@@ -86,14 +90,17 @@ class Outline(Base):
     chapters = Column(JSON, default=list)     # [{chapter_num, title, summary, key_events, reveal_elements}]
     # Story arc description
     story_arc = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     project = relationship("Project", back_populates="outline")
 
 
 class Chapter(Base):
     __tablename__ = "chapters"
+    __table_args__ = (
+        UniqueConstraint("project_id", "chapter_num", name="uq_chapter_project_num"),
+    )
 
     id = Column(String(32), primary_key=True, default=gen_id)
     project_id = Column(String(32), ForeignKey("projects.id"), nullable=False)
@@ -104,8 +111,8 @@ class Chapter(Base):
     summary = Column(Text, default="")  # Auto-generated summary for memory
     status = Column(String(20), default="pending")  # pending / generating / generated / edited
     revealed_elements = Column(JSON, default=list)  # Element IDs revealed in this chapter
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     project = relationship("Project", back_populates="chapters")
 
@@ -126,7 +133,7 @@ class StoryMemory(Base):
     timeline = Column(JSON, default=list)             # [{chapter, event, description}]
     # Running chapter summaries (for long-context management)
     chapter_summaries = Column(JSON, default=list)    # [{chapter_num, summary}]
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     project = relationship("Project", back_populates="memory")

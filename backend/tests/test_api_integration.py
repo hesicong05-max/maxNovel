@@ -353,7 +353,12 @@ class TestCommunityAPI:
         resp = await client.get(f"/api/community/novels/{novel_id}")
         assert resp.status_code == 200
         assert resp.json()["view_count"] == 1
-        # Second view
+        # Second view from same IP — dedup logic prevents increment within TTL
+        resp = await client.get(f"/api/community/novels/{novel_id}")
+        assert resp.json()["view_count"] == 1  # still 1 due to dedup
+        # Clear dedup cache and verify second view increments
+        from app.api.community import _view_cache
+        _view_cache.clear()
         resp = await client.get(f"/api/community/novels/{novel_id}")
         assert resp.json()["view_count"] == 2
 

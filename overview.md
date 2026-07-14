@@ -1,58 +1,39 @@
-# 满分小说 — 第二轮评估与修复概览
+# 满分小说 — 项目概览
 
-> 日期：2026-07-13  
-> 版本：v0.3.0  
-> 评估报告：上线就绪评估报告-v2.md  
-> 提交：45f3b8d  
+## 项目状态
 
----
+| 维度 | 第一轮 | 第二轮 | 第三轮 | 状态 |
+|------|--------|--------|--------|------|
+| 功能完整性 | 70 | 72 | 75 | 🟡 核心功能完整 |
+| 代码质量 | 55 | 68 | 72 | 🟡 结构良好，有并发隐患 |
+| 测试覆盖 | 5 | 72 | 73 | 🟡 128 测试，CI 未激活 |
+| 性能与稳定性 | 30 | 38 | 48 | 🟡 限流中间件已注册 |
+| 安全性 | 15 | 45 | 58 | 🟡 认证完善，HTTPS 缺失 |
+| 部署准备 | 10 | 50 | 58 | 🟡 Docker/CI 就绪，迁移已修复 |
+| **综合** | **31** | **62** | **64** | **🟡 接近灰度** |
 
-## 评估对比
+## 三轮修复累计成果
 
-| 维度 | 第一轮 | 第二轮 | 变化 |
-|------|--------|--------|------|
-| 功能完整性 | 70 | 72 | +2 |
-| 代码质量 | 55 | 68 | +13 |
-| 测试覆盖 | 5 | 72 | +67 |
-| 性能与稳定性 | 30 | 38 | +8 |
-| 安全性 | 15 | 45 | +30 |
-| 部署准备 | 10 | 50 | +40 |
-| **综合** | **31** | **62** | **+31** |
+### 第一轮（commit c1ca96c → 0b7941e）
+Git 版本控制、安全加固、Docker 容器化、单元测试 85 项、集成测试 42 项、JWT 认证、API 访问控制、Alembic 迁移、Sentry 监控
 
-## 本轮修复内容
+### 第二轮（commit 45f3b8d）
+JWT_SECRET 启动校验、配置加载修复、前端认证头修复、401 全局回调、Docker 非 root（后端）、HEALTHCHECK、CI 创建、认证端点限流、时序攻击防护、CSP 收紧
 
-### P0 修复（22 项已完成）
+### 第三轮（commit 040b833）
+初始迁移重写建表、LLM 设置管理员授权、SlowAPIMiddleware 注册、前端 Docker 非 root、CI 环境变量、HTTPS/TLS 配置模板、LOG_LEVEL 修复、psycopg2 添加、文件上传 OOM 修复、多阶段 Docker 构建、依赖版本锁定、部署 checklist + 回滚方案
 
-| 类别 | 修复项 |
-|------|--------|
-| 安全 | Git remote Token 移除、.env 文件从 Git 移除、JWT_SECRET 启动校验 |
-| 配置 | pydantic-settings env_file 支持、CORS 字符串解析修复 |
-| 数据库 | Alembic 重复 FK 修复、init_db 仅 DEBUG 使用 create_all |
-| 前端 | SSE/上传/导出添加认证头、fetchJSON headers 合并、401 全局回调 |
-| Docker | 非 root 用户、HEALTHCHECK、depends_on 条件 |
-| DevOps | docker-compose 安全化、nginx 安全头、CI/CD 配置 |
+## 当前验证状态
+- ✅ 128 项测试全部通过
+- ✅ tsc --noEmit 零错误
+- ✅ Alembic 无待迁移
+- ✅ 4 个中间件注册
+- ✅ Git 已推送到 GitHub
 
-### P1 修复（15 项已完成）
-
-| 类别 | 修复项 |
-|------|--------|
-| 后端安全 | 认证端点限流、登录时序攻击防护、Sentry PII 可配置 |
-| 后端质量 | memory_store 事务、health check 精简、CSP 收紧、rate_limiter Redis |
-| 前端安全 | Sentry Replay 遮罩、ErrorBoundary 生产环境堆栈隐藏 |
-| 前端功能 | 社区分页 Bug 修复、导出改用 Blob 下载 |
-| 文档 | README.md、环境配置完善 |
-
-## 验证结果
-
-| 检查项 | 结果 |
-|--------|------|
-| 后端测试 | 127 passed |
-| 前端 tsc | 零错误 |
-| Alembic | head=4e6e60586e70, 无待迁移 |
-| Git | main 与 origin/main 同步 |
-
-## 待办事项
-
-- CI 文件 (.github/workflows/ci.yml) 需更新 GitHub Token 的 `workflow` scope 后推送
-- 生产部署必须设置 `JWT_SECRET` 环境变量
-- 剩余 P1/P2 问题见评估报告-v2
+## 后续待推进项
+- CI 文件推送（需 Token workflow scope）
+- HTTPS 证书配置（Let's Encrypt）
+- PostgreSQL 生产数据库
+- 前端自动化测试
+- 性能压测
+- 内容审核功能

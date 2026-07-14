@@ -129,16 +129,160 @@ docker compose run --rm backend alembic downgrade -1
 
 ## 回滚方案
 
-1. **代码回滚**：`git checkout <previous-commit> && docker compose build && docker compose up -d`
-2. **数据库回滚**：`docker compose run --rm backend alembic downgrade -1`
-3. **数据备份**（SQLite）：`cp backend/data/novel_agent.db backup/$(date +%Y%m%d).db`
-4. **数据备份**（PostgreSQL）：`pg_dump -U user novel_agent > backup/$(date +%Y%m%d).sql`
+### 代码回滚
 
-## 监控
+```bash
+# 回退到上一个提交
+git checkout <previous-commit>
+docker compose build && docker compose up -d
 
-- **Sentry**：配置 `SENTRY_DSN` 后自动启用错误监控
-- **健康检查**：`GET /api/health` 返回 `{"status": "ok"}`
-- **Docker 日志**：`docker compose logs -f`
+# 验证服务正常
+curl https://your-domain.com/api/health
+```
+
+### 数据库回滚
+
+```bash
+# 回退一个 Alembic 迁移
+docker compose run --rm backend alembic downgrade -1
+
+# 回退到特定迁移版本
+docker compose run --rm backend alembic downgrade <revision_id>
+```
+
+### 数据备份
+
+```bash
+# SQLite（开发环境）
+cp backend/data/novel_agent.db backup/$(date +%Y%m%d_%H%M%S).db
+
+# PostgreSQL（生产环境）
+pg_dump -U user -h localhost novel_agent | gzip > backup/$(date +%Y%m%d_%H%M%S).sql.gz
+
+# 恢复 PostgreSQL 备份
+gunzip -c backup/20260714_120000.sql.gz | psql -U user novel_agent
+```
+
+## 数据库备份策略
+
+### 自动化备份（推荐）
+
+```bash
+# 添加到 crontab，每天凌晨 3 点自动备份
+# PostgreSQL:
+0 3 * * * pg_dump -U user novel_agent | gzip > /backup/novel_$(date +\%Y\%m\%d).sql.gz
+
+# 保留最近 30 天的备份，自动清理旧备份
+0 4 * * * find /backup -name "novel_*.sql.gz" -mtime +30 -delete
+```
+
+### 备份策略
+
+| 项目 | 频率 | 保留 | 存储 |
+|------|------|------|------|
+| 全量备份 | 每日 03:00 | 30 天 | 本地 + 异地 |
+| WAL 归档 | 实时 | 7 天 | 本地 |
+| 测试恢复 | 每月 | — | 验证备份可用性 |
+
+## 监控与告警
+
+### Sentry 错误监控
+
+1. 注册 Sentry 账号：https://sentry.io/
+2. 创建项目（选择 FastAPI + React）
+3. 获取 DSN
+4. 配置环境变量：
+   ```bash
+   # 后端
+   SENTRY_DSN=https://xxx@sentry.io/xxx
+   SENTRY_TRACES_SAMPLE_RATE=0.1
+   SENTRY_SEND_PII=false  # 生产环境不建议发送 PII
+
+   # 前端（构建时注入）
+   VITE_SENTRY_DSN=https://xxx@sentry.io/xxx
+   ```
+
+### 健康检查
+
+- **后端**：`GET /api/health` → `{"status": "ok"}`
+- **Docker**：自动健康检查（30s 间隔，3 次失败标记为 unhealthy）
+- **docker-compose**：`docker compose ps` 查看健康状态
+
+### 日志
+
+```bash
+# 查看实时日志
+docker compose logs -f
+
+# 查看特定服务
+docker compose logs -f backend
+docker compose logs -f frontend
+
+# 日志自动轮转（已配置）
+# 每个 container 最多 3 个日志文件，每个 10MB
+```
+
+### 告警建议
+
+| 指标 | 阈值 | 告警方式 |
+|------|------|---------|
+| 后端 5xx 错误率 | > 1% | Sentry 自动告警 |
+| 响应时间 P99 | > 5s | Sentry Performance |
+| 容器健康状态 | unhealthy | Docker healthcheck + 外部监控 |
+| 磁盘空间 | > 80% | 系统监控（如 Prometheus + Grafana） |
+| 数据库连接失败 | > 0 | Sentry + 日志告警 |
+
+## 环境变量检查清单
+
+### 必填项（生产环境）
+
+- [ ] `JWT_SECRET` — 强随机字符串（`python -c "import secrets; print(secrets.token_urlsafe(64))"`）
+- [ ] `DATABASE_URL` — PostgreSQL 连接字符串
+- [ ] `CORS_ORIGINS` — 你的生产域名
+
+### 推荐配置
+
+- [ ] `SENTRY_DSN` — Sentry 错误监控
+- [ ] `VITE_SENTRY_DSN` — 前端 Sentry
+- [ ] `RATE_LIMIT_STORAGE_URI` — Redis 连接（多进程部署）
+- [ ] `LOG_LEVEL=WARNING` — 生产环境日志级别
+
+### 可选项
+
+- [ ] `LLM_API_KEY` — 可通过 UI 配置（管理员）
+- [ ] `LLM_BASE_URL` — 自定义 LLM 端点
+- [ ] `LLM_MODEL` — 模型名称
+- [ ] `SENTRY_SEND_PII` — 默认 false，生产不建议开启
+- [ ] `SENTRY_TRACES_SAMPLE_RATE` — 性能采样率（0.1 = 10%）
+
+### 完整环境变量表
+
+| 变量 | 说明 | 默认值 | 必填 |
+|------|------|--------|------|
+| `JWT_SECRET` | JWT 签名密钥 | 无 | 生产必填 |
+| `DATABASE_URL` | 数据库连接 | sqlite+aiosqlite:///./data/novel_agent.db | 生产推荐 PostgreSQL |
+| `CORS_ORIGINS` | 允许的跨域来源 | localhost | 生产必填 |
+| `DEBUG` | 调试模式 | false | — |
+| `ENV_FILE` | 指定 .env 文件 | .env | — |
+| `HOST` | 监听地址 | 0.0.0.0 | — |
+| `PORT` | 监听端口 | 8000 | — |
+| `LLM_API_KEY` | LLM API Key | 空 | 否（可 UI 配置） |
+| `LLM_BASE_URL` | LLM 端点 | https://api.openai.com/v1 | — |
+| `LLM_MODEL` | 模型名称 | gpt-4o | — |
+| `LLM_MAX_TOKENS` | 最大 token 数 | 4096 | — |
+| `LLM_TEMPERATURE` | 生成温度 | 0.8 | — |
+| `MAX_UPLOAD_SIZE` | 上传限制 | 10485760 (10MB) | — |
+| `RATE_LIMIT_DEFAULT` | 默认限流 | 60/minute | — |
+| `RATE_LIMIT_LLM` | LLM 端点限流 | 10/minute | — |
+| `RATE_LIMIT_STORAGE_URI` | 限流存储 | memory:// | 生产推荐 Redis |
+| `JWT_ALGORITHM` | JWT 算法 | HS256 | — |
+| `JWT_EXPIRE_DAYS` | Token 有效期 | 7 | — |
+| `SENTRY_DSN` | Sentry DSN | 空 | 推荐 |
+| `SENTRY_TRACES_SAMPLE_RATE` | 性能采样 | 0.1 | — |
+| `SENTRY_SEND_PII` | 发送 PII | false | — |
+| `LOG_LEVEL` | 日志级别 | INFO | 生产推荐 WARNING |
+| `VITE_SENTRY_DSN` | 前端 Sentry | 空 | 推荐 |
+| `VITE_API_BASE_URL` | API 基础路径 | /api | — |
 
 ## GitHub
 

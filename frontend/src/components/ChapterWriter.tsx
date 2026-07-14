@@ -55,6 +55,19 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
   // === Show/hide settings panel ===
   const [showSettings, setShowSettings] = useState(false);
 
+  // === AbortController for SSE streams ===
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Cancel any active SSE stream on unmount
+  useEffect(() => {
+    return () => {
+      if (abortRef.current) {
+        abortRef.current.abort();
+        abortRef.current = null;
+      }
+    };
+  }, []);
+
   useEffect(() => {
     loadChapters();
     loadWordCounts();
@@ -109,18 +122,23 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
     setStreaming(true);
     setStreamContent("");
     setMeta(null);
+    // Create a new AbortController for this stream
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       let fullContent = "";
-      for await (const msg of api.streamChapter(projectId, currentChapter)) {
+      for await (const msg of api.streamChapter(projectId, currentChapter, controller.signal)) {
         if (msg.type === "metadata") { setMeta(msg); }
         else if (msg.type === "content" && msg.text) { fullContent += msg.text; setStreamContent(fullContent); }
         else if (msg.type === "complete") { await loadChapters(); onProgress(); }
         else if (msg.type === "error") { alert("生成失败: " + msg.error); await loadChapters(); break; }
       }
     } catch (e) {
+      if (controller.signal.aborted) return; // Ignore abort errors
       alert("生成失败: " + (e as Error).message);
     } finally {
       setStreaming(false);
+      abortRef.current = null;
     }
   }
 
@@ -227,9 +245,13 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
     setBatchProgress({ current: 0, total: 0 });
     setBatchCurrentCh(null);
 
+    // Create a new AbortController for this batch stream
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       let currentChContent = "";
-      for await (const msg of api.streamBatchGenerate(projectId, batchSkipExisting)) {
+      for await (const msg of api.streamBatchGenerate(projectId, batchSkipExisting, controller.signal)) {
         if (msg.type === "batch_start") {
           setBatchProgress({ current: 0, total: msg.total_to_generate || 0 });
         }
@@ -268,8 +290,11 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
       await loadChapters();
       onProgress();
     } catch (e) {
+      if (controller.signal.aborted) { setBatchStatus("idle"); return; }
       setBatchStatus("error");
       alert("批量生成失败: " + (e as Error).message);
+    } finally {
+      abortRef.current = null;
     }
   }
 

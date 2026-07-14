@@ -1,5 +1,5 @@
 # Build stage
-FROM python:3.13-slim AS builder
+FROM python:3.13.1-slim AS builder
 
 WORKDIR /app
 
@@ -8,17 +8,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install
+# Create a virtual environment in a shared location
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy requirements and install into venv
 COPY requirements.txt .
-RUN pip install --no-cache-dir --user -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # ---- Runtime stage ----
-FROM python:3.13-slim
+FROM python:3.13.1-slim
 
 WORKDIR /app
 
-# Copy installed packages from builder
-COPY --from=builder /root/.local /root/.local
+# Copy the virtual environment from builder (accessible by all users)
+COPY --from=builder /opt/venv /opt/venv
 
 # Copy application code
 COPY . .
@@ -27,13 +31,13 @@ COPY . .
 RUN mkdir -p /app/data
 
 # Create non-root user for security
-RUN useradd -m -u 1001 appuser && chown -R appuser:appuser /app
+RUN useradd -m -u 1001 appuser && chown -R appuser:appuser /app /opt/venv
 USER appuser
 
 # Environment optimization
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-ENV PATH=/root/.local/bin:$PATH
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Expose port
 EXPOSE 8000

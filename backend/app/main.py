@@ -33,6 +33,9 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database initialized")
     yield
+    # Clean up persistent httpx client
+    from app.core.llm_client import llm_client
+    await llm_client.close()
     logger.info("Shutting down %s", app_settings.APP_NAME)
 
 
@@ -83,7 +86,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: https:; "
             "font-src 'self' data:; "
-            "connect-src 'self'; "
+            "connect-src 'self' https://*.ingest.sentry.io; "
             "frame-ancestors 'none'"
         )
         return response

@@ -1,11 +1,24 @@
-"""LLM API client — supports any OpenAI-compatible endpoint."""
+"""LLM API client — supports any OpenAI-compatible endpoint.
 
+Uses a persistent httpx.AsyncClient for connection pool reuse.
+Includes retry logic for transient failures (429, 500, 502, 503, 504).
+"""
+
+import asyncio
 import json
+import logging
 from typing import AsyncGenerator
 
 import httpx
 
 from app.core.settings_store import load_settings
+
+logger = logging.getLogger(__name__)
+
+# Retry configuration
+_MAX_RETRIES = 3
+_RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
+_RETRY_DELAYS = [1, 2, 4]  # seconds, exponential backoff
 
 
 class LLMClient:
@@ -13,6 +26,7 @@ class LLMClient:
 
     def __init__(self):
         self._reload()
+        self._client: httpx.AsyncClient | None = None
 
     def _reload(self):
         """Reload settings from the settings store (called on each request)."""
@@ -22,6 +36,21 @@ class LLMClient:
         self.model = s.get("model", "gpt-4o")
         self.max_tokens = s.get("max_tokens", 4096)
         self.temperature = s.get("temperature", 0.8)
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Get or create a persistent httpx.AsyncClient for connection reuse."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=10, read=120, write=10, pool=5),
+                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            )
+        return self._client
+
+    async def close(self):
+        """Close the persistent client. Call on app shutdown."""
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+        self._client = None
 
     @property
     def is_configured(self) -> bool:
@@ -41,31 +70,77 @@ class LLMClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> str:
-        """Non-streaming chat completion. Returns the full response text."""
+        """Non-streaming chat completion. Returns the full response text.
+
+        Retries on transient failures (429, 5xx) with exponential backoff.
+        """
         self._reload()
         if not self.api_key:
             return _mock_response(messages)
 
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers=self._headers(),
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": temperature if temperature is not None else self.temperature,
-                    "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
-                },
-            )
-            if resp.status_code != 200:
-                try:
-                    err_data = resp.json()
-                    err_msg = err_data.get("error", {}).get("message", resp.text)
-                except Exception:
-                    err_msg = resp.text[:200] if resp.text else f"HTTP {resp.status_code}"
-                raise RuntimeError(f"LLM API 错误 (HTTP {resp.status_code}): {err_msg}")
-            data = resp.json()
-            return data["choices"][0]["message"]["content"]
+        client = await self._get_client()
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature if temperature is not None else self.temperature,
+            "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
+        }
+
+        last_error = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                resp = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=self._headers(),
+                    json=payload,
+                )
+                if resp.status_code in _RETRY_STATUS_CODES and attempt < _MAX_RETRIES:
+                    delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+                    logger.warning(
+                        "LLM API retryable error (HTTP %d), attempt %d/%d, retrying in %ds",
+                        resp.status_code, attempt + 1, _MAX_RETRIES, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                if resp.status_code != 200:
+                    try:
+                        err_data = resp.json()
+                        err_msg = err_data.get("error", {}).get("message", resp.text)
+                    except Exception:
+                        err_msg = resp.text[:200] if resp.text else f"HTTP {resp.status_code}"
+                    raise RuntimeError(f"LLM API 错误 (HTTP {resp.status_code}): {err_msg}")
+
+                data = resp.json()
+                return data["choices"][0]["message"]["content"]
+
+            except httpx.TimeoutException:
+                last_error = RuntimeError("LLM API 请求超时")
+                if attempt < _MAX_RETRIES:
+                    delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+                    logger.warning("LLM timeout, attempt %d/%d, retrying in %ds", attempt + 1, _MAX_RETRIES, delay)
+                    await asyncio.sleep(delay)
+                    continue
+                raise last_error
+            except httpx.ConnectError:
+                last_error = RuntimeError("无法连接到 LLM API 服务器")
+                if attempt < _MAX_RETRIES:
+                    delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+                    logger.warning("LLM connect error, attempt %d/%d, retrying in %ds", attempt + 1, _MAX_RETRIES, delay)
+                    await asyncio.sleep(delay)
+                    continue
+                raise last_error
+            except RuntimeError:
+                raise
+            except Exception as e:
+                if attempt < _MAX_RETRIES:
+                    delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+                    logger.warning("LLM unexpected error: %s, attempt %d/%d", str(e), attempt + 1, _MAX_RETRIES)
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+
+        raise last_error or RuntimeError("LLM API 调用失败")
 
     async def chat_stream(
         self,
@@ -73,7 +148,11 @@ class LLMClient:
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> AsyncGenerator[str, None]:
-        """Streaming chat completion. Yields content chunks."""
+        """Streaming chat completion. Yields content chunks.
+
+        Note: Streaming does not retry mid-stream (would duplicate partial content).
+        Retry only applies to the initial connection.
+        """
         self._reload()
         if not self.api_key:
             # Simulate streaming for dev/demo
@@ -83,39 +162,65 @@ class LLMClient:
                 yield mock_text[i : i + chunk_size]
             return
 
-        async with httpx.AsyncClient(timeout=120) as client:
-            async with client.stream(
-                "POST",
-                f"{self.base_url}/chat/completions",
-                headers=self._headers(),
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": temperature if temperature is not None else self.temperature,
-                    "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
-                    "stream": True,
-                },
-            ) as resp:
-                if resp.status_code != 200:
-                    body = await resp.aread()
-                    try:
-                        err_data = json.loads(body)
-                        err_msg = err_data.get("error", {}).get("message", body.decode("utf-8", errors="replace"))
-                    except Exception:
-                        err_msg = body.decode("utf-8", errors="replace")[:200] or f"HTTP {resp.status_code}"
-                    raise RuntimeError(f"LLM API 错误 (HTTP {resp.status_code}): {err_msg}")
-                async for line in resp.aiter_lines():
-                    if line.startswith("data: "):
-                        data_str = line[6:]
-                        if data_str.strip() == "[DONE]":
-                            break
+        client = await self._get_client()
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature if temperature is not None else self.temperature,
+            "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
+            "stream": True,
+        }
+
+        # Retry only on connection errors; once streaming starts, no retry
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url}/chat/completions",
+                    headers=self._headers(),
+                    json=payload,
+                ) as resp:
+                    if resp.status_code in _RETRY_STATUS_CODES and attempt < _MAX_RETRIES:
+                        delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+                        logger.warning(
+                            "LLM stream retryable error (HTTP %d), attempt %d/%d",
+                            resp.status_code, attempt + 1, _MAX_RETRIES,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
+                    if resp.status_code != 200:
+                        body = await resp.aread()
                         try:
-                            data = json.loads(data_str)
-                            delta = data["choices"][0].get("delta", {})
-                            if content := delta.get("content"):
-                                yield content
-                        except (json.JSONDecodeError, KeyError, IndexError):
-                            continue
+                            err_data = json.loads(body)
+                            err_msg = err_data.get("error", {}).get("message", body.decode("utf-8", errors="replace"))
+                        except Exception:
+                            err_msg = body.decode("utf-8", errors="replace")[:200] or f"HTTP {resp.status_code}"
+                        raise RuntimeError(f"LLM API 错误 (HTTP {resp.status_code}): {err_msg}")
+
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: "):
+                            data_str = line[6:]
+                            if data_str.strip() == "[DONE]":
+                                break
+                            try:
+                                data = json.loads(data_str)
+                                delta = data["choices"][0].get("delta", {})
+                                if content := delta.get("content"):
+                                    yield content
+                            except (json.JSONDecodeError, KeyError, IndexError):
+                                continue
+                    return  # Success, exit retry loop
+
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                if attempt < _MAX_RETRIES:
+                    delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+                    logger.warning("LLM stream connection error: %s, attempt %d/%d", str(e), attempt + 1, _MAX_RETRIES)
+                    await asyncio.sleep(delay)
+                    continue
+                raise RuntimeError(f"LLM API 连接失败: {str(e)}")
+            except RuntimeError:
+                raise
 
     async def test_connection(self) -> dict:
         """Test the API connection with a minimal request."""
@@ -124,30 +229,30 @@ class LLMClient:
             return {"success": False, "error": "API Key 未配置"}
 
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=self._headers(),
-                    json={
-                        "model": self.model,
-                        "messages": [
-                            {"role": "user", "content": "请回复\"连接成功\"四个字。"}
-                        ],
-                        "max_tokens": 20,
-                        "temperature": 0,
-                    },
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    reply = data["choices"][0]["message"]["content"]
-                    return {"success": True, "reply": reply, "model": self.model}
-                else:
-                    try:
-                        error_data = resp.json()
-                        error_msg = error_data.get("error", {}).get("message", resp.text)
-                    except Exception:
-                        error_msg = resp.text[:200] if resp.text else "未知错误"
-                    return {"success": False, "error": f"HTTP {resp.status_code}: {error_msg}"}
+            client = await self._get_client()
+            resp = await client.post(
+                f"{self.base_url}/chat/completions",
+                headers=self._headers(),
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "user", "content": "请回复\"连接成功\"四个字。"}
+                    ],
+                    "max_tokens": 20,
+                    "temperature": 0,
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                reply = data["choices"][0]["message"]["content"]
+                return {"success": True, "reply": reply, "model": self.model}
+            else:
+                try:
+                    error_data = resp.json()
+                    error_msg = error_data.get("error", {}).get("message", resp.text)
+                except Exception:
+                    error_msg = resp.text[:200] if resp.text else "未知错误"
+                return {"success": False, "error": f"HTTP {resp.status_code}: {error_msg}"}
         except httpx.ConnectError:
             return {"success": False, "error": "无法连接到 API 服务器，请检查 Base URL"}
         except httpx.TimeoutException:

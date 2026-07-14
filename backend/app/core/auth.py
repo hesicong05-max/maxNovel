@@ -30,11 +30,15 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def create_access_token(user_id: str, username: str) -> str:
-    """Create a JWT access token."""
-    expire = datetime.now(timezone.utc) + timedelta(days=settings.JWT_EXPIRE_DAYS)
+    """Create a JWT access token with iat/jti claims."""
+    import uuid as _uuid
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(days=settings.JWT_EXPIRE_DAYS)
     payload = {
         "sub": user_id,
         "username": username,
+        "iat": now,  # Issued-at time
+        "jti": _uuid.uuid4().hex,  # Unique token ID (for future revocation support)
         "exp": expire,
     }
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)

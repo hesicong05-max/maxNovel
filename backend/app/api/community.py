@@ -1,7 +1,9 @@
 """Community API — shared novels, tags, and co-creation settings."""
 
+import hashlib
 import logging
 import random
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -9,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.auth import User, get_current_user, get_project_for_owner
+from app.core.auth import User, get_current_user, get_optional_user, get_project_for_owner
 from app.core.rate_limiter import limiter
 from app.database import get_db
 from app.models.community import CommunityNovel, CommunityTag
@@ -25,6 +27,30 @@ from app.schemas.models import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/community", tags=["community"])
+
+# In-memory view dedup cache: {(ip_hash, novel_id): timestamp}
+# TTL: 1 hour. For multi-process deployments, use Redis.
+_VIEW_DEDUP_TTL = 3600  # 1 hour
+_view_cache: dict[tuple[str, str], float] = {}
+
+
+def _ip_hash(request: Request) -> str:
+    """Hash the client IP for anonymous dedup."""
+    client_ip = request.client.host if request.client else "unknown"
+    return hashlib.sha256(client_ip.encode()).hexdigest()[:16]
+
+
+def _should_count_view(ip_hash: str, novel_id: str) -> bool:
+    """Check if this view should be counted (dedup within TTL)."""
+    key = (ip_hash, novel_id)
+    now = time.time()
+    # Clean expired entries periodically
+    if len(_view_cache) > 10000:
+        _view_cache.clear()
+    if key in _view_cache and now - _view_cache[key] < _VIEW_DEDUP_TTL:
+        return False
+    _view_cache[key] = now
+    return True
 
 
 # ── Helpers ──────────────────────────────────────────────
@@ -234,9 +260,10 @@ async def upload_novel(
 @router.get("/novels/{novel_id}", response_model=CommunityNovelResponse)
 async def get_novel(
     novel_id: str,
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Get a single novel's full details. Increments view count. Public."""
+    """Get a single novel's full details. Increments view count (IP-deduped). Public."""
     result = await db.execute(
         select(CommunityNovel)
         .options(selectinload(CommunityNovel.tags))
@@ -246,8 +273,11 @@ async def get_novel(
     if not novel:
         raise HTTPException(status_code=404, detail="小说不存在")
 
-    novel.view_count = (novel.view_count or 0) + 1
-    await db.commit()
+    # Dedup view count by IP within a 1-hour window
+    ip_h = _ip_hash(request)
+    if _should_count_view(ip_h, novel_id):
+        novel.view_count = (novel.view_count or 0) + 1
+        await db.commit()
 
     # Re-query with tags eagerly loaded (avoid lazy-load after commit)
     result = await db.execute(
@@ -344,16 +374,36 @@ async def like_novel(
     request: Request,
     novel_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User | None, Depends(get_optional_user)] = None,
 ):
-    """Like a novel (increments like_count). Public."""
+    """Like a novel (increments like_count). Dedup by user or IP.
+
+    - Authenticated users: one like per user per novel (stored in liked_by)
+    - Anonymous: one like per IP per novel (IP hash stored in liked_by, 24h TTL via rate limit)
+    """
     result = await db.execute(select(CommunityNovel).where(CommunityNovel.id == novel_id))
     novel = result.scalar_one_or_none()
     if not novel:
         raise HTTPException(status_code=404, detail="小说不存在")
 
+    # Determine liker identifier
+    if current_user:
+        liker_id = current_user.id
+    else:
+        liker_id = f"ip:{_ip_hash(request)}"
+
+    # Check if already liked
+    liked_by = novel.liked_by or []
+    if liker_id in liked_by:
+        # Already liked — return current count without incrementing
+        return {"like_count": novel.like_count, "already_liked": True}
+
+    # Increment and record
+    liked_by.append(liker_id)
+    novel.liked_by = liked_by
     novel.like_count = (novel.like_count or 0) + 1
     await db.commit()
-    return {"like_count": novel.like_count}
+    return {"like_count": novel.like_count, "already_liked": False}
 
 
 # ── Tags ──────────────────────────────────────────────────

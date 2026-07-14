@@ -339,7 +339,7 @@ async def generate_chapter(
     await get_project_for_owner(project_id, current_user, db)
 
     return StreamingResponse(
-        _stream_single_chapter(project_id, chapter_num),
+        _stream_single_chapter(project_id, chapter_num, current_user.id),
         media_type="text/event-stream",
     )
 
@@ -358,29 +358,49 @@ async def generate_all_chapters(
     await get_project_for_owner(project_id, current_user, db)
 
     return StreamingResponse(
-        _stream_batch_generate(project_id, skip_existing=skip_existing),
+        _stream_batch_generate(project_id, current_user.id, skip_existing=skip_existing),
         media_type="text/event-stream",
     )
 
 
-async def _stream_single_chapter(project_id: str, chapter_num: int):
-    """Stream single chapter generation via SSE."""
+async def _stream_single_chapter(project_id: str, chapter_num: int, user_id: str):
+    """Stream single chapter generation via SSE.
+
+    Re-verifies project ownership in the new session to prevent TOCTOU.
+    """
     async with async_session() as db:
+        # Re-verify ownership in the new session
+        result = await db.execute(select(Project).where(Project.id == project_id))
+        project = result.scalar_one_or_none()
+        if not project:
+            yield _sse({"type": "error", "error": "项目不存在"})
+            return
+        if project.owner_id is not None and project.owner_id != user_id:
+            yield _sse({"type": "error", "error": "无权操作此项目"})
+            return
+
         async for event in _generate_chapter_core(db, project_id, chapter_num):
             yield event
 
 
 async def _stream_batch_generate(
     project_id: str,
+    user_id: str,
     skip_existing: bool = True,
 ):
-    """Stream batch generation of all chapters via SSE."""
+    """Stream batch generation of all chapters via SSE.
+
+    Re-verifies project ownership in the new session to prevent TOCTOU.
+    """
     async with async_session() as db:
-        # Load project
+        # Load project and re-verify ownership
         result = await db.execute(select(Project).where(Project.id == project_id))
         project = result.scalar_one_or_none()
         if not project:
             yield _sse({"type": "error", "error": "项目不存在"})
+            return
+        if project.owner_id is not None and project.owner_id != user_id:
+            yield _sse({"type": "error", "error": "无权操作此项目"})
             return
 
         # Load outline
@@ -446,6 +466,16 @@ async def _stream_batch_generate(
 
             if chapter_success:
                 generated_count += 1
+                # Accumulate word count from the generated chapter
+                ch_result = await db.execute(
+                    select(Chapter).where(
+                        Chapter.project_id == project_id,
+                        Chapter.chapter_num == chapter_num,
+                    )
+                )
+                ch = ch_result.scalar_one_or_none()
+                if ch:
+                    total_words += ch.word_count or 0
             else:
                 failed_chapters.append(chapter_num)
 
@@ -577,10 +607,14 @@ async def _generate_chapter_core(
         total_chapters=project.total_chapters,
     )
 
-    # Stream content
+    # Stream content — use user-configured temperature from settings
+    from app.core.settings_store import load_settings as load_llm_settings
+    llm_s = load_llm_settings()
+    stream_temperature = llm_s.get("temperature", 0.8)
+
     full_content = ""
     try:
-        async for chunk in llm_client.chat_stream(messages, temperature=0.85):
+        async for chunk in llm_client.chat_stream(messages, temperature=stream_temperature):
             full_content += chunk
             yield _sse({"type": "content", "text": chunk, "chapter_num": chapter_num})
     except Exception as e:

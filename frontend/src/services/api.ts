@@ -406,7 +406,7 @@ export const api = {
     }),
 
   likeCommunityNovel: (novelId: string) =>
-    fetchJSON<{ like_count: number }>(`/community/novels/${novelId}/like`, {
+    fetchJSON<{ like_count: number; already_liked?: boolean }>(`/community/novels/${novelId}/like`, {
       method: "POST",
     }),
 

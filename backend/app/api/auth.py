@@ -44,16 +44,25 @@ class AuthResponse(BaseModel):
 @router.post("/register", response_model=AuthResponse)
 @limiter.limit("5/minute")
 async def register(request: Request, req: RegisterRequest, db: AsyncSession = Depends(get_db)):
-    """Register a new user account."""
+    """Register a new user account.
+
+    Returns a generic error for duplicate email/username to prevent enumeration.
+    """
     # Check if email already exists
     existing = await db.execute(select(User).where(User.email == req.email))
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该邮箱已注册")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="注册失败，请检查输入或更换信息后重试",
+        )
 
     # Check if username already exists
     existing = await db.execute(select(User).where(User.username == req.username))
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该用户名已被使用")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="注册失败，请检查输入或更换信息后重试",
+        )
 
     # Create user
     user = User(
