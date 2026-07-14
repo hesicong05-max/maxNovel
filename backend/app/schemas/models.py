@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.project import NovelGenre, ProjectStatus
 
@@ -99,8 +99,7 @@ class WorldviewResponse(WorldviewCreate):
     parsed_elements: list[dict[str, Any]] = Field(default_factory=list)
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ProjectCreate(BaseModel):
@@ -125,8 +124,7 @@ class ProjectResponse(BaseModel):
     has_outline: bool = False
     chapter_count: int = 0
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class OutlineChapterEntry(BaseModel):
@@ -152,8 +150,7 @@ class OutlineResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ChapterResponse(BaseModel):
@@ -169,8 +166,7 @@ class ChapterResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ChapterUpdate(BaseModel):
@@ -257,8 +253,7 @@ class CommunityNovelResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CommunityNovelBrief(BaseModel):
@@ -276,8 +271,7 @@ class CommunityNovelBrief(BaseModel):
     tags: list[str] = Field(default_factory=list)
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CommunityTagResponse(BaseModel):
@@ -285,5 +279,4 @@ class CommunityTagResponse(BaseModel):
     name: str
     usage_count: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
