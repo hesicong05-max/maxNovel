@@ -5,8 +5,8 @@ services:
     container_name: novel-db
     environment:
       POSTGRES_DB: novel_agent
-      POSTGRES_USER: ${DB_USER:?ERROR: DB_USER must be set}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?ERROR: DB_PASSWORD must be set}
+      POSTGRES_USER: "${DB_USER:?ERROR: DB_USER must be set}"
+      POSTGRES_PASSWORD: "${DB_PASSWORD:?ERROR: DB_PASSWORD must be set}"
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
@@ -43,7 +43,7 @@ services:
       - HOST=0.0.0.0
       - PORT=8000
       - DATABASE_URL=postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@db:5432/novel_agent
-      - JWT_SECRET=${JWT_SECRET:?ERROR: JWT_SECRET must be set}
+      - "JWT_SECRET=${JWT_SECRET:?ERROR: JWT_SECRET must be set}"
       - SENTRY_DSN=${SENTRY_DSN:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
