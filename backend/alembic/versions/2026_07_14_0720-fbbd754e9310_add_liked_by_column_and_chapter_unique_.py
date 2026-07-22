@@ -9,7 +9,6 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import sqlite
 
 # revision identifiers, used by Alembic.
 revision: str = 'fbbd754e9310'
@@ -23,7 +22,7 @@ def upgrade() -> None:
     with op.batch_alter_table('chapters', schema=None) as batch_op:
         batch_op.create_unique_constraint('uq_chapter_project_num', ['project_id', 'chapter_num'])
 
-    op.add_column('community_novels', sa.Column('liked_by', sqlite.JSON(), nullable=True))
+    op.add_column('community_novels', sa.Column('liked_by', sa.JSON(), nullable=True))
 
 
 def downgrade() -> None:
