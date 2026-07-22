@@ -19,8 +19,8 @@ SETTINGS_FILE = DATA_DIR / "llm_settings.json"
 
 DEFAULT_SETTINGS = {
     "api_key": "",
-    "base_url": "https://api.openai.com/v1",
-    "model": "gpt-4o",
+    "base_url": "https://qianfan.baidubce.com/v2",
+    "model": "ernie-4.5-turbo-128k",
     "temperature": 0.8,
     "max_tokens": 4096,
 }

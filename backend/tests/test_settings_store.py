@@ -30,8 +30,8 @@ class TestDefaultSettings:
 
     def test_default_values(self):
         assert DEFAULT_SETTINGS["api_key"] == ""
-        assert DEFAULT_SETTINGS["base_url"] == "https://api.openai.com/v1"
-        assert DEFAULT_SETTINGS["model"] == "gpt-4o"
+        assert DEFAULT_SETTINGS["base_url"] == "https://qianfan.baidubce.com/v2"
+        assert DEFAULT_SETTINGS["model"] == "ernie-4.5-turbo-128k"
         assert DEFAULT_SETTINGS["temperature"] == 0.8
         assert DEFAULT_SETTINGS["max_tokens"] == 4096
 

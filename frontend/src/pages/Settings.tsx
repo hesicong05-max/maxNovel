@@ -11,8 +11,8 @@ interface Provider {
 export default function Settings() {
   const navigate = useNavigate();
   const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
-  const [model, setModel] = useState("gpt-4o");
+  const [baseUrl, setBaseUrl] = useState("https://qianfan.baidubce.com/v2");
+  const [model, setModel] = useState("ernie-4.5-turbo-128k");
   const [temperature, setTemperature] = useState(0.8);
   const [maxTokens, setMaxTokens] = useState(4096);
   const [isConfigured, setIsConfigured] = useState(false);
@@ -173,11 +173,11 @@ export default function Settings() {
           <input
             className="form-input"
             type="password"
-            placeholder="sk-..."
+            placeholder="bce-v3/ALTAK-..."
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
           />
-          <p className="form-hint">在服务商平台申请的 API Key。已保存的 Key 会以星号显示，修改时直接输入新 Key 即可。</p>
+          <p className="form-hint">在百度千帆控制台「安全认证 → API Key」页面创建。格式为 bce-v3/ALTAK-xxx/xxx，已保存的 Key 会以星号显示。</p>
         </div>
 
         <div className="form-group">
@@ -185,11 +185,11 @@ export default function Settings() {
           <input
             className="form-input"
             type="text"
-            placeholder="https://api.openai.com/v1"
+            placeholder="https://qianfan.baidubce.com/v2"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
           />
-          <p className="form-hint">OpenAI 兼容接口地址。不同服务商地址不同，可通过上方快速选择。</p>
+          <p className="form-hint">百度千帆默认地址为 https://qianfan.baidubce.com/v2，支持任何 OpenAI 兼容接口。</p>
         </div>
 
         <div className="form-group">
@@ -197,7 +197,7 @@ export default function Settings() {
           <input
             className="form-input"
             type="text"
-            placeholder="gpt-4o"
+            placeholder="ernie-4.5-turbo-128k"
             value={model}
             onChange={(e) => setModel(e.target.value)}
           />
@@ -261,9 +261,9 @@ export default function Settings() {
       <div className="card" style={{ background: "var(--bg)" }}>
         <div className="wv-section-title">使用说明</div>
         <ul style={{ fontSize: "13px", color: "var(--text-2)", paddingLeft: "1.25rem", lineHeight: 2 }}>
-          <li>本系统支持任何 OpenAI 兼容的 API 接口</li>
-          <li>在对应服务商平台注册并获取 API Key</li>
-          <li>选择服务商可自动填充 Base URL 和模型名称</li>
+          <li>默认使用百度千帆 ERNIE 模型，中文写作质量优秀且成本低</li>
+          <li>在百度千帆控制台创建 API Key（格式 bce-v3/ALTAK-xxx/xxx）</li>
+          <li>选择服务商可快速填充 Base URL 和模型名称</li>
           <li>保存后点击「测试连接」验证配置是否正确</li>
           <li>配置成功后，大纲生成、章节写作、世界观导入都将使用真实 AI</li>
           <li>API Key 保存在本地服务器，不会上传到任何第三方</li>

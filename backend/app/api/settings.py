@@ -14,16 +14,16 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 class LLMSettingsRequest(BaseModel):
     api_key: str = ""
-    base_url: str = "https://api.openai.com/v1"
-    model: str = "gpt-4o"
+    base_url: str = "https://qianfan.baidubce.com/v2"
+    model: str = "ernie-4.5-turbo-128k"
     temperature: float = 0.8
     max_tokens: int = 4096
 
 
 class LLMSettingsResponse(BaseModel):
     api_key: str = ""
-    base_url: str = "https://api.openai.com/v1"
-    model: str = "gpt-4o"
+    base_url: str = "https://qianfan.baidubce.com/v2"
+    model: str = "ernie-4.5-turbo-128k"
     temperature: float = 0.8
     max_tokens: int = 4096
     is_configured: bool = False
@@ -38,6 +38,16 @@ class TestConnectionResponse(BaseModel):
 
 # Predefined provider presets
 PROVIDER_PRESETS = [
+    {
+        "name": "百度千帆 (ERNIE)",
+        "base_url": "https://qianfan.baidubce.com/v2",
+        "models": [
+            "ernie-4.5-turbo-128k",
+            "ernie-4.5-turbo-32k",
+            "ernie-speed-pro-128k",
+            "ernie-5.0",
+        ],
+    },
     {
         "name": "OpenAI",
         "base_url": "https://api.openai.com/v1",
@@ -88,8 +98,8 @@ async def get_llm_settings(
 
     return LLMSettingsResponse(
         api_key=masked_key,
-        base_url=s.get("base_url", "https://api.openai.com/v1"),
-        model=s.get("model", "gpt-4o"),
+        base_url=s.get("base_url", "https://qianfan.baidubce.com/v2"),
+        model=s.get("model", "ernie-4.5-turbo-128k"),
         temperature=s.get("temperature", 0.8),
         max_tokens=s.get("max_tokens", 4096),
         is_configured=bool(api_key),

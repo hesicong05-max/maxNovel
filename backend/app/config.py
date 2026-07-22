@@ -16,10 +16,10 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/novel_agent.db"
 
-    # LLM API — default to OpenAI-compatible endpoint
+    # LLM API — default to Baidu Qianfan (ERNIE) OpenAI-compatible endpoint
     LLM_API_KEY: str = ""
-    LLM_BASE_URL: str = "https://api.openai.com/v1"
-    LLM_MODEL: str = "gpt-4o"
+    LLM_BASE_URL: str = "https://qianfan.baidubce.com/v2"
+    LLM_MODEL: str = "ernie-4.5-turbo-128k"
     LLM_MAX_TOKENS: int = 4096
     LLM_TEMPERATURE: float = 0.8
 
