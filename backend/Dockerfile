@@ -3,6 +3,10 @@ FROM m.daocloud.io/docker.io/library/python:3.13.1-slim AS builder
 
 WORKDIR /app
 
+# Use China mirrors for apt and pip to speed up builds on Chinese servers
+RUN sed -i 's|http://deb.debian.org/debian|https://mirrors.aliyun.com/debian|g' /etc/apt/sources.list.d/debian.sources && \
+    sed -i 's|http://deb.debian.org/debian-security|https://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources
+
 # Install build dependencies (only needed for compilation)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -12,9 +16,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy requirements and install into venv
+# Copy requirements and install into venv using Tsinghua PyPI mirror
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
 
 # ---- Runtime stage ----
 FROM m.daocloud.io/docker.io/library/python:3.13.1-slim

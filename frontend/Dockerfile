@@ -4,7 +4,7 @@ FROM m.daocloud.io/docker.io/library/node:22.12.0-slim AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm config set registry https://registry.npmmirror.com && npm ci
 
 COPY . .
 
