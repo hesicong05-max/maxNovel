@@ -1,7 +1,7 @@
 services:
   # ── PostgreSQL (production database) ──
   db:
-    image: postgres:16.4-alpine3.20
+    image: m.daocloud.io/docker.io/library/postgres:16.4-alpine3.20
     container_name: novel-db
     environment:
       POSTGRES_DB: novel_agent

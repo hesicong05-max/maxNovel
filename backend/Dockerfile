@@ -1,5 +1,5 @@
 # Build stage
-FROM python:3.13.1-slim AS builder
+FROM m.daocloud.io/docker.io/library/python:3.13.1-slim AS builder
 
 WORKDIR /app
 
@@ -17,7 +17,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # ---- Runtime stage ----
-FROM python:3.13.1-slim
+FROM m.daocloud.io/docker.io/library/python:3.13.1-slim
 
 WORKDIR /app
 
