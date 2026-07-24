@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { api } from "@/services/api";
 import type { OutlineData, OutlineChapter } from "@/types";
 
@@ -15,10 +15,19 @@ export default function OutlineReview({ projectId, hasOutline, projectStatus, on
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [editingChapter, setEditingChapter] = useState<number | null>(null);
+  const [streamProgress, setStreamProgress] = useState<{ chunks: number; chars: number } | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (hasOutline) loadOutline();
   }, [hasOutline]);
+
+  // Cleanup: abort any ongoing stream when component unmounts
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   async function loadOutline() {
     try {
@@ -31,14 +40,56 @@ export default function OutlineReview({ projectId, hasOutline, projectStatus, on
 
   async function handleGenerate() {
     setGenerating(true);
+    setStreamProgress(null);
+    abortControllerRef.current = new AbortController();
+
+    // Set a 5-minute timeout — the SSE connection keeps the proxy alive,
+    // but we still want a safety net
+    const timeoutId = setTimeout(() => {
+      abortControllerRef.current?.abort();
+    }, 5 * 60 * 1000);
+
     try {
-      const data = await api.generateOutline(projectId);
-      setOutline(data);
+      let gotComplete = false;
+
+      for await (const msg of api.generateOutlineStream(projectId, abortControllerRef.current.signal)) {
+        switch (msg.type) {
+          case "start":
+            setStreamProgress({ chunks: 0, chars: 0 });
+            break;
+          case "progress":
+            setStreamProgress({ chunks: msg.chunks || 0, chars: msg.chars || 0 });
+            break;
+          case "complete":
+            if (msg.outline) {
+              setOutline(msg.outline);
+              gotComplete = true;
+            }
+            break;
+          case "error":
+            throw new Error(msg.message || "生成失败");
+        }
+      }
+
+      if (!gotComplete) {
+        throw new Error("大纲生成完成但未返回有效数据，请重试");
+      }
     } catch (e) {
-      alert("生成失败: " + (e as Error).message);
+      if (e instanceof DOMException && e.name === "AbortError") {
+        alert("大纲生成超时（5分钟），请检查网络连接后重试");
+      } else {
+        alert("生成失败: " + (e as Error).message);
+      }
     } finally {
+      clearTimeout(timeoutId);
+      abortControllerRef.current = null;
       setGenerating(false);
+      setStreamProgress(null);
     }
+  }
+
+  function handleCancel() {
+    abortControllerRef.current?.abort();
   }
 
   async function handleSave() {
@@ -88,6 +139,28 @@ export default function OutlineReview({ projectId, hasOutline, projectStatus, on
         <div className="card empty-state">
           <h3>正在生成大纲...</h3>
           <p>AI 正在根据世界观和写作范式规划故事弧线和章节安排</p>
+          {streamProgress && (
+            <div style={{ marginTop: "0.75rem", fontSize: "13px", color: "var(--text-3)" }}>
+              <p>已接收 {streamProgress.chars} 字符的数据流...</p>
+              <div style={{
+                marginTop: "0.5rem",
+                height: "4px",
+                background: "var(--border)",
+                borderRadius: "2px",
+                overflow: "hidden",
+              }}>
+                <div style={{
+                  height: "100%",
+                  background: "var(--gold)",
+                  width: `${Math.min(100, (streamProgress.chars / 2000) * 100)}%`,
+                  transition: "width 0.3s ease",
+                }} />
+              </div>
+            </div>
+          )}
+          <div style={{ marginTop: "0.75rem" }}>
+            <button className="btn btn-ghost btn-sm" onClick={handleCancel}>取消生成</button>
+          </div>
         </div>
       )}
 

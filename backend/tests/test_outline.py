@@ -12,6 +12,7 @@ import pytest
 from unittest.mock import AsyncMock, patch
 
 from app.api.outline import (
+    OUTLINE_MAX_TOKENS,
     _extract_json,
     _normalize_chapter,
     _normalize_outline_data,
@@ -699,3 +700,207 @@ class TestOutlineAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["chapters"]) == 3
+
+
+# ════════════════════════════════════════════════════════════
+# SSE streaming endpoint tests
+# ════════════════════════════════════════════════════════════
+
+
+class TestOutlineStreamingAPI:
+    """Tests for the SSE streaming outline generation endpoint."""
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_stream_outline_mock_llm(self, client, auth_headers):
+        """SSE streaming with mock LLM returns complete outline."""
+        pid = await _create_project_with_worldview(client, auth_headers, total_chapters=3)
+        with patch("app.core.llm_client.load_settings") as mock_load:
+            mock_load.return_value = {
+                "api_key": "", "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096,
+            }
+            resp = await client.post(
+                f"/api/outline/{pid}/generate-stream",
+                headers=auth_headers,
+            )
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers.get("content-type", "")
+
+        # Parse SSE events
+        events = []
+        for line in resp.text.split("\n"):
+            if line.startswith("data: "):
+                try:
+                    events.append(json.loads(line[6:]))
+                except json.JSONDecodeError:
+                    pass
+
+        # Should have at least start + complete events
+        types = [e.get("type") for e in events]
+        assert "start" in types
+        assert "complete" in types
+
+        # Find the complete event
+        complete_evt = next(e for e in events if e["type"] == "complete")
+        outline = complete_evt["outline"]
+        assert "story_arc" in outline
+        assert len(outline["chapters"]) == 3
+        assert "reveal_plan" in outline
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_stream_outline_without_worldview_400(self, client, auth_headers):
+        """Cannot stream outline without worldview."""
+        proj = await client.post("/api/projects", json={
+            "title": "无世界观", "genre": "玄幻", "total_chapters": 5,
+            "chapter_word_count": 2000, "style_intensity": "standard",
+        }, headers=auth_headers)
+        pid = proj.json()["id"]
+        resp = await client.post(f"/api/outline/{pid}/generate-stream", headers=auth_headers)
+        assert resp.status_code == 400
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_stream_outline_without_auth_401(self, client, auth_headers):
+        pid = await _create_project_with_worldview(client, auth_headers)
+        resp = await client.post(f"/api/outline/{pid}/generate-stream")
+        assert resp.status_code == 401
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_stream_outline_other_user_403(self, client, auth_headers, second_auth_headers):
+        """User B cannot stream outline for User A's project."""
+        pid = await _create_project_with_worldview(client, auth_headers)
+        resp = await client.post(
+            f"/api/outline/{pid}/generate-stream", headers=second_auth_headers
+        )
+        assert resp.status_code == 403
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_stream_outline_llm_error_sends_error_event(self, client, auth_headers):
+        """When LLM fails during streaming, an error event is sent."""
+        pid = await _create_project_with_worldview(client, auth_headers, total_chapters=3)
+        with patch("app.core.llm_client.load_settings") as mock_load:
+            mock_load.return_value = {
+                "api_key": "fake-key", "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096,
+            }
+            with patch("app.api.outline.llm_client") as mock_llm:
+                async def fake_stream(*args, **kwargs):
+                    raise RuntimeError("LLM 连接失败")
+                    yield  # never reached
+                mock_llm.chat_stream = fake_stream
+                resp = await client.post(
+                    f"/api/outline/{pid}/generate-stream",
+                    headers=auth_headers,
+                )
+        assert resp.status_code == 200  # SSE always returns 200
+
+        events = []
+        for line in resp.text.split("\n"):
+            if line.startswith("data: "):
+                try:
+                    events.append(json.loads(line[6:]))
+                except json.JSONDecodeError:
+                    pass
+
+        types = [e.get("type") for e in events]
+        assert "start" in types
+        assert "error" in types
+
+        error_evt = next(e for e in events if e["type"] == "error")
+        assert "失败" in error_evt["message"]
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_stream_outline_persists_to_db(self, client, auth_headers):
+        """After streaming completes, the outline should be in the DB."""
+        pid = await _create_project_with_worldview(client, auth_headers, total_chapters=3)
+        with patch("app.core.llm_client.load_settings") as mock_load:
+            mock_load.return_value = {
+                "api_key": "", "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096,
+            }
+            await client.post(
+                f"/api/outline/{pid}/generate-stream",
+                headers=auth_headers,
+            )
+
+        # Verify outline was saved by fetching it via GET endpoint
+        get_resp = await client.get(f"/api/outline/{pid}", headers=auth_headers)
+        assert get_resp.status_code == 200
+        data = get_resp.json()
+        assert len(data["chapters"]) == 3
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_stream_outline_overwrites_previous(self, client, auth_headers):
+        """Re-streaming should overwrite previous outline."""
+        pid = await _create_project_with_worldview(client, auth_headers, total_chapters=3)
+        with patch("app.core.llm_client.load_settings") as mock_load:
+            mock_load.return_value = {
+                "api_key": "", "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096,
+            }
+            # First generation
+            resp1 = await client.post(
+                f"/api/outline/{pid}/generate-stream", headers=auth_headers
+            )
+            events1 = [json.loads(l[6:]) for l in resp1.text.split("\n") if l.startswith("data: ")]
+            complete1 = next(e for e in events1 if e["type"] == "complete")
+            id1 = complete1["outline"]["id"]
+
+            # Second generation
+            resp2 = await client.post(
+                f"/api/outline/{pid}/generate-stream", headers=auth_headers
+            )
+            events2 = [json.loads(l[6:]) for l in resp2.text.split("\n") if l.startswith("data: ")]
+            complete2 = next(e for e in events2 if e["type"] == "complete")
+            id2 = complete2["outline"]["id"]
+
+            assert id1 != id2
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_stream_outline_mock_llm_normalizes_list_fields(self, client, auth_headers):
+        """SSE streaming also normalizes list-type fields from LLM."""
+        pid = await _create_project_with_worldview(client, auth_headers, total_chapters=2)
+        mock_response = '```json\n{"story_arc": ["弧A", "弧B"], "chapters": [{"chapter_num": "1", "title": ["T1"], "summary": ["S1"], "key_events": "E1，E2", "reveal_elements": "R1, R2"}, {"chapter_num": "2", "title": "T2", "summary": "S2", "key_events": [], "reveal_elements": []}]}\n```'
+        with patch("app.core.llm_client.load_settings") as mock_load:
+            mock_load.return_value = {
+                "api_key": "", "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096,
+            }
+            with patch("app.api.outline.llm_client") as mock_llm:
+                async def fake_stream(*args, **kwargs):
+                    chunk_size = 20
+                    for i in range(0, len(mock_response), chunk_size):
+                        yield mock_response[i:i + chunk_size]
+                mock_llm.chat_stream = fake_stream
+                resp = await client.post(
+                    f"/api/outline/{pid}/generate-stream", headers=auth_headers
+                )
+        events = [json.loads(l[6:]) for l in resp.text.split("\n") if l.startswith("data: ")]
+        complete = next(e for e in events if e["type"] == "complete")
+        outline = complete["outline"]
+        assert isinstance(outline["story_arc"], str)
+        assert isinstance(outline["chapters"][0]["chapter_num"], int)
+        assert isinstance(outline["chapters"][0]["title"], str)
+        assert isinstance(outline["chapters"][0]["key_events"], list)
+
+
+# ════════════════════════════════════════════════════════════
+# Configuration tests
+# ════════════════════════════════════════════════════════════
+
+
+class TestOutlineMaxTokens:
+    """Verify max_tokens is sufficient for large chapter counts."""
+
+    def test_max_tokens_is_8192(self):
+        """max_tokens must be 8192 (doubled from 4096 to prevent truncation)."""
+        assert OUTLINE_MAX_TOKENS == 8192
+
+    def test_max_tokens_sufficient_for_50_chapters(self):
+        """50 chapters x ~125 tokens/chapter ~= 6250 < 8192."""
+        per_chapter_tokens = 125
+        overhead = 300
+        for total_chapters in [1, 5, 10, 20, 30, 50]:
+            estimated = total_chapters * per_chapter_tokens + overhead
+            assert estimated < OUTLINE_MAX_TOKENS, \
+                f"max_tokens={OUTLINE_MAX_TOKENS} insufficient for {total_chapters} chapters " \
+                f"(est. {estimated} tokens)"

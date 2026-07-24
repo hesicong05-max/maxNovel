@@ -2,9 +2,10 @@
 
 import json
 import re
-from typing import Annotated, Any
+from typing import Annotated, Any, AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,7 +13,7 @@ from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.llm_client import llm_client
 from app.core.pacing_planner import pacing_planner
 from app.core.memory_store import memory_store
-from app.database import get_db
+from app.database import get_db, async_session
 from app.models.project import Outline, Project, ProjectStatus, Worldview
 from app.prompts.templates import build_outline_prompt
 from app.schemas.models import OutlineCreate
@@ -23,6 +24,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/outline", tags=["outline"])
 
+# max_tokens for outline generation — must be large enough for full chapter list
+# Each chapter needs ~100-125 tokens (title + summary + key_events + reveal_elements)
+# 30 chapters ≈ 3700 tokens + story_arc + JSON overhead ≈ 4000-4500 tokens
+# 8192 gives comfortable headroom for up to 50 chapters
+OUTLINE_MAX_TOKENS = 8192
+
 
 @router.post("/{project_id}/generate")
 async def generate_outline(
@@ -30,7 +37,7 @@ async def generate_outline(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ):
-    """Generate a story outline based on worldview and pacing plan."""
+    """Generate a story outline based on worldview and pacing plan (non-streaming fallback)."""
     project = await get_project_for_owner(project_id, current_user, db)
 
     # Query worldview directly (avoid lazy loading)
@@ -59,7 +66,13 @@ async def generate_outline(
     )
 
     try:
-        raw_response = await llm_client.chat(messages, temperature=0.7, max_tokens=4096)
+        raw_response = await llm_client.chat(
+            messages, temperature=0.7, max_tokens=OUTLINE_MAX_TOKENS
+        )
+        logger.info(
+            "Outline LLM response for project %s: %d chars, %d elements, %d chapters",
+            project_id, len(raw_response), len(elements), project.total_chapters,
+        )
     except Exception as e:
         logger.error("Outline LLM call failed for project %s: %s", project_id, str(e))
         raise HTTPException(
@@ -69,6 +82,10 @@ async def generate_outline(
 
     # Parse and normalize LLM response
     chapters_data = _parse_outline_response(raw_response, project.total_chapters)
+    logger.info(
+        "Outline parsed for project %s: story_arc=%d chars, %d chapters",
+        project_id, len(chapters_data.get("story_arc", "")), len(chapters_data.get("chapters", [])),
+    )
 
     # Delete existing outline if any (query directly)
     ol_result = await db.execute(select(Outline).where(Outline.project_id == project_id))
@@ -100,6 +117,137 @@ async def generate_outline(
         "chapters": outline.chapters,
         "reveal_plan": outline.reveal_plan,
     }
+
+
+@router.post("/{project_id}/generate-stream")
+async def generate_outline_stream(
+    project_id: str,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Generate outline via SSE streaming — keeps connection alive, avoids proxy timeout.
+
+    Events:
+      data: {"type":"start","message":"..."}\n\n
+      data: {"type":"chunk","content":"..."}\n\n
+      data: {"type":"complete","outline":{...}}\n\n
+      data: {"type":"error","message":"..."}\n\n
+    """
+    project = await get_project_for_owner(project_id, current_user, db)
+
+    wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
+    worldview = wv_result.scalar_one_or_none()
+    if not worldview:
+        raise HTTPException(status_code=400, detail="请先上传世界观")
+
+    elements = worldview.parsed_elements or []
+
+    reveal_plan = pacing_planner.plan(
+        elements=elements,
+        total_chapters=project.total_chapters,
+        chapter_word_count=project.chapter_word_count,
+    )
+
+    messages = build_outline_prompt(
+        genre=project.genre,
+        worldview_elements=elements,
+        total_chapters=project.total_chapters,
+        chapter_word_count=project.chapter_word_count,
+        reveal_plan=reveal_plan,
+        style_intensity=project.style_intensity,
+    )
+
+    project_id_val = project_id
+    total_chapters_val = project.total_chapters
+    reveal_plan_val = reveal_plan
+
+    async def event_stream() -> AsyncGenerator[str, None]:
+        # Send start event
+        yield f'data: {json.dumps({"type": "start", "message": "正在生成大纲，请耐心等待...", "total_chapters": total_chapters_val}, ensure_ascii=False)}\n\n'
+
+        full_response = ""
+        chunk_count = 0
+
+        try:
+            async for chunk in llm_client.chat_stream(
+                messages, temperature=0.7, max_tokens=OUTLINE_MAX_TOKENS
+            ):
+                full_response += chunk
+                chunk_count += 1
+
+                # Send chunk every 5 chunks to avoid flooding
+                if chunk_count % 5 == 0:
+                    yield f'data: {json.dumps({"type": "progress", "chunks": chunk_count, "chars": len(full_response)}, ensure_ascii=False)}\n\n'
+
+            logger.info(
+                "Outline stream complete for project %s: %d chunks, %d chars",
+                project_id_val, chunk_count, len(full_response),
+            )
+
+            # Parse the complete response
+            chapters_data = _parse_outline_response(full_response, total_chapters_val)
+            logger.info(
+                "Outline parsed for project %s: story_arc=%d chars, %d chapters",
+                project_id_val, len(chapters_data.get("story_arc", "")),
+                len(chapters_data.get("chapters", [])),
+            )
+
+            # Save to DB in a fresh session
+            async with async_session() as save_db:
+                # Delete existing outline
+                ol_result = await save_db.execute(
+                    select(Outline).where(Outline.project_id == project_id_val)
+                )
+                existing_ol = ol_result.scalar_one_or_none()
+                if existing_ol:
+                    await save_db.delete(existing_ol)
+                    await save_db.flush()
+
+                outline = Outline(
+                    project_id=project_id_val,
+                    story_arc=chapters_data.get("story_arc", ""),
+                    chapters=chapters_data.get("chapters", []),
+                    reveal_plan=reveal_plan_val,
+                )
+                save_db.add(outline)
+
+                await memory_store.get_or_create(save_db, project_id_val)
+
+                # Update project status
+                proj_result = await save_db.execute(
+                    select(Project).where(Project.id == project_id_val)
+                )
+                proj = proj_result.scalar_one_or_none()
+                if proj:
+                    proj.status = ProjectStatus.OUTLINE_PENDING
+
+                await save_db.commit()
+                await save_db.refresh(outline)
+
+                result = {
+                    "id": outline.id,
+                    "project_id": project_id_val,
+                    "story_arc": outline.story_arc,
+                    "chapters": outline.chapters,
+                    "reveal_plan": outline.reveal_plan,
+                }
+
+                yield f'data: {json.dumps({"type": "complete", "outline": result}, ensure_ascii=False)}\n\n'
+
+        except Exception as e:
+            logger.error("Outline stream failed for project %s: %s", project_id_val, str(e))
+            yield f'data: {json.dumps({"type": "error", "message": f"大纲生成失败: {str(e)}"}, ensure_ascii=False)}\n\n'
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/{project_id}")

@@ -11,6 +11,7 @@ import type {
   CommunityTag,
   LoginRequest,
   OutlineData,
+  OutlineStreamMessage,
   ProgressData,
   Project,
   ProjectStats,
@@ -158,6 +159,61 @@ export const api = {
     fetchJSON<OutlineData>(`/outline/${projectId}`),
   generateOutline: (projectId: string) =>
     fetchJSON<OutlineData>(`/outline/${projectId}/generate`, { method: "POST" }),
+  generateOutlineStream: async function* (
+    projectId: string,
+    signal?: AbortSignal
+  ): AsyncGenerator<OutlineStreamMessage> {
+    const resp = await fetchWithAuth(
+      `/outline/${projectId}/generate-stream`,
+      { method: "POST", signal }
+    );
+
+    if (!resp.ok) {
+      const error = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(error.detail || `HTTP ${resp.status}`);
+    }
+
+    const reader = resp.body?.getReader();
+    if (!reader) throw new Error("No response body");
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    function parseLine(line: string): OutlineStreamMessage | null {
+      if (!line.startsWith("data: ")) return null;
+      const dataStr = line.slice(6).trim();
+      if (!dataStr) return null;
+      try {
+        return JSON.parse(dataStr) as OutlineStreamMessage;
+      } catch {
+        return null;
+      }
+    }
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      const events = buffer.split("\n\n");
+      buffer = events.pop() || "";
+
+      for (const evt of events) {
+        for (const line of evt.split("\n")) {
+          const msg = parseLine(line);
+          if (msg) yield msg;
+        }
+      }
+    }
+
+    if (buffer.trim()) {
+      for (const line of buffer.split("\n")) {
+        const msg = parseLine(line);
+        if (msg) yield msg;
+      }
+    }
+  },
   updateOutline: (projectId: string, data: { story_arc: string; chapters: OutlineData["chapters"] }) =>
     fetchJSON<OutlineData>(`/outline/${projectId}`, { method: "PUT", body: JSON.stringify(data) }),
   confirmOutline: (projectId: string) =>

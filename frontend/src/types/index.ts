@@ -181,6 +181,17 @@ export interface StreamMessage {
   error?: string;
 }
 
+// === Outline Streaming ===
+
+export interface OutlineStreamMessage {
+  type: "start" | "progress" | "complete" | "error";
+  message?: string;
+  total_chapters?: number;
+  chunks?: number;
+  chars?: number;
+  outline?: OutlineData;
+}
+
 // === Word Count Configuration ===
 
 export interface ChapterWordCountInfo {
