@@ -29,7 +29,8 @@ export default function LoginPage() {
       } else {
         await register({ email, username, password });
       }
-      // AuthContext.setUser triggers the useEffect above → navigate("/")
+      // Explicitly navigate after successful auth (in addition to useEffect)
+      navigate("/", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "操作失败，请重试");
     } finally {
