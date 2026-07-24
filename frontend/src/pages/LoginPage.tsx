@@ -1,14 +1,23 @@
-import { useState, type FormEvent } from "react";
+import { useState, useEffect, type FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/components/AuthContext";
 
 export default function LoginPage() {
-  const { login, register } = useAuth();
+  const { login, register, user } = useAuth();
+  const navigate = useNavigate();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // If already authenticated, redirect to home
+  useEffect(() => {
+    if (user) {
+      navigate("/", { replace: true });
+    }
+  }, [user, navigate]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -20,6 +29,7 @@ export default function LoginPage() {
       } else {
         await register({ email, username, password });
       }
+      // AuthContext.setUser triggers the useEffect above → navigate("/")
     } catch (err) {
       setError(err instanceof Error ? err.message : "操作失败，请重试");
     } finally {
