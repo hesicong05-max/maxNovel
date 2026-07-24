@@ -285,6 +285,90 @@ class TestNormalizeExtracted:
         assert conflict["stakes"] == ""
         assert conflict["resolution_hint"] == ""
 
+    def test_special_settings_rules_list_converted_to_string(self):
+        """LLM may return rules as list[str]; schema expects str."""
+        data = {
+            "special_settings": [
+                {
+                    "name": "伪神契约",
+                    "description": "伪神法则",
+                    "rules": ["伪神不得侵犯圣域", "违背者将受法则反噬", "法则不可逆"],
+                },
+            ],
+        }
+        result = parser._normalize_extracted(data)
+        ss = result["special_settings"][0]
+        assert ss["rules"] == "伪神不得侵犯圣域、违背者将受法则反噬、法则不可逆"
+        assert isinstance(ss["rules"], str)
+
+    def test_special_settings_rules_string_preserved(self):
+        """String rules should pass through unchanged."""
+        data = {
+            "special_settings": [
+                {"name": "天劫", "rules": "天劫强度随修为递增"},
+            ],
+        }
+        result = parser._normalize_extracted(data)
+        assert result["special_settings"][0]["rules"] == "天劫强度随修为递增"
+
+    def test_power_system_list_fields_converted(self):
+        """LLM may return levels/rules/limitations as list[str]."""
+        data = {
+            "power_system": [
+                {
+                    "name": "通元体系",
+                    "levels": ["初阶", "中阶", "高阶"],
+                    "rules": ["依赖秩序与契约", "不可凭空创造"],
+                    "limitations": ["每次使用消耗契金", "高阶需特殊材料"],
+                },
+            ],
+        }
+        result = parser._normalize_extracted(data)
+        ps = result["power_system"][0]
+        assert ps["levels"] == "初阶、中阶、高阶"
+        assert ps["rules"] == "依赖秩序与契约、不可凭空创造"
+        assert ps["limitations"] == "每次使用消耗契金、高阶需特殊材料"
+        assert all(isinstance(v, str) for v in [ps["levels"], ps["rules"], ps["limitations"]])
+
+    def test_all_list_fields_normalized_via_schema(self):
+        """Comprehensive: all categories with list-valued string fields must pass WorldviewImportResponse."""
+        from app.schemas.models import WorldviewImportResponse
+
+        data = {
+            "characters": [
+                {"name": "方天时", "personality": ["冷静", "果断"], "background": ["方家传人", "隐世方士"]},
+            ],
+            "geography": [
+                {"name": "圣域", "description": ["层叠的屏障", "凡人不可见"]},
+            ],
+            "factions": [
+                {"name": "神明公司", "stance": ["中立", "超然"], "power_level": ["顶级"]},
+            ],
+            "power_system": [
+                {"name": "通元", "levels": ["初阶", "高阶"], "rules": ["秩序优先"], "limitations": ["消耗契金"]},
+            ],
+            "history": [
+                {"name": "事件", "event": "封印之战", "description": ["持续千年", "伤亡惨重"], "impact": ["格局重塑"]},
+            ],
+            "conflicts": [
+                {"name": "矛盾", "parties": ["甲方", "乙方"], "stakes": ["存亡"]},
+            ],
+            "special_settings": [
+                {"name": "伪神契约", "description": ["法则"], "rules": ["不可违逆", "反噬"]},
+            ],
+        }
+        normalized = parser._normalize_extracted(data)
+        response = WorldviewImportResponse(**normalized)
+        assert len(response.characters) == 1
+        assert response.characters[0].personality == "冷静、果断"
+        assert response.geography[0].description == "层叠的屏障、凡人不可见"
+        assert response.factions[0].stance == "中立、超然"
+        assert response.power_system[0].levels == "初阶、高阶"
+        assert response.power_system[0].rules == "秩序优先"
+        assert response.history[0].description == "持续千年、伤亡惨重"
+        assert response.conflicts[0].parties == "甲方、乙方"
+        assert response.special_settings[0].rules == "不可违逆、反噬"
+
     def test_validates_against_import_schema(self):
         """Normalized output must be accepted by WorldviewImportResponse."""
         from app.schemas.models import WorldviewImportResponse

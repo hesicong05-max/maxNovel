@@ -278,11 +278,11 @@ class WorldviewParser:
             if not c.get("name"):
                 continue
             result["characters"].append({
-                "name": c.get("name", ""),
-                "personality": c.get("personality", ""),
-                "background": c.get("background", ""),
-                "motivation": c.get("motivation", ""),
-                "ability": c.get("ability", ""),
+                "name": self._to_string(c.get("name", "")),
+                "personality": self._to_string(c.get("personality", "")),
+                "background": self._to_string(c.get("background", "")),
+                "motivation": self._to_string(c.get("motivation", "")),
+                "ability": self._to_string(c.get("ability", "")),
                 "relations": self._normalize_relations(c.get("relations", [])),
             })
 
@@ -291,9 +291,9 @@ class WorldviewParser:
             if not g.get("name"):
                 continue
             result["geography"].append({
-                "name": g.get("name", ""),
-                "description": g.get("description", ""),
-                "significance": g.get("significance", ""),
+                "name": self._to_string(g.get("name", "")),
+                "description": self._to_string(g.get("description", "")),
+                "significance": self._to_string(g.get("significance", "")),
             })
 
         # Factions
@@ -301,9 +301,9 @@ class WorldviewParser:
             if not f.get("name"):
                 continue
             result["factions"].append({
-                "name": f.get("name", ""),
-                "stance": f.get("stance", ""),
-                "power_level": f.get("power_level", ""),
+                "name": self._to_string(f.get("name", "")),
+                "stance": self._to_string(f.get("stance", "")),
+                "power_level": self._to_string(f.get("power_level", "")),
                 "relations": self._normalize_relations(f.get("relations", [])),
             })
 
@@ -312,10 +312,10 @@ class WorldviewParser:
             if not p.get("name"):
                 continue
             result["power_system"].append({
-                "name": p.get("name", ""),
-                "levels": p.get("levels", ""),
-                "rules": p.get("rules", ""),
-                "limitations": p.get("limitations", ""),
+                "name": self._to_string(p.get("name", "")),
+                "levels": self._to_string(p.get("levels", "")),
+                "rules": self._to_string(p.get("rules", "")),
+                "limitations": self._to_string(p.get("limitations", "")),
             })
 
         # History
@@ -323,10 +323,10 @@ class WorldviewParser:
             if not h.get("event"):
                 continue
             result["history"].append({
-                "event": h.get("event", ""),
-                "time": h.get("time", ""),
-                "description": h.get("description", ""),
-                "impact": h.get("impact", ""),
+                "event": self._to_string(h.get("event", "")),
+                "time": self._to_string(h.get("time", "")),
+                "description": self._to_string(h.get("description", "")),
+                "impact": self._to_string(h.get("impact", "")),
             })
 
         # Conflicts
@@ -334,7 +334,7 @@ class WorldviewParser:
             if not c.get("name"):
                 continue
             result["conflicts"].append({
-                "name": c.get("name", ""),
+                "name": self._to_string(c.get("name", "")),
                 "type": self._to_string(c.get("type", "")),
                 "parties": self._to_string(c.get("parties", "")),
                 "stakes": self._to_string(c.get("stakes", "")),
@@ -346,9 +346,9 @@ class WorldviewParser:
             if not s.get("name"):
                 continue
             result["special_settings"].append({
-                "name": s.get("name", ""),
-                "description": s.get("description", ""),
-                "rules": s.get("rules", ""),
+                "name": self._to_string(s.get("name", "")),
+                "description": self._to_string(s.get("description", "")),
+                "rules": self._to_string(s.get("rules", "")),
             })
 
         return result
