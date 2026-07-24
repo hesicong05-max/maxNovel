@@ -250,6 +250,16 @@ class WorldviewParser:
         # No pattern matched — treat the whole string as the name
         return {"name": text, "relation": ""}
 
+    def _to_string(self, value: Any, separator: str = "、") -> str:
+        """Normalize a value that may be a string or list into a single string."""
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            return separator.join(str(item) for item in value if item is not None)
+        return str(value)
+
     def _normalize_extracted(self, data: dict[str, Any]) -> dict[str, Any]:
         """Ensure all 7 categories exist and items have required fields."""
         result = {
@@ -325,10 +335,10 @@ class WorldviewParser:
                 continue
             result["conflicts"].append({
                 "name": c.get("name", ""),
-                "type": c.get("type", ""),
-                "parties": c.get("parties", ""),
-                "stakes": c.get("stakes", ""),
-                "resolution_hint": c.get("resolution_hint", ""),
+                "type": self._to_string(c.get("type", "")),
+                "parties": self._to_string(c.get("parties", "")),
+                "stakes": self._to_string(c.get("stakes", "")),
+                "resolution_hint": self._to_string(c.get("resolution_hint", "")),
             })
 
         # Special settings
