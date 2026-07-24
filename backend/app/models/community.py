@@ -1,7 +1,7 @@
 """Community module models — shared novels, tags, and co-creation settings."""
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import (
     JSON,
@@ -49,8 +49,8 @@ class CommunityNovel(Base):
     # Track which users/IPs have liked this novel for dedup
     liked_by = Column(JSON, default=list)  # ["user_id_or_ip_hash", ...]
     owner_id = Column(String(32), ForeignKey("users.id"), nullable=True)  # nullable for backward compat
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.utcnow())
+    updated_at = Column(DateTime, default=lambda: datetime.utcnow(), onupdate=lambda: datetime.utcnow())
 
     tags = relationship("CommunityTag", secondary=novel_tag_association, back_populates="novels")
 
@@ -63,6 +63,6 @@ class CommunityTag(Base):
     id = Column(String(32), primary_key=True, default=gen_id)
     name = Column(String(50), nullable=False, unique=True, index=True)
     usage_count = Column(Integer, default=0)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.utcnow())
 
     novels = relationship("CommunityNovel", secondary=novel_tag_association, back_populates="tags")
