@@ -216,9 +216,15 @@ def build_worldview_extraction_prompt(document_text: str, genre: str = "玄幻")
 
 只输出JSON，不要加任何其他说明文字。"""
 
+    # Truncate document to keep prompt within reasonable size and reduce LLM latency
+    MAX_DOC_CHARS = 6000
+    truncated_text = document_text[:MAX_DOC_CHARS]
+    if len(document_text) > MAX_DOC_CHARS:
+        truncated_text += "\n\n[文档内容较长，以上为前 6000 字符。如要素不全，请分多次导入或手动补充。]"
+
     user_prompt = f"""请从以下文档中提取结构化的世界观设定要素：
 
-{document_text[:8000]}"""
+{truncated_text}"""
 
     return [
         {"role": "system", "content": system_prompt},

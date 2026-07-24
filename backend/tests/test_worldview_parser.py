@@ -122,6 +122,29 @@ class TestSummary:
         assert summary["by_category"] == {}
 
 
+# ─── Document truncation ──────────────────────────────────────
+
+class TestDocumentTruncation:
+    def test_long_document_truncated_in_prompt(self):
+        from app.prompts.templates import build_worldview_extraction_prompt
+
+        long_text = "这是一个测试文档。" * 3000  # ~18k chars
+        messages = build_worldview_extraction_prompt(long_text, genre="玄幻")
+        user_msg = messages[1]["content"]
+        # Should contain truncation notice and not exceed a reasonable length
+        assert "以上为前 6000 字符" in user_msg
+        assert len(user_msg) < len(long_text) + 200
+
+    def test_short_document_not_truncated(self):
+        from app.prompts.templates import build_worldview_extraction_prompt
+
+        short_text = "这是一个短文档。"
+        messages = build_worldview_extraction_prompt(short_text, genre="玄幻")
+        user_msg = messages[1]["content"]
+        assert "以上为前 6000 字符" not in user_msg
+        assert short_text in user_msg
+
+
 # ─── JSON extraction ──────────────────────────────────────────
 
 class TestExtractJson:
@@ -172,3 +195,111 @@ class TestNormalizeExtracted:
         assert char["personality"] == ""
         assert char["background"] == ""
         assert char["relations"] == []
+
+    def test_relations_string_list_converted_to_dict(self):
+        """LLM may return relations as list[str] like '程子霄（父亲）'."""
+        data = {
+            "characters": [
+                {"name": "方天时", "relations": ["程子霄（父亲）", "姥姥", "姥爷"]},
+            ],
+            "factions": [
+                {"name": "天剑宗", "relations": ["魔教（敌对）", "青云宗:同盟"]},
+            ],
+        }
+        result = parser._normalize_extracted(data)
+        char_rels = result["characters"][0]["relations"]
+        assert char_rels == [
+            {"name": "程子霄", "relation": "父亲"},
+            {"name": "姥姥", "relation": ""},
+            {"name": "姥爷", "relation": ""},
+        ]
+        fac_rels = result["factions"][0]["relations"]
+        assert fac_rels == [
+            {"name": "魔教", "relation": "敌对"},
+            {"name": "青云宗", "relation": "同盟"},
+        ]
+
+    def test_relations_dict_list_preserved(self):
+        """Already-correct dict list should pass through unchanged."""
+        data = {
+            "characters": [
+                {"name": "林远", "relations": [{"name": "苏瑶", "relation": "战友"}]},
+            ],
+        }
+        result = parser._normalize_extracted(data)
+        assert result["characters"][0]["relations"] == [{"name": "苏瑶", "relation": "战友"}]
+
+    def test_relations_invalid_values_normalized(self):
+        """None or non-list relations become empty list."""
+        data = {
+            "characters": [
+                {"name": "A", "relations": None},
+                {"name": "B", "relations": "not-a-list"},
+            ],
+        }
+        result = parser._normalize_extracted(data)
+        assert result["characters"][0]["relations"] == []
+        assert result["characters"][1]["relations"] == []
+
+    def test_conflicts_parties_list_converted_to_string(self):
+        """LLM may return parties as list[str]; schema expects str."""
+        data = {
+            "conflicts": [
+                {
+                    "name": "家族矛盾",
+                    "type": "家族恩怨",
+                    "parties": ["方天时", "程子霄", "方天时的姥爷"],
+                    "stakes": "家族传承",
+                    "resolution_hint": ["和解", "决裂"],
+                },
+            ],
+        }
+        result = parser._normalize_extracted(data)
+        conflict = result["conflicts"][0]
+        assert conflict["parties"] == "方天时、程子霄、方天时的姥爷"
+        assert conflict["stakes"] == "家族传承"
+        assert conflict["resolution_hint"] == "和解、决裂"
+        assert conflict["type"] == "家族恩怨"
+
+    def test_conflicts_parties_string_preserved(self):
+        """String parties should pass through unchanged."""
+        data = {
+            "conflicts": [
+                {
+                    "name": "正邪之战",
+                    "parties": "正派联盟 vs 魔教",
+                    "stakes": "天下苍生",
+                },
+            ],
+        }
+        result = parser._normalize_extracted(data)
+        assert result["conflicts"][0]["parties"] == "正派联盟 vs 魔教"
+
+    def test_conflicts_none_fields_become_empty_string(self):
+        """Missing or None conflict fields become ''."""
+        data = {"conflicts": [{"name": "测试矛盾"}]}
+        result = parser._normalize_extracted(data)
+        conflict = result["conflicts"][0]
+        assert conflict["type"] == ""
+        assert conflict["parties"] == ""
+        assert conflict["stakes"] == ""
+        assert conflict["resolution_hint"] == ""
+
+    def test_validates_against_import_schema(self):
+        """Normalized output must be accepted by WorldviewImportResponse."""
+        from app.schemas.models import WorldviewImportResponse
+
+        data = {
+            "characters": [
+                {"name": "程子霄", "relations": ["程子霄（父亲）", "姥姥"]},
+                {"name": "方天时", "relations": [{"name": "程子霄", "relation": "父子"}]},
+            ],
+            "conflicts": [
+                {"name": "家族矛盾", "parties": ["方天时", "程子霄"]},
+            ],
+        }
+        normalized = parser._normalize_extracted(data)
+        response = WorldviewImportResponse(**normalized)
+        assert len(response.characters) == 2
+        assert len(response.conflicts) == 1
+        assert response.conflicts[0].parties == "方天时、程子霄"

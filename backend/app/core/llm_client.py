@@ -41,7 +41,7 @@ class LLMClient:
         """Get or create a persistent httpx.AsyncClient for connection reuse."""
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
-                timeout=httpx.Timeout(connect=10, read=120, write=10, pool=5),
+                timeout=httpx.Timeout(connect=10, read=300, write=10, pool=5),
                 limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
             )
         return self._client
