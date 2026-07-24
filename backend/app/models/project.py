@@ -40,8 +40,16 @@ class Project(Base):
 
     id = Column(String(32), primary_key=True, default=gen_id)
     title = Column(String(200), nullable=False)
-    genre = Column(Enum(NovelGenre), nullable=False, default=NovelGenre.XUANHUAN)
-    status = Column(Enum(ProjectStatus), nullable=False, default=ProjectStatus.DRAFT)
+    genre = Column(
+        Enum(NovelGenre, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=NovelGenre.XUANHUAN,
+    )
+    status = Column(
+        Enum(ProjectStatus, values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+        default=ProjectStatus.DRAFT,
+    )
     total_chapters = Column(Integer, default=30)
     chapter_word_count = Column(Integer, default=3000)
     style_intensity = Column(String(20), default="standard")  # mild / standard / intense
