@@ -20,9 +20,9 @@ FROM m.daocloud.io/docker.io/library/nginx:1.27.3-alpine3.20
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Run as non-root user (nginx user exists in nginx:alpine image)
-RUN chown -R nginx:nginx /usr/share/nginx/html /etc/nginx/conf.d /var/cache/nginx /var/run
-USER nginx
+# Note: nginx:alpine runs master as root and workers as nginx by default.
+# We keep this behavior to avoid permission issues with pid files and port 80.
+RUN chown -R nginx:nginx /usr/share/nginx/html /etc/nginx/conf.d /var/cache/nginx
 
 EXPOSE 80
 
