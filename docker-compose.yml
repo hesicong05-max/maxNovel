@@ -32,8 +32,8 @@ services:
   backend:
     build: ./backend
     container_name: novel-backend
-    expose:
-      - "8000"
+    ports:
+      - "8000:8000"
     volumes:
       - backend-data:/app/data
     env_file:
@@ -76,8 +76,8 @@ services:
         - VITE_SENTRY_DSN=${VITE_SENTRY_DSN:-}
     container_name: novel-frontend
     ports:
-      - "80:80"
-      - "443:443"
+      - "8080:80"
+      # TLS disabled by default; configure via 1Panel reverse proxy instead
     volumes:
       # Mount TLS certificates for HTTPS
       # Place your fullchain.pem and privkey.pem in ./tls/
