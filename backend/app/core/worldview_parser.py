@@ -199,6 +199,57 @@ class WorldviewParser:
 
         return None
 
+    def _normalize_relations(self, relations: Any) -> list[dict[str, str]]:
+        """Convert various relation formats to list[dict[str, str]].
+
+        Handles:
+        - list[str]: ["程子霄（父亲）", "姥姥"] → [{"name": "程子霄", "relation": "父亲"}, {"name": "姥姥", "relation": "亲属"}]
+        - list[dict]: already correct format, just pass through
+        - None / missing: return empty list
+        """
+        if not relations or not isinstance(relations, list):
+            return []
+
+        result = []
+        for rel in relations:
+            if isinstance(rel, dict):
+                # Already dict format, ensure it has the right keys
+                if "name" in rel:
+                    result.append({"name": str(rel["name"]), "relation": str(rel.get("relation", ""))})
+                elif "target" in rel:
+                    result.append({"name": str(rel["target"]), "relation": str(rel.get("relation", ""))})
+                else:
+                    # Dict but unknown keys — stringify
+                    result.append({"name": str(rel), "relation": ""})
+            elif isinstance(rel, str):
+                # String format: try to parse "名称（关系）" or "名称:关系" or "名称-关系"
+                parsed = self._parse_relation_string(rel)
+                result.append(parsed)
+            else:
+                result.append({"name": str(rel), "relation": ""})
+        return result
+
+    def _parse_relation_string(self, text: str) -> dict[str, str]:
+        """Parse a relation string like '程子霄（父亲）' into {'name': '程子霄', 'relation': '父亲'}."""
+        import re as _re
+        text = text.strip()
+        # Pattern: "名称（关系）" or "名称(关系)" — full-width or half-width parens
+        match = _re.match(r'^(.+?)[（(](.+?)[)）]$', text)
+        if match:
+            return {"name": match.group(1).strip(), "relation": match.group(2).strip()}
+        # Pattern: "名称:关系" or "名称：关系"
+        if ':' in text or '：' in text:
+            parts = _re.split(r'[:：]', text, maxsplit=1)
+            if len(parts) == 2:
+                return {"name": parts[0].strip(), "relation": parts[1].strip()}
+        # Pattern: "名称-关系"
+        if '-' in text:
+            parts = text.split('-', maxsplit=1)
+            if len(parts) == 2:
+                return {"name": parts[0].strip(), "relation": parts[1].strip()}
+        # No pattern matched — treat the whole string as the name
+        return {"name": text, "relation": ""}
+
     def _normalize_extracted(self, data: dict[str, Any]) -> dict[str, Any]:
         """Ensure all 7 categories exist and items have required fields."""
         result = {
@@ -222,7 +273,7 @@ class WorldviewParser:
                 "background": c.get("background", ""),
                 "motivation": c.get("motivation", ""),
                 "ability": c.get("ability", ""),
-                "relations": c.get("relations", []),
+                "relations": self._normalize_relations(c.get("relations", [])),
             })
 
         # Geography
@@ -243,7 +294,7 @@ class WorldviewParser:
                 "name": f.get("name", ""),
                 "stance": f.get("stance", ""),
                 "power_level": f.get("power_level", ""),
-                "relations": f.get("relations", []),
+                "relations": self._normalize_relations(f.get("relations", [])),
             })
 
         # Power system

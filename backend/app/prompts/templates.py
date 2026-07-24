@@ -190,13 +190,13 @@ def build_worldview_extraction_prompt(document_text: str, genre: str = "玄幻")
 请输出一个JSON对象，格式如下：
 {{
   "characters": [
-    {{"name": "角色名", "personality": "性格描述", "background": "背景", "motivation": "动机", "ability": "能力/特长", "relations": []}}
+    {{"name": "角色名", "personality": "性格描述", "background": "背景", "motivation": "动机", "ability": "能力/特长", "relations": [{{"name": "关联角色名", "relation": "关系说明"}}]}}
   ],
   "geography": [
     {{"name": "地名", "description": "描述", "significance": "重要性"}}
   ],
   "factions": [
-    {{"name": "势力名", "stance": "立场", "power_level": "实力等级", "relations": []}}
+    {{"name": "势力名", "stance": "立场", "power_level": "实力等级", "relations": [{{"name": "关联势力名", "relation": "关系说明"}}]}}
   ],
   "power_system": [
     {{"name": "体系名", "levels": "等级划分", "rules": "规则", "limitations": "限制"}}
@@ -211,6 +211,8 @@ def build_worldview_extraction_prompt(document_text: str, genre: str = "玄幻")
     {{"name": "设定名", "description": "描述", "rules": "规则"}}
   ]
 }}
+
+注意：relations 数组中每个元素必须是对象格式 {{"name": "名称", "relation": "关系"}}，不要使用字符串。
 
 只输出JSON，不要加任何其他说明文字。"""
 

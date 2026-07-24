@@ -17,7 +17,7 @@ class CharacterSchema(BaseModel):
     background: str = ""
     motivation: str = ""
     ability: str = ""
-    relations: list[dict[str, str]] = Field(default_factory=list)
+    relations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class GeographySchema(BaseModel):
@@ -30,7 +30,7 @@ class FactionSchema(BaseModel):
     name: str
     stance: str = ""
     power_level: str = ""
-    relations: list[dict[str, str]] = Field(default_factory=list)
+    relations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PowerSystemSchema(BaseModel):
