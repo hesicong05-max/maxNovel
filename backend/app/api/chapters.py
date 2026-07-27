@@ -561,27 +561,41 @@ async def _generate_chapter_core(
         effective_wc = project.chapter_word_count
 
     # Get elements to reveal
+    # Elements in both chapter_entry.reveal_elements and reveal_plan.elements are
+    # element NAMES (the LLM is instructed to output names, not IDs).
+    # Match by name first, then fall back to ID for backward compatibility.
     all_elements = worldview_parser.normalize_elements(worldview.parsed_elements)
-    elements_to_reveal = []
-    reveal_names_set = set(chapter_entry.get("reveal_elements", []))
+    elements_to_reveal: list[dict[str, Any]] = []
     added_ids: set[str] = set()
 
+    # Round 1: match from chapter_entry.reveal_elements (by name or ID)
+    reveal_names_set = set(chapter_entry.get("reveal_elements", []))
     for e in all_elements:
         if e["name"] in reveal_names_set or e["id"] in reveal_names_set:
             elements_to_reveal.append(e)
             added_ids.add(e["id"])
 
-    # Also check reveal plan
+    # Round 2: also check outline.reveal_plan for this chapter
+    # (reveal_plan.elements contains names, same as chapter.reveal_elements)
     for entry in (outline.reveal_plan or []):
-        if entry.get("chapter") == chapter_num:
-            for eid in entry.get("elements", []):
-                if eid in added_ids:
-                    continue
-                for e in all_elements:
-                    if e["id"] == eid:
-                        elements_to_reveal.append(e)
-                        added_ids.add(e["id"])
-                        break
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("chapter") != chapter_num:
+            continue
+        for ename in entry.get("elements", []):
+            # Skip if already found in Round 1 (check by both name and ID)
+            already_added = any(
+                e["name"] == ename or e["id"] == ename
+                for e in elements_to_reveal
+            )
+            if already_added:
+                continue
+            # Match by name first, then by ID
+            for e in all_elements:
+                if e["name"] == ename or e["id"] == ename:
+                    elements_to_reveal.append(e)
+                    added_ids.add(e["id"])
+                    break
 
     # Get story context from memory
     memory = await memory_store.get_or_create(db, project_id)

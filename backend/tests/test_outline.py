@@ -1194,3 +1194,182 @@ class TestOutlineMaxTokens:
             assert estimated < OUTLINE_MAX_TOKENS, \
                 f"max_tokens={OUTLINE_MAX_TOKENS} insufficient for {total_chapters} chapters " \
                 f"(est. {estimated} tokens)"
+
+
+# ════════════════════════════════════════════════════════════
+# Chapter generation: reveal element matching (name vs ID)
+# ════════════════════════════════════════════════════════════
+
+class TestRevealElementMatching:
+    """Test that reveal_plan elements (which are NAMES) are correctly matched
+    to worldview elements in chapter generation.
+
+    Bug: _generate_chapter_core matched reveal_plan.elements by e["id"],
+    but they actually contain element NAMES (as instructed by the prompt).
+    Fix: Match by name first, then fall back to ID.
+    """
+
+    @staticmethod
+    def _match_elements(
+        all_elements: list,
+        chapter_reveal_elements: list,
+        reveal_plan_elements: list,
+    ) -> list:
+        """Replicate the matching logic from _generate_chapter_core (post-fix)."""
+        elements_to_reveal = []
+        added_ids: set = set()
+
+        # Round 1: match from chapter_entry.reveal_elements (by name or ID)
+        reveal_names_set = set(chapter_reveal_elements)
+        for e in all_elements:
+            if e["name"] in reveal_names_set or e["id"] in reveal_names_set:
+                elements_to_reveal.append(e)
+                added_ids.add(e["id"])
+
+        # Round 2: match from reveal_plan.elements (by name or ID)
+        for ename in reveal_plan_elements:
+            already_added = any(
+                e["name"] == ename or e["id"] == ename
+                for e in elements_to_reveal
+            )
+            if already_added:
+                continue
+            for e in all_elements:
+                if e["name"] == ename or e["id"] == ename:
+                    elements_to_reveal.append(e)
+                    added_ids.add(e["id"])
+                    break
+
+        return elements_to_reveal
+
+    def test_match_by_name_from_chapter_reveal_elements(self):
+        """Normal case: chapter.reveal_elements contains names → found in Round 1."""
+        all_elements = [
+            {"id": "abc", "name": "林远", "category": "character"},
+            {"id": "def", "name": "苍澜大陆", "category": "geography"},
+        ]
+        result = self._match_elements(
+            all_elements,
+            chapter_reveal_elements=["林远", "苍澜大陆"],
+            reveal_plan_elements=["林远", "苍澜大陆"],
+        )
+        assert len(result) == 2
+        assert result[0]["name"] == "林远"
+        assert result[1]["name"] == "苍澜大陆"
+
+    def test_match_by_name_from_reveal_plan_only(self):
+        """Bug scenario: chapter.reveal_elements is empty, rely on reveal_plan names."""
+        all_elements = [
+            {"id": "abc", "name": "林远", "category": "character"},
+            {"id": "def", "name": "苍澜大陆", "category": "geography"},
+        ]
+        result = self._match_elements(
+            all_elements,
+            chapter_reveal_elements=[],
+            reveal_plan_elements=["林远", "苍澜大陆"],
+        )
+        # Before fix: [] (0 elements found)
+        # After fix: 2 elements found
+        assert len(result) == 2
+        names = [e["name"] for e in result]
+        assert "林远" in names
+        assert "苍澜大陆" in names
+
+    def test_no_duplicates_when_in_both_sources(self):
+        """Element in both chapter.reveal_elements and reveal_plan should not duplicate."""
+        all_elements = [
+            {"id": "abc", "name": "林远", "category": "character"},
+        ]
+        result = self._match_elements(
+            all_elements,
+            chapter_reveal_elements=["林远"],
+            reveal_plan_elements=["林远"],
+        )
+        assert len(result) == 1  # No duplicate
+
+    def test_reveal_plan_extras_merged(self):
+        """reveal_plan has extra elements not in chapter.reveal_elements."""
+        all_elements = [
+            {"id": "abc", "name": "林远", "category": "character"},
+            {"id": "def", "name": "苍澜大陆", "category": "geography"},
+            {"id": "ghi", "name": "正邪之争", "category": "conflict"},
+        ]
+        result = self._match_elements(
+            all_elements,
+            chapter_reveal_elements=["林远"],
+            reveal_plan_elements=["林远", "苍澜大陆", "正邪之争"],
+        )
+        assert len(result) == 3
+        names = [e["name"] for e in result]
+        assert "林远" in names
+        assert "苍澜大陆" in names
+        assert "正邪之争" in names
+
+    def test_backward_compat_match_by_id(self):
+        """Should still work if elements contain IDs (backward compatibility)."""
+        all_elements = [
+            {"id": "abc", "name": "林远", "category": "character"},
+        ]
+        result = self._match_elements(
+            all_elements,
+            chapter_reveal_elements=["abc"],  # ID instead of name
+            reveal_plan_elements=[],
+        )
+        assert len(result) == 1
+        assert result[0]["name"] == "林远"
+
+    def test_unmatched_name_does_not_crash(self):
+        """Non-existent element name should be silently ignored."""
+        all_elements = [
+            {"id": "abc", "name": "林远", "category": "character"},
+        ]
+        result = self._match_elements(
+            all_elements,
+            chapter_reveal_elements=["不存在的要素"],
+            reveal_plan_elements=["另一个不存在的"],
+        )
+        assert len(result) == 0
+
+    def test_empty_reveal_plan(self):
+        """No reveal_plan → only chapter.reveal_elements used."""
+        all_elements = [
+            {"id": "abc", "name": "林远", "category": "character"},
+        ]
+        result = self._match_elements(
+            all_elements,
+            chapter_reveal_elements=["林远"],
+            reveal_plan_elements=[],
+        )
+        assert len(result) == 1
+
+    def test_end_to_end_with_worldview_parser(self):
+        """End-to-end: parse worldview → normalize → match by LLM-output names."""
+        from app.core.worldview_parser import worldview_parser
+
+        worldview_data = {
+            "characters": [
+                {"name": "林远", "personality": "坚韧", "background": "小镇",
+                 "motivation": "真相", "ability": "灵觉", "relations": []},
+            ],
+            "geography": [{"name": "苍澜大陆", "description": "主大陆", "significance": "主要发生地"}],
+            "factions": [], "power_system": [], "history": [], "conflicts": [], "special_settings": [],
+        }
+        elements = worldview_parser.parse(worldview_data)
+        all_elements = worldview_parser.normalize_elements(elements)
+
+        # Simulate LLM output: chapter with reveal_elements as NAMES
+        result = self._match_elements(
+            all_elements,
+            chapter_reveal_elements=[],  # Empty (simulating LLM only putting in reveal_plan)
+            reveal_plan_elements=["林远", "苍澜大陆"],  # Names from LLM
+        )
+
+        # Before fix: [] (0 elements — BUG)
+        # After fix: 2 elements correctly matched
+        assert len(result) == 2
+        names = {e["name"] for e in result}
+        assert names == {"林远", "苍澜大陆"}
+        # Verify meta is preserved
+        for e in result:
+            assert "meta" in e
+            assert e["meta"]["name"] == e["name"]

@@ -11,6 +11,172 @@ from app.prompts.templates import (
 from app.models.project import NovelGenre
 
 
+# ─── _format_reveal_elements (chapter prompt) ─────────────────
+
+class TestFormatRevealElements:
+    def test_empty_elements(self):
+        result = _format_reveal_elements([])
+        assert "无需揭示" in result
+
+    def test_character_meta_with_chinese_labels(self):
+        """Chapter prompt should show character meta with Chinese labels (not English keys)."""
+        elements = [
+            {
+                "id": "c1",
+                "category": "character",
+                "name": "林天",
+                "description": "少年剑修",
+                "priority": "core",
+                "meta": {
+                    "name": "林天",
+                    "personality": "坚毅果敢",
+                    "background": "家族被灭",
+                    "motivation": "复仇",
+                    "ability": "剑灵体质",
+                    "relations": [{"name": "苏婉", "relation": "青梅竹马"}],
+                },
+            },
+        ]
+        result = _format_reveal_elements(elements)
+        assert "林天" in result
+        assert "角色" in result  # Chinese category label
+        assert "坚毅果敢" in result  # personality
+        assert "家族被灭" in result  # background
+        assert "复仇" in result  # motivation
+        assert "剑灵体质" in result  # ability
+        assert "苏婉" in result  # relations
+        assert "青梅竹马" in result  # relation type
+        # Should NOT have English keys
+        assert "personality:" not in result
+        assert "background:" not in result
+
+    def test_geography_includes_significance(self):
+        """Previously missing: significance field for geography."""
+        elements = [
+            {
+                "id": "g1",
+                "category": "geography",
+                "name": "苍澜大陆",
+                "description": "主大陆",
+                "priority": "core",
+                "meta": {
+                    "name": "苍澜大陆",
+                    "description": "主大陆",
+                    "significance": "主要故事发生地",
+                },
+            },
+        ]
+        result = _format_reveal_elements(elements)
+        assert "重要性" in result
+        assert "主要故事发生地" in result
+
+    def test_faction_includes_power_level(self):
+        """Previously missing: power_level field for factions."""
+        elements = [
+            {
+                "id": "f1",
+                "category": "faction",
+                "name": "天玄宗",
+                "description": "正道领袖",
+                "priority": "important",
+                "meta": {
+                    "name": "天玄宗",
+                    "stance": "正道领袖",
+                    "power_level": "顶级",
+                },
+            },
+        ]
+        result = _format_reveal_elements(elements)
+        assert "立场" in result
+        assert "正道领袖" in result
+        assert "实力等级" in result
+        assert "顶级" in result
+
+    def test_history_includes_time_and_impact(self):
+        """Previously missing: time and impact fields for history."""
+        elements = [
+            {
+                "id": "h1",
+                "category": "history",
+                "name": "远古大战",
+                "description": "上古大战",
+                "priority": "important",
+                "meta": {
+                    "name": "远古大战",
+                    "event": "远古大战",
+                    "time": "万年前",
+                    "description": "上古大战",
+                    "impact": "传承失传",
+                },
+            },
+        ]
+        result = _format_reveal_elements(elements)
+        assert "时间" in result
+        assert "万年前" in result
+        assert "影响" in result
+        assert "传承失传" in result
+
+    def test_conflict_includes_all_fields(self):
+        """Previously missing: type and resolution_hint for conflicts."""
+        elements = [
+            {
+                "id": "cf1",
+                "category": "conflict",
+                "name": "正邪之争",
+                "description": "大陆控制权",
+                "priority": "core",
+                "meta": {
+                    "name": "正邪之争",
+                    "type": "阵营冲突",
+                    "parties": "正道 vs 魔道",
+                    "stakes": "大陆控制权",
+                    "resolution_hint": "第三条道路",
+                },
+            },
+        ]
+        result = _format_reveal_elements(elements)
+        assert "类型" in result
+        assert "阵营冲突" in result
+        assert "涉及方" in result
+        assert "正道 vs 魔道" in result
+        assert "利害关系" in result
+        assert "大陆控制权" in result
+        assert "解决线索" in result
+        assert "第三条道路" in result
+
+    def test_special_setting_includes_rules(self):
+        elements = [
+            {
+                "id": "s1",
+                "category": "special_setting",
+                "name": "灵根天赋",
+                "description": "不同灵根属性",
+                "priority": "important",
+                "meta": {
+                    "name": "灵根天赋",
+                    "description": "不同灵根属性",
+                    "rules": "金木水火土五行",
+                },
+            },
+        ]
+        result = _format_reveal_elements(elements)
+        assert "规则" in result
+        assert "金木水火土五行" in result
+
+    def test_no_meta_does_not_crash(self):
+        elements = [
+            {
+                "id": "e1",
+                "category": "character",
+                "name": "无meta角色",
+                "description": "测试",
+                "priority": "secondary",
+            },
+        ]
+        result = _format_reveal_elements(elements)
+        assert "无meta角色" in result
+
+
 # ─── _format_elements ──────────────────────────────────────────
 
 class TestFormatElements:

@@ -375,15 +375,52 @@ def _format_reveal_elements(elements: list[dict[str, Any]]) -> str:
     if not elements:
         return "（本章无需揭示新要素，着重剧情推进）"
 
+    # Category → Chinese label
+    category_names = {
+        "character": "角色",
+        "geography": "地理",
+        "faction": "势力",
+        "power_system": "力量体系",
+        "history": "历史事件",
+        "conflict": "矛盾",
+        "special_setting": "特殊设定",
+    }
+
+    # Meta fields per category (same as _format_elements for consistency)
+    meta_fields: dict[str, list[tuple[str, str]]] = {
+        "character": [
+            ("personality", "性格"), ("background", "背景"),
+            ("motivation", "动机"), ("ability", "能力"),
+        ],
+        "geography": [("significance", "重要性")],
+        "faction": [("stance", "立场"), ("power_level", "实力等级")],
+        "power_system": [("levels", "等级划分"), ("rules", "规则"), ("limitations", "限制")],
+        "history": [("time", "时间"), ("impact", "影响")],
+        "conflict": [("type", "类型"), ("parties", "涉及方"), ("stakes", "利害关系"), ("resolution_hint", "解决线索")],
+        "special_setting": [("rules", "规则")],
+    }
+
     lines = []
     for e in elements:
-        lines.append(f"  - {e['name']}（{e['category']}）: {e.get('description', '')}")
+        cat = e.get("category", "unknown")
+        cat_label = category_names.get(cat, cat)
+        lines.append(f"  - {e['name']}（{cat_label}）: {e.get('description', '')}")
         if meta := e.get("meta"):
-            # Include relevant meta info
-            for key in ["personality", "background", "motivation", "ability",
-                       "levels", "rules", "limitations", "stance", "parties", "stakes"]:
+            fields = meta_fields.get(cat, [])
+            for key, label in fields:
                 if val := meta.get(key):
-                    lines.append(f"    · {key}: {val}")
+                    lines.append(f"    · {label}: {val}")
+            # Include relations for characters and factions
+            if relations := meta.get("relations"):
+                if isinstance(relations, list) and relations:
+                    rel_strs = []
+                    for rel in relations:
+                        if isinstance(rel, dict):
+                            rel_strs.append(f"{rel.get('name', '')}({rel.get('relation', '')})")
+                        elif isinstance(rel, str):
+                            rel_strs.append(rel)
+                    if rel_strs:
+                        lines.append(f"    · 关系: {', '.join(rel_strs)}")
 
     return "\n".join(lines)
 
