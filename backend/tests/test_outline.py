@@ -119,6 +119,74 @@ class TestExtractJson:
 
 
 # ════════════════════════════════════════════════════════════
+# Unit tests: element normalization (worldview_parser.normalize_elements)
+# ════════════════════════════════════════════════════════════
+
+from app.core.worldview_parser import worldview_parser
+
+
+class TestNormalizeElements:
+    def test_none_returns_empty(self):
+        assert worldview_parser.normalize_elements(None) == []
+
+    def test_empty_list_returns_empty(self):
+        assert worldview_parser.normalize_elements([]) == []
+
+    def test_dict_raw_worldview_gets_reparsed(self):
+        """A raw worldview dict {characters: [...], ...} should be re-parsed into element list."""
+        raw = {
+            "characters": [{"name": "林远", "personality": "冷静"}],
+            "geography": [{"name": "天玄大陆", "description": "东方大陆"}],
+            "power_system": [{"name": "灵气体系", "rules": "分九境"}],
+        }
+        result = worldview_parser.normalize_elements(raw)
+        assert isinstance(result, list)
+        assert len(result) >= 3  # at least 1 char + 1 geo + 1 power_system
+        # All items should be dicts with required keys
+        for e in result:
+            assert "id" in e
+            assert "priority" in e
+            assert "category" in e
+            assert "name" in e
+
+    def test_list_of_dicts_passthrough(self):
+        """A list of properly formatted dicts should pass through with missing fields filled."""
+        raw = [
+            {"id": "el1", "category": "character", "name": "林远", "priority": "core"},
+            {"id": "el2", "category": "geography", "name": "天玄大陆", "priority": "important"},
+        ]
+        result = worldview_parser.normalize_elements(raw)
+        assert len(result) == 2
+        assert result[0]["id"] == "el1"
+        assert result[0]["priority"] == "core"
+
+    def test_list_of_dicts_fills_missing_fields(self):
+        """Dicts missing required fields should get defaults."""
+        raw = [{"name": "测试要素"}]
+        result = worldview_parser.normalize_elements(raw)
+        assert len(result) == 1
+        assert "id" in result[0]
+        assert result[0]["priority"] == "secondary"
+        assert result[0]["category"] == "unknown"
+
+    def test_list_of_strings_converted_to_dicts(self):
+        """A list of strings should be converted to basic element dicts."""
+        raw = ["角色名", "地点名", "体系名"]
+        result = worldview_parser.normalize_elements(raw)
+        assert len(result) == 3
+        for i, e in enumerate(result):
+            assert e["name"] == raw[i]
+            assert e["priority"] == "secondary"
+            assert "id" in e
+            assert "category" in e
+
+    def test_unknown_type_returns_empty(self):
+        """Non-dict, non-list types should return empty list."""
+        assert worldview_parser.normalize_elements(42) == []
+        assert worldview_parser.normalize_elements("string") == []
+
+
+# ════════════════════════════════════════════════════════════
 # Unit tests: chapter normalization
 # ════════════════════════════════════════════════════════════
 

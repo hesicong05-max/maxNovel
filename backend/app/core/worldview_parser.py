@@ -164,6 +164,52 @@ class WorldviewParser:
             "by_priority": by_priority,
         }
 
+    def normalize_elements(self, raw: Any) -> list[dict[str, Any]]:
+        """Normalize parsed_elements from DB into a proper list of element dicts.
+
+        Handles three cases:
+        1. dict (raw worldview structure {"characters": [...], ...}) → re-parse via parse()
+        2. list[dict] (correct format) → use as-is, fill missing fields
+        3. list[str] → convert each string to a basic element dict
+        """
+        if not raw:
+            return []
+
+        # Case 1: dict — this is a raw worldview structure, not a parsed element list
+        if isinstance(raw, dict):
+            return self.parse(raw)
+
+        # Case 2/3: list
+        if isinstance(raw, list):
+            result = []
+            for i, item in enumerate(raw):
+                if isinstance(item, dict):
+                    # Already a dict — ensure required fields exist
+                    if "id" not in item:
+                        item["id"] = f"elem_{i}"
+                    if "priority" not in item:
+                        item["priority"] = "secondary"
+                    if "category" not in item:
+                        item["category"] = "unknown"
+                    if "name" not in item:
+                        item["name"] = f"要素{i+1}"
+                    result.append(item)
+                elif isinstance(item, str):
+                    # String — convert to basic element dict
+                    result.append({
+                        "id": f"elem_{i}",
+                        "category": "unknown",
+                        "name": item,
+                        "description": "",
+                        "priority": "secondary",
+                        "revealed": False,
+                        "reveal_chapter": None,
+                    })
+            return result
+
+        # Fallback: unknown type
+        return []
+
     async def parse_document(self, document_text: str, genre: str = "玄幻") -> dict[str, Any]:
         """
         Use LLM to extract structured worldview from a free-form document.

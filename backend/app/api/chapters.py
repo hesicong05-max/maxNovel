@@ -14,6 +14,7 @@ from app.core.llm_client import llm_client
 from app.core.memory_store import memory_store
 from app.core.pacing_planner import pacing_planner
 from app.core.rate_limiter import limiter
+from app.core.worldview_parser import worldview_parser
 from app.database import get_db, async_session
 from app.models.project import Chapter, Outline, Project, ProjectStatus, StoryMemory, Worldview
 from app.prompts.templates import build_chapter_prompt, build_summary_prompt
@@ -215,7 +216,7 @@ async def get_progress(
             character_states={},
         )
 
-    elements = worldview.parsed_elements or []
+    elements = worldview_parser.normalize_elements(worldview.parsed_elements)
 
     # Query memory directly
     mem_result = await db.execute(select(StoryMemory).where(StoryMemory.project_id == project_id))
@@ -548,7 +549,7 @@ async def _generate_chapter_core(
         effective_wc = project.chapter_word_count
 
     # Get elements to reveal
-    all_elements = worldview.parsed_elements or []
+    all_elements = worldview_parser.normalize_elements(worldview.parsed_elements)
     elements_to_reveal = []
     reveal_names_set = set(chapter_entry.get("reveal_elements", []))
     added_ids: set[str] = set()

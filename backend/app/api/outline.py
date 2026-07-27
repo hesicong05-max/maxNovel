@@ -13,6 +13,7 @@ from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.llm_client import llm_client
 from app.core.pacing_planner import pacing_planner
 from app.core.memory_store import memory_store
+from app.core.worldview_parser import worldview_parser
 from app.database import get_db, async_session
 from app.models.project import Outline, Project, ProjectStatus, Worldview
 from app.prompts.templates import build_outline_prompt
@@ -46,7 +47,7 @@ async def generate_outline(
     if not worldview:
         raise HTTPException(status_code=400, detail="请先上传世界观")
 
-    elements = worldview.parsed_elements or []
+    elements = worldview_parser.normalize_elements(worldview.parsed_elements)
 
     # Build pacing plan
     reveal_plan = pacing_planner.plan(
@@ -145,7 +146,7 @@ async def generate_outline_stream(
     if not worldview:
         raise HTTPException(status_code=400, detail="请先上传世界观")
 
-    elements = worldview.parsed_elements or []
+    elements = worldview_parser.normalize_elements(worldview.parsed_elements)
 
     reveal_plan = pacing_planner.plan(
         elements=elements,
@@ -303,7 +304,7 @@ async def update_outline(
     wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
     worldview = wv_result.scalar_one_or_none()
     if worldview:
-        elements = worldview.parsed_elements or []
+        elements = worldview_parser.normalize_elements(worldview.parsed_elements)
         outline.reveal_plan = pacing_planner.plan(
             elements=elements,
             total_chapters=project.total_chapters,
