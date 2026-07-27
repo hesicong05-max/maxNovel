@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
-from app.api import auth, chapters, community, export, outline, projects, settings, worldview
+from app.api import auth, chapters, community, export, outline, projects, settings, version, worldview
 from app.config import settings as app_settings
 from app.core.logging_config import setup_logging
 from app.core.rate_limiter import limiter
@@ -195,6 +195,7 @@ app.include_router(chapters.router)
 app.include_router(export.router)
 app.include_router(settings.router)
 app.include_router(community.router)
+app.include_router(version.router)
 
 
 @app.get("/api/health")

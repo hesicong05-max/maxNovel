@@ -31,6 +31,10 @@ COPY --from=builder /opt/venv /opt/venv
 # Copy application code
 COPY . .
 
+# Embed git commit for deployment verification (/api/version)
+ARG GIT_COMMIT=unknown
+RUN echo "$GIT_COMMIT" > /app/COMMIT
+
 # Copy and set entrypoint
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
