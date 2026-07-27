@@ -66,6 +66,9 @@ Thumbs.db
 # WorkBuddy
 .workbuddy/
 
+# Utility scripts (not part of the application)
+server_cleanup.py
+
 # Upload temp
 backend/uploads/
 .github/workflows/ci.yml
