@@ -59,9 +59,21 @@ class TestMockResponse:
         assert "power_system" in data
 
     def test_mock_outline_returns_valid_json(self):
-        result = _mock_outline("任意文本")
+        result = _mock_outline("请为全部5章生成大纲", "任意文本")
         data = json.loads(result.replace("```json\n", "").replace("\n```", ""))
         assert "story_arc" in data
+        assert len(data["chapters"]) == 5
+
+    def test_mock_outline_dynamic_chapter_count(self):
+        """_mock_outline should generate the number of chapters specified in the system prompt."""
+        result = _mock_outline("请为全部10章生成大纲", "用户消息")
+        data = json.loads(result.replace("```json\n", "").replace("\n```", ""))
+        assert len(data["chapters"]) == 10
+
+    def test_mock_outline_defaults_to_5_without_match(self):
+        """_mock_outline should default to 5 chapters when system prompt has no chapter count."""
+        result = _mock_outline("没有章节数信息的提示", "用户消息")
+        data = json.loads(result.replace("```json\n", "").replace("\n```", ""))
         assert len(data["chapters"]) == 5
 
     def test_mock_chapter_has_content(self):

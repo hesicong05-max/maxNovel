@@ -81,10 +81,11 @@ async def generate_outline(
         )
 
     # Parse and normalize LLM response
-    chapters_data = _parse_outline_response(raw_response, project.total_chapters)
+    chapters_data, warning = _parse_outline_response(raw_response, project.total_chapters)
     logger.info(
-        "Outline parsed for project %s: story_arc=%d chars, %d chapters",
+        "Outline parsed for project %s: story_arc=%d chars, %d chapters, warning=%s",
         project_id, len(chapters_data.get("story_arc", "")), len(chapters_data.get("chapters", [])),
+        warning or "none",
     )
 
     # Delete existing outline if any (query directly)
@@ -110,13 +111,16 @@ async def generate_outline(
     await db.commit()
     await db.refresh(outline)
 
-    return {
+    result = {
         "id": outline.id,
         "project_id": project_id,
         "story_arc": outline.story_arc,
         "chapters": outline.chapters,
         "reveal_plan": outline.reveal_plan,
     }
+    if warning:
+        result["warning"] = warning
+    return result
 
 
 @router.post("/{project_id}/generate-stream")
@@ -186,11 +190,11 @@ async def generate_outline_stream(
             )
 
             # Parse the complete response
-            chapters_data = _parse_outline_response(full_response, total_chapters_val)
+            chapters_data, warning = _parse_outline_response(full_response, total_chapters_val)
             logger.info(
-                "Outline parsed for project %s: story_arc=%d chars, %d chapters",
+                "Outline parsed for project %s: story_arc=%d chars, %d chapters, warning=%s",
                 project_id_val, len(chapters_data.get("story_arc", "")),
-                len(chapters_data.get("chapters", [])),
+                len(chapters_data.get("chapters", [])), warning or "none",
             )
 
             # Save to DB in a fresh session
@@ -233,7 +237,10 @@ async def generate_outline_stream(
                     "reveal_plan": outline.reveal_plan,
                 }
 
-                yield f'data: {json.dumps({"type": "complete", "outline": result}, ensure_ascii=False)}\n\n'
+                event_data = {"type": "complete", "outline": result}
+                if warning:
+                    event_data["warning"] = warning
+                yield f'data: {json.dumps(event_data, ensure_ascii=False)}\n\n'
 
         except Exception as e:
             logger.error("Outline stream failed for project %s: %s", project_id_val, str(e))
@@ -335,14 +342,19 @@ async def confirm_outline(
     return {"message": "大纲已确认，可以开始逐章生成", "status": project.status.value}
 
 
-def _parse_outline_response(raw: str, total_chapters: int) -> dict[str, Any]:
+def _parse_outline_response(raw: str, total_chapters: int) -> tuple[dict[str, Any], str | None]:
     """Parse LLM response into structured outline data.
+
+    Returns:
+        Tuple of (outline_data, warning_message).
+        warning_message is None on success, or describes what went wrong.
 
     Handles:
     - JSON wrapped in ```json ... ``` code fences
     - JSON embedded in surrounding text
     - Missing/malformed fields → normalized to correct types
     - Fewer/more chapters than expected → padded/truncated
+    - Truncated JSON (max_tokens hit) → attempts repair
     """
     json_str = _extract_json(raw)
 
@@ -350,12 +362,23 @@ def _parse_outline_response(raw: str, total_chapters: int) -> dict[str, Any]:
         try:
             data = json.loads(json_str)
             if isinstance(data, dict):
-                return _normalize_outline_data(data, total_chapters)
+                normalized = _normalize_outline_data(data, total_chapters)
+                # Check if we got fewer chapters than expected from the LLM
+                raw_chapters = data.get("chapters", [])
+                llm_chapter_count = len(raw_chapters) if isinstance(raw_chapters, list) else 0
+                if llm_chapter_count < total_chapters:
+                    warning = f"LLM 返回了 {llm_chapter_count} 章（预期 {total_chapters} 章），已自动补齐剩余章节"
+                    logger.warning("Outline has fewer chapters than expected: %d/%d", llm_chapter_count, total_chapters)
+                    return normalized, warning
+                return normalized, None
         except (json.JSONDecodeError, TypeError) as e:
             logger.warning("Outline JSON parse failed: %s", str(e))
 
     # Fallback: create a minimal outline
-    logger.warning("Using fallback outline (LLM response could not be parsed)")
+    raw_preview = raw[:200].replace("\n", " ").replace("\r", "") if raw else "(empty)"
+    warning = f"无法解析 LLM 返回的 JSON，已生成占位大纲。请重试或手动编辑。响应前200字: {raw_preview}"
+    logger.warning("Using fallback outline. Raw response (first 500 chars): %s", raw[:500])
+
     return {
         "story_arc": "故事大纲生成中，请手动编辑完善",
         "chapters": [
@@ -368,20 +391,134 @@ def _parse_outline_response(raw: str, total_chapters: int) -> dict[str, Any]:
             }
             for i in range(total_chapters)
         ],
-    }
+    }, warning
 
 
 def _extract_json(text: str) -> str | None:
-    """Extract JSON content from LLM response (may be wrapped in code fences or embedded in text)."""
-    # Try to find ```json ... ``` block
+    """Extract JSON content from LLM response.
+
+    Handles:
+    - JSON wrapped in ```json ... ``` code fences
+    - JSON embedded in surrounding text
+    - Truncated JSON (attempts repair by closing open structures)
+    """
+    # 1. Try code fence first (most common format from ERNIE)
     match = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
     if match:
-        return match.group(1).strip()
+        candidate = match.group(1).strip()
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            # Code fence content is malformed, try repair
+            repaired = _repair_truncated_json(candidate)
+            if repaired:
+                logger.debug("Repaired JSON from code fence")
+                return repaired
 
-    # Try to find raw JSON object
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        return match.group(0).strip()
+    # 2. Try balanced brace matching (find first valid JSON object)
+    start = text.find("{")
+    if start != -1:
+        candidate = _extract_balanced_json(text, start)
+        if candidate:
+            try:
+                json.loads(candidate)
+                return candidate
+            except json.JSONDecodeError:
+                pass
+
+        # 3. Truncated JSON — attempt repair
+        repaired = _repair_truncated_json(text[start:])
+        if repaired:
+            logger.debug("Repaired truncated JSON (no closing braces)")
+            return repaired
+
+    return None
+
+
+def _extract_balanced_json(text: str, start: int) -> str | None:
+    """Extract a balanced JSON object starting at position ``start``.
+
+    Uses brace counting with string awareness to handle nested objects correctly.
+    Returns None if no matching close brace is found (truncated).
+    """
+    depth = 0
+    in_string = False
+    escape = False
+
+    for i in range(start, len(text)):
+        c = text[i]
+        if escape:
+            escape = False
+            continue
+        if c == "\\":
+            escape = True
+            continue
+        if c == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+
+    return None  # No matching close brace (truncated)
+
+
+def _repair_truncated_json(text: str) -> str | None:
+    """Attempt to repair truncated JSON by closing open structures.
+
+    Finds the last position where a complete JSON entry ends,
+    then closes any remaining open arrays/objects.
+    Handles trailing commas and incomplete string values.
+    """
+    depth_brace = 0
+    depth_bracket = 0
+    in_string = False
+    escape = False
+    candidates: list[tuple[int, int, int]] = []  # (position, brace_depth, bracket_depth)
+
+    for i, c in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if c == "\\":
+            escape = True
+            continue
+        if c == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if c == "{":
+            depth_brace += 1
+        elif c == "}":
+            depth_brace -= 1
+            if depth_brace >= 0:
+                candidates.append((i + 1, depth_brace, depth_bracket))
+        elif c == "[":
+            depth_bracket += 1
+        elif c == "]":
+            depth_bracket -= 1
+
+    # Try from latest (most data preserved) to earliest
+    for pos, brace, bracket in reversed(candidates):
+        repaired = text[:pos].rstrip()
+        # Strip trailing comma
+        if repaired.endswith(","):
+            repaired = repaired[:-1].rstrip()
+        # Close open structures
+        repaired += "]" * max(0, bracket)
+        repaired += "}" * max(0, brace)
+        try:
+            json.loads(repaired)
+            return repaired
+        except json.JSONDecodeError:
+            continue
 
     return None
 

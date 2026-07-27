@@ -205,9 +205,15 @@ class LLMClient:
                                 break
                             try:
                                 data = json.loads(data_str)
-                                delta = data["choices"][0].get("delta", {})
-                                if content := delta.get("content"):
-                                    yield content
+                                choices = data.get("choices", [])
+                                if choices:
+                                    delta = choices[0].get("delta", {})
+                                    if content := delta.get("content"):
+                                        yield content
+                                    # Detect truncation
+                                    finish_reason = choices[0].get("finish_reason")
+                                    if finish_reason == "length":
+                                        logger.warning("LLM response truncated (finish_reason=length, max_tokens reached)")
                             except (json.JSONDecodeError, KeyError, IndexError):
                                 continue
                     return  # Success, exit retry loop
@@ -269,7 +275,7 @@ def _mock_response(messages: list[dict[str, str]]) -> str:
     if "世界观" in system_msg and "提取" in system_msg:
         return _mock_worldview_extraction(user_msg)
     if "大纲" in system_msg or "outline" in system_msg.lower():
-        return _mock_outline(user_msg)
+        return _mock_outline(system_msg, user_msg)
     if "章节" in system_msg or "chapter" in system_msg.lower():
         return _mock_chapter(user_msg)
     return f"[开发模式] 未配置 LLM API Key，这是模拟响应。\n\n系统提示: {system_msg[:100]}...\n\n用户请求: {user_msg[:100]}..."
@@ -313,19 +319,39 @@ def _mock_worldview_extraction(user_msg: str) -> str:
 ```"""
 
 
-def _mock_outline(user_msg: str) -> str:
-    return """```json
-{
-  "story_arc": "一个普通少年在偶然获得神秘传承后，踏上修炼之路，逐步揭开大陆隐藏的远古秘密，最终面对足以颠覆世界的终极抉择。",
-  "chapters": [
-    {"chapter_num": 1, "title": "觉醒", "summary": "主角在平凡生活中遭遇意外，获得神秘传承，世界观初露端倪", "key_events": ["主角遭遇危机", "神秘力量觉醒", "初次展现能力"], "reveal_elements": ["主角身世", "核心矛盾雏形"]},
-    {"chapter_num": 2, "title": "初入江湖", "summary": "主角离开家乡，初次接触修炼界，见识到更广阔的世界", "key_events": ["离开家乡", "遇到引路人", "了解修炼体系基本概念"], "reveal_elements": ["修炼体系概况", "地理环境"]},
-    {"chapter_num": 3, "title": "暗流涌动", "summary": "主角在入门考核中展露锋芒，引来各方关注", "key_events": ["参加宗门考核", "与对手交锋", "被高层注意"], "reveal_elements": ["宗门势力关系"]},
-    {"chapter_num": 4, "title": "风起云涌", "summary": "主角在宗门内站稳脚跟，开始系统修炼，发现更多秘密", "key_events": ["正式入门", "修炼突破", "发现古籍记载"], "reveal_elements": ["修炼体系详解", "历史事件碎片"]},
-    {"chapter_num": 5, "title": "暗棋", "summary": "一场针对主角的阴谋浮出水面，势力博弈开始", "key_events": ["遭遇暗杀", "调查幕后", "势力格局揭露"], "reveal_elements": ["势力关系图", "核心矛盾升级"]}
-  ]
-}
-```"""
+def _mock_outline(system_msg: str, user_msg: str) -> str:
+    """Mock outline response — generates chapters matching the project's total_chapters."""
+    import json as _json
+    import re as _re
+
+    # Parse total_chapters from the system prompt: "请为全部{N}章生成大纲"
+    match = _re.search(r"全部(\d+)章", system_msg)
+    total = int(match.group(1)) if match else 5
+
+    mock_titles = [
+        "觉醒", "初入江湖", "暗流涌动", "风起云涌", "暗棋",
+        "破茧", "风云际会", "暗夜追踪", "龙争虎斗", "破局",
+        "逆流而上", "风暴前夕", "惊雷", "棋局", "暗战",
+        "破阵", "逆袭", "巅峰对决", "真相", "抉择",
+        "归来", "新的征程", "暗影之下", "破晓", "对决",
+        "命运", "终章序曲", "最后的选择", "决战", "终章",
+    ]
+
+    chapters = []
+    for i in range(1, total + 1):
+        title = mock_titles[i - 1] if i <= len(mock_titles) else f"第{i}章"
+        chapters.append({
+            "chapter_num": i,
+            "title": title,
+            "summary": f"第{i}章内容概述，主角继续冒险，逐步揭示世界观设定。",
+            "key_events": [f"关键事件{i}-1", f"关键事件{i}-2"],
+            "reveal_elements": [f"要素{i}"],
+        })
+
+    return "```json\n" + _json.dumps({
+        "story_arc": "一个普通少年在偶然获得神秘传承后，踏上修炼之路，逐步揭开大陆隐藏的远古秘密，最终面对足以颠覆世界的终极抉择。",
+        "chapters": chapters,
+    }, ensure_ascii=False, indent=2) + "\n```"
 
 
 def _mock_chapter(user_msg: str) -> str:

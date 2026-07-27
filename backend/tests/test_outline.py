@@ -352,50 +352,59 @@ class TestNormalizeOutlineData:
 class TestParseOutlineResponse:
     def test_valid_json_with_code_fence(self):
         raw = '```json\n{"story_arc": "测试弧", "chapters": [{"chapter_num": 1, "title": "T1", "summary": "S1", "key_events": ["E1"], "reveal_elements": ["R1"]}]}\n```'
-        result = _parse_outline_response(raw, 1)
+        result, warning = _parse_outline_response(raw, 1)
         assert result["story_arc"] == "测试弧"
         assert len(result["chapters"]) == 1
         assert result["chapters"][0]["title"] == "T1"
+        assert warning is None
 
     def test_valid_raw_json(self):
         raw = '{"story_arc": "测试", "chapters": [{"chapter_num": 1, "title": "T", "summary": "S", "key_events": [], "reveal_elements": []}]}'
-        result = _parse_outline_response(raw, 1)
+        result, warning = _parse_outline_response(raw, 1)
         assert result["story_arc"] == "测试"
         assert len(result["chapters"]) == 1
+        assert warning is None
 
     def test_json_embedded_in_text(self):
         """LLM wraps JSON with explanatory text."""
         raw = 'Here is the outline:\n```json\n{"story_arc": "弧", "chapters": [{"chapter_num": 1, "title": "T", "summary": "S", "key_events": [], "reveal_elements": []}]}\n```\nLet me know!'
-        result = _parse_outline_response(raw, 1)
+        result, warning = _parse_outline_response(raw, 1)
         assert result["story_arc"] == "弧"
+        assert warning is None
 
     def test_garbage_response_uses_fallback(self):
         raw = "This is not JSON at all"
-        result = _parse_outline_response(raw, 5)
+        result, warning = _parse_outline_response(raw, 5)
         assert "待填充" in result["story_arc"] or result["story_arc"] == "故事大纲生成中，请手动编辑完善"
         assert len(result["chapters"]) == 5
         assert all(c["key_events"] == [] for c in result["chapters"])
+        assert warning is not None
+        assert "无法解析" in warning
 
     def test_empty_response_uses_fallback(self):
-        result = _parse_outline_response("", 3)
+        result, warning = _parse_outline_response("", 3)
         assert len(result["chapters"]) == 3
+        assert warning is not None
 
     def test_malformed_json_uses_fallback(self):
         raw = '{"story_arc": "incomplete'
-        result = _parse_outline_response(raw, 3)
+        result, warning = _parse_outline_response(raw, 3)
         assert len(result["chapters"]) == 3
+        assert warning is not None
 
     def test_fewer_chapters_padded(self):
         raw = '```json\n{"story_arc": "弧", "chapters": [{"chapter_num": 1, "title": "T", "summary": "S", "key_events": [], "reveal_elements": []}]}\n```'
-        result = _parse_outline_response(raw, 5)
+        result, warning = _parse_outline_response(raw, 5)
         assert len(result["chapters"]) == 5
         assert result["chapters"][0]["title"] == "T"
         assert result["chapters"][4]["title"] == "第5章"
+        assert warning is not None
+        assert "1 章" in warning
 
     def test_all_list_fields_handled(self):
         """All the bug patterns from worldview import should not crash here."""
         raw = '```json\n{"story_arc": ["弧A", "弧B"], "chapters": [{"chapter_num": "1", "title": ["T1", "T2"], "summary": ["S1"], "key_events": "E1，E2", "reveal_elements": "R1, R2"}]}\n```'
-        result = _parse_outline_response(raw, 1)
+        result, warning = _parse_outline_response(raw, 1)
         assert isinstance(result["story_arc"], str)
         assert isinstance(result["chapters"][0]["chapter_num"], int)
         assert isinstance(result["chapters"][0]["title"], str)
@@ -405,9 +414,44 @@ class TestParseOutlineResponse:
 
     def test_zero_chapters(self):
         """Edge case: total_chapters = 0."""
-        result = _parse_outline_response('{"story_arc": "", "chapters": []}', 0)
+        result, warning = _parse_outline_response('{"story_arc": "", "chapters": []}', 0)
         assert result["chapters"] == []
         assert result["story_arc"] == ""
+        assert warning is None
+
+    def test_truncated_json_repaired(self):
+        """Truncated JSON (max_tokens hit mid-response) should be repaired, not discarded."""
+        raw = '''```json
+{
+  "story_arc": "测试故事弧线",
+  "chapters": [
+    {"chapter_num": 1, "title": "觉醒", "summary": "主角觉醒", "key_events": ["事件1"], "reveal_elements": ["要素1"]},
+    {"chapter_num": 2, "title": "初入", "summary": "主角入门", "key_events": ["事件2"], "reveal_elements": ["要素2"]},
+    {"chapter_num": 3, "title": "暗流'''
+        result, warning = _parse_outline_response(raw, 5)
+        # Should have recovered at least 2 chapters from the truncated JSON
+        assert len(result["chapters"]) == 5
+        assert result["chapters"][0]["title"] == "觉醒"
+        assert result["chapters"][1]["title"] == "初入"
+        # Chapters 3-5 should be padded
+        assert result["chapters"][2]["title"] == "第3章"
+        # Warning should mention fewer chapters
+        assert warning is not None
+
+    def test_truncated_json_without_code_fence(self):
+        """Truncated raw JSON (no code fence) should also be repaired."""
+        raw = '{"story_arc": "弧线", "chapters": [{"chapter_num": 1, "title": "T1", "summary": "S1", "key_events": [], "reveal_elements": []}, {"chapter_num": 2, "title": "T2", "summary":'
+        result, warning = _parse_outline_response(raw, 3)
+        # Should recover chapter 1 at minimum
+        assert len(result["chapters"]) == 3
+        assert result["chapters"][0]["title"] == "T1"
+
+    def test_json_with_curly_braces_in_text(self):
+        """Text before JSON with curly braces should not break extraction."""
+        raw = '这是一个{重要}的大纲：\n```json\n{"story_arc": "弧", "chapters": [{"chapter_num": 1, "title": "T", "summary": "S", "key_events": [], "reveal_elements": []}]}\n```'
+        result, warning = _parse_outline_response(raw, 1)
+        assert result["story_arc"] == "弧"
+        assert len(result["chapters"]) == 1
 
 
 # ════════════════════════════════════════════════════════════

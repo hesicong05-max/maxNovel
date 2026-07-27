@@ -190,6 +190,7 @@ export interface OutlineStreamMessage {
   chunks?: number;
   chars?: number;
   outline?: OutlineData;
+  warning?: string;
 }
 
 // === Word Count Configuration ===

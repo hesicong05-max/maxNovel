@@ -16,6 +16,7 @@ export default function OutlineReview({ projectId, hasOutline, projectStatus, on
   const [generating, setGenerating] = useState(false);
   const [editingChapter, setEditingChapter] = useState<number | null>(null);
   const [streamProgress, setStreamProgress] = useState<{ chunks: number; chars: number } | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -63,6 +64,7 @@ export default function OutlineReview({ projectId, hasOutline, projectStatus, on
           case "complete":
             if (msg.outline) {
               setOutline(msg.outline);
+              setWarning(msg.warning || null);
               gotComplete = true;
             }
             break;
@@ -166,6 +168,15 @@ export default function OutlineReview({ projectId, hasOutline, projectStatus, on
 
       {outline && (
         <div>
+          {/* Warning banner */}
+          {warning && (
+            <div className="card" style={{ borderColor: "#f39c12", background: "#fef9e7" }}>
+              <p style={{ color: "#7d6608", fontSize: "13px", margin: 0 }}>
+                ⚠️ {warning}
+              </p>
+            </div>
+          )}
+
           {/* Story arc */}
           <div className="card">
             <label className="form-label">故事弧线</label>
