@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.llm_client import llm_client
 from app.core.memory_store import memory_store
+from app.core.project_files import save_outline_file
 from app.core.worldview_parser import worldview_parser
 from app.database import get_db, async_session
 from app.models.project import Outline, Project, ProjectStatus, Worldview
@@ -110,6 +111,9 @@ async def generate_outline(
     project.status = ProjectStatus.OUTLINE_PENDING
     await db.commit()
     await db.refresh(outline)
+
+    # Persist as independent document file (DB + file dual write)
+    save_outline_file(project_id, outline)
 
     result = {
         "id": outline.id,
@@ -229,6 +233,9 @@ async def generate_outline_stream(
                 await save_db.commit()
                 await save_db.refresh(outline)
 
+                # Persist as independent document file (DB + file dual write)
+                save_outline_file(project_id_val, outline)
+
                 result = {
                     "id": outline.id,
                     "project_id": project_id_val,
@@ -305,6 +312,9 @@ async def update_outline(
 
     await db.commit()
     await db.refresh(outline)
+
+    # Persist updated outline as document file (DB + file dual write)
+    save_outline_file(project_id, outline)
 
     return {
         "id": outline.id,

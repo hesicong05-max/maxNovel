@@ -124,6 +124,18 @@ export default function OutlineReview({ projectId, hasOutline, projectStatus, on
     }
   }
 
+  function handleRegenerate() {
+    if (!outline) return;
+    const confirmed = window.confirm(
+      "重新生成将覆盖当前大纲，已编辑的内容将丢失。\n\n系统会重新读取已保存的世界观文档，基于该文档生成全新大纲。\n\n确定要重新生成吗？"
+    );
+    if (confirmed) {
+      setWarning(null);
+      setOutline(null);
+      handleGenerate();
+    }
+  }
+
   function updateChapter(index: number, field: keyof OutlineChapter, value: string | string[]) {
     if (!outline) return;
     const chapters = [...outline.chapters];
@@ -269,10 +281,19 @@ export default function OutlineReview({ projectId, hasOutline, projectStatus, on
           </div>
 
           {/* Actions */}
-          <div style={{ display: "flex", gap: "0.5rem" }}>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
             <button className="btn" onClick={onBack}>← 返回世界观</button>
             {!isConfirmed ? (
               <>
+                <button
+                  className="btn"
+                  onClick={handleRegenerate}
+                  disabled={generating}
+                  style={{ color: "var(--gold-dark)", borderColor: "var(--gold)" }}
+                  title="重新读取已保存的世界观文档，生成全新大纲"
+                >
+                  ⟳ 重新生成
+                </button>
                 <button className="btn btn-primary" onClick={handleSave} disabled={loading}>
                   {loading ? "保存中..." : "保存修改"}
                 </button>

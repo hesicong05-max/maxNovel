@@ -20,6 +20,17 @@ export default function ProjectDetail() {
     if (id) loadProject(id);
   }, [id]);
 
+  // Sync project status when tab becomes visible again (handles refresh / tab switch)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden && id) {
+        refreshProject();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [id]);
+
   async function loadProject(projectId: string) {
     try {
       const data = await api.getProject(projectId);
@@ -40,6 +51,12 @@ export default function ProjectDetail() {
 
   async function refreshProject() {
     if (id) await loadProject(id);
+  }
+
+  async function goToStep(step: Step) {
+    // Refresh project to get latest has_worldview / has_outline before switching
+    await refreshProject();
+    setActiveStep(step);
   }
 
   if (loading) return <div className="empty-state">加载中...</div>;
@@ -70,7 +87,7 @@ export default function ProjectDetail() {
           <div
             key={step.key}
             className={`workflow-step ${i < currentStepIndex ? "completed" : i === currentStepIndex ? "active" : ""}`}
-            onClick={() => setActiveStep(step.key)}
+            onClick={() => goToStep(step.key)}
           >
             <div className="workflow-step-circle">{step.num}</div>
             <div className="workflow-step-label">{step.label}</div>

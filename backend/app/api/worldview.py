@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings as app_settings
 from app.core.auth import User, get_current_user, get_project_for_owner
+from app.core.project_files import save_worldview_file
 from app.core.worldview_parser import worldview_parser
 from app.database import get_db
 from app.models.project import Project, ProjectStatus, Worldview
@@ -257,6 +258,9 @@ async def set_worldview(
     project.status = ProjectStatus.WORLDVIEW_SET
     await db.commit()
     await db.refresh(worldview)
+
+    # Persist as independent document file (DB + file dual write)
+    save_worldview_file(project_id, worldview)
 
     return WorldviewResponse(
         id=worldview.id,
