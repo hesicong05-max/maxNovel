@@ -19,11 +19,11 @@ def build_outline_prompt(
 
     style_text = style_engine.get_style_prompt(genre, style_intensity)
 
-    # Format worldview elements for the prompt
+    # Format worldview elements for the prompt (includes meta details)
     elements_text = _format_elements(worldview_elements)
 
-    # Format reveal plan
-    plan_text = _format_reveal_plan(reveal_plan)
+    # Format reveal plan (convert element IDs to names for LLM readability)
+    plan_text = _format_reveal_plan(reveal_plan, worldview_elements)
 
     system_prompt = f"""你是一位专业的网文创作顾问，擅长{genre.value}类型的网络小说。
 你的任务是根据用户提供的世界观设定，生成一个完整的故事大纲。
@@ -37,6 +37,12 @@ def build_outline_prompt(
 4. 深入期（50%+）揭示深层设定、回收费伏笔、爆发世界观冲突
 5. 每章设定描述不超过总字数的20%
 6. 设定通过剧情和对话自然带出，不用说明文段落
+
+【关键要求】
+1. 大纲必须严格基于【世界观数据】中的设定进行构建，不得凭空创造与世界观无关的角色、势力或体系
+2. 每章的 reveal_elements 必须从【揭示节奏计划】中该章对应的要素名称中选取，保持一致
+3. story_arc 需要整合世界观中的核心矛盾和角色动机
+4. 章节标题应体现世界观特色（如涉及力量体系、势力名称等）
 
 【输出格式要求】
 请输出一个JSON对象，格式如下：
@@ -63,7 +69,7 @@ def build_outline_prompt(
 【揭示节奏计划】
 {plan_text}
 
-请确保大纲中每章的reveal_elements与揭示计划一致，确保世界观信息按节奏逐步展开。"""
+请确保大纲中每章的 reveal_elements 与揭示计划中该章要揭示的要素名称完全一致。"""
 
     return [
         {"role": "system", "content": system_prompt},
@@ -234,7 +240,7 @@ def build_worldview_extraction_prompt(document_text: str, genre: str = "玄幻")
 
 def _format_elements(elements: list[dict[str, Any]]) -> str:
     if not elements:
-        return "（无世界观要素）"
+        return "（无世界观要素，请确保大纲具有完整的独立剧情结构）"
 
     lines = []
     by_category: dict[str, list] = {}
@@ -251,26 +257,86 @@ def _format_elements(elements: list[dict[str, Any]]) -> str:
         "special_setting": "特殊设定",
     }
 
+    # Fields to extract from meta per category (key → label)
+    meta_fields: dict[str, list[tuple[str, str]]] = {
+        "character": [
+            ("personality", "性格"), ("background", "背景"),
+            ("motivation", "动机"), ("ability", "能力"),
+        ],
+        "geography": [("significance", "重要性")],
+        "faction": [("stance", "立场"), ("power_level", "实力等级")],
+        "power_system": [("levels", "等级划分"), ("rules", "规则"), ("limitations", "限制")],
+        "history": [("time", "时间"), ("impact", "影响")],
+        "conflict": [("type", "类型"), ("parties", "涉及方"), ("stakes", "利害关系"), ("resolution_hint", "解决线索")],
+        "special_setting": [("rules", "规则")],
+    }
+
     for cat, items in by_category.items():
         cat_name = category_names.get(cat, cat)
         lines.append(f"\n[{cat_name}]")
         for item in items:
             priority_tag = f"（{item['priority']}）" if item.get("priority") else ""
             lines.append(f"  - {item['name']}{priority_tag}: {item.get('description', '')}")
+            # Include meta fields with detailed info
+            if meta := item.get("meta"):
+                fields = meta_fields.get(cat, [])
+                for key, label in fields:
+                    if val := meta.get(key):
+                        lines.append(f"    · {label}: {val}")
+                # Include relations for characters and factions
+                if relations := meta.get("relations"):
+                    if isinstance(relations, list) and relations:
+                        rel_strs = []
+                        for rel in relations:
+                            if isinstance(rel, dict):
+                                rel_strs.append(f"{rel.get('name', '')}({rel.get('relation', '')})")
+                            elif isinstance(rel, str):
+                                rel_strs.append(rel)
+                        if rel_strs:
+                            lines.append(f"    · 关系: {', '.join(rel_strs)}")
 
     return "\n".join(lines)
 
 
-def _format_reveal_plan(plan: list[dict[str, Any]]) -> str:
+def _format_reveal_plan(
+    plan: list[dict[str, Any]],
+    elements: list[dict[str, Any]] | None = None,
+) -> str:
     if not plan:
         return "（无揭示计划）"
+
+    # Build element_id → name mapping for readable output
+    el_map: dict[str, str] = {}
+    if elements:
+        for e in elements:
+            el_map[e.get("id", "")] = e.get("name", "")
+
+    phase_labels = {
+        "introduction": "引入期",
+        "expansion": "展开期",
+        "deepening": "深入期",
+    }
 
     lines = []
     for entry in plan:
         ch = entry.get("chapter", "?")
         phase = entry.get("phase", "")
-        summary = entry.get("summary", "")
-        lines.append(f"  第{ch}章 [{phase}]: {summary}")
+        element_ids = entry.get("elements", [])
+        phase_label = phase_labels.get(phase, phase)
+
+        # Convert element IDs to readable names
+        element_names = []
+        for eid in element_ids:
+            name = el_map.get(eid, "")
+            if name:
+                element_names.append(name)
+            elif eid:
+                element_names.append(eid)
+
+        if element_names:
+            lines.append(f"  第{ch}章 [{phase_label}]: 揭示 → {', '.join(element_names)}")
+        else:
+            lines.append(f"  第{ch}章 [{phase_label}]: （无新要素，剧情推进）")
 
     return "\n".join(lines)
 

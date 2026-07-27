@@ -49,6 +49,13 @@ async def generate_outline(
 
     elements = worldview_parser.normalize_elements(worldview.parsed_elements)
 
+    if not elements:
+        logger.warning(
+            "No worldview elements found for project %s — outline will lack worldview context. "
+            "parsed_elements type=%s",
+            project_id, type(worldview.parsed_elements).__name__,
+        )
+
     # Build pacing plan
     reveal_plan = pacing_planner.plan(
         elements=elements,
@@ -147,6 +154,13 @@ async def generate_outline_stream(
         raise HTTPException(status_code=400, detail="请先上传世界观")
 
     elements = worldview_parser.normalize_elements(worldview.parsed_elements)
+
+    if not elements:
+        logger.warning(
+            "No worldview elements found for project %s — outline will lack worldview context. "
+            "parsed_elements type=%s",
+            project_id, type(worldview.parsed_elements).__name__,
+        )
 
     reveal_plan = pacing_planner.plan(
         elements=elements,
