@@ -233,7 +233,19 @@ async def get_progress(
     chapter_count = len(chapters)
     current_chapter = chapter_count + 1 if project.status == ProjectStatus.WRITING else chapter_count
 
-    phase = pacing_planner._phase_for(current_chapter or 1, project.total_chapters)
+    # Determine phase from outline's LLM-generated reveal_plan
+    ol_result = await db.execute(select(Outline).where(Outline.project_id == project_id))
+    outline = ol_result.scalar_one_or_none()
+    phase = ""
+    if outline and outline.reveal_plan:
+        for entry in outline.reveal_plan:
+            if isinstance(entry, dict) and entry.get("chapter") == (current_chapter or 1):
+                phase = entry.get("phase", "")
+                break
+    # Fallback to pacing_planner if no LLM-generated plan
+    if not phase:
+        phase = pacing_planner._phase_for(current_chapter or 1, project.total_chapters)
+        phase = pacing_planner.get_phase_label(phase)
 
     pending_fs = [f for f in (memory.foreshadows or []) if f["status"] != "resolved"] if memory else []
 
@@ -241,7 +253,7 @@ async def get_progress(
         total_elements=total,
         revealed_elements=len(revealed),
         reveal_percentage=round(len(revealed) / max(total, 1) * 100, 1),
-        current_phase=pacing_planner.get_phase_label(phase),
+        current_phase=phase,
         current_chapter=current_chapter,
         total_chapters=project.total_chapters,
         pending_foreshadows=len(pending_fs),
@@ -579,9 +591,18 @@ async def _generate_chapter_core(
     project.status = ProjectStatus.WRITING
     await db.commit()
 
-    # Determine phase
-    phase = pacing_planner._phase_for(chapter_num, project.total_chapters)
-    phase_label = pacing_planner.get_phase_label(phase)
+    # Determine phase from outline's LLM-generated reveal_plan
+    phase = ""
+    phase_guidance = ""
+    for entry in (outline.reveal_plan or []):
+        if isinstance(entry, dict) and entry.get("chapter") == chapter_num:
+            phase = entry.get("phase", "")
+            phase_guidance = entry.get("summary", "")
+            break
+    # Fallback to pacing_planner if no LLM-generated plan exists
+    if not phase:
+        phase = pacing_planner._phase_for(chapter_num, project.total_chapters)
+    phase_label = phase if phase else "推进"
 
     # Send metadata
     yield _sse({
@@ -606,6 +627,8 @@ async def _generate_chapter_core(
         context=context,
         chapter_word_count=effective_wc,
         total_chapters=project.total_chapters,
+        phase=phase,
+        phase_guidance=phase_guidance,
     )
 
     # Stream content — use user-configured temperature from settings

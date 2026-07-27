@@ -1,8 +1,9 @@
-"""Unit tests for prompt templates — verify worldview info is fully injected."""
+"""Unit tests for prompt templates — verify worldview info is fully injected and LLM-driven structure."""
 
 import pytest
 from app.prompts.templates import (
     build_outline_prompt,
+    build_chapter_prompt,
     _format_elements,
     _format_reveal_plan,
     _format_reveal_elements,
@@ -206,7 +207,7 @@ class TestFormatRevealPlan:
         assert "深入期" in result
 
 
-# ─── build_outline_prompt integration ─────────────────────────
+# ─── build_outline_prompt integration (LLM-driven, no pre-computed reveal_plan) ──
 
 class TestBuildOutlinePrompt:
     def test_prompt_contains_worldview_details(self):
@@ -244,7 +245,6 @@ class TestBuildOutlinePrompt:
             worldview_elements=elements,
             total_chapters=10,
             chapter_word_count=3000,
-            reveal_plan=[],
             style_intensity="standard",
         )
         assert len(messages) == 2
@@ -260,40 +260,145 @@ class TestBuildOutlinePrompt:
         assert "斗者-斗师-大斗师" in user_content  # levels
         assert "每阶瓶颈三年" in user_content  # limitations
 
-    def test_prompt_requires_reveal_elements_consistency(self):
+    def test_prompt_asks_llm_to_generate_reveal_plan(self):
+        """The prompt should ask the LLM to generate its own reveal_plan."""
         elements = [
             {"id": "e1", "name": "主角身世", "category": "character", "priority": "core"},
             {"id": "e2", "name": "力量体系", "category": "power_system", "priority": "core"},
-        ]
-        reveal_plan = [
-            {"chapter": 1, "phase": "introduction", "elements": ["e1"], "summary": ""},
-            {"chapter": 3, "phase": "expansion", "elements": ["e2"], "summary": ""},
         ]
         messages = build_outline_prompt(
             genre=NovelGenre.XUANHUAN,
             worldview_elements=elements,
             total_chapters=5,
             chapter_word_count=3000,
-            reveal_plan=reveal_plan,
+            style_intensity="standard",
+        )
+        system_content = messages[0]["content"]
+        # Should ask LLM to output reveal_plan
+        assert "reveal_plan" in system_content
+        # Should ask LLM to name phases itself
+        assert "你" in system_content and "命名" in system_content or "phase" in system_content
+
+    def test_prompt_does_not_inject_precomputed_reveal_plan(self):
+        """The prompt should NOT contain a pre-computed reveal plan section."""
+        elements = [
+            {"id": "e1", "name": "主角身世", "category": "character", "priority": "core"},
+        ]
+        messages = build_outline_prompt(
+            genre=NovelGenre.XUANHUAN,
+            worldview_elements=elements,
+            total_chapters=5,
+            chapter_word_count=3000,
             style_intensity="standard",
         )
         user_content = messages[1]["content"]
-        # Reveal plan should show element names, not IDs
-        assert "主角身世" in user_content
-        assert "力量体系" in user_content
-        assert "e1" not in user_content.replace("elements", "")  # avoid matching key names
-        # Should ask for consistency
-        assert "reveal_elements" in messages[0]["content"] or "reveal_elements" in user_content
+        # Should NOT have a "揭示节奏计划" section (pre-computed plan removed)
+        assert "揭示节奏计划" not in user_content
 
-    def test_prompt_includes_genre_style(self):
+    def test_prompt_no_longer_uses_fixed_three_phase_model(self):
+        """The prompt should NOT hardcode '前10%' / '10%-50%' / '50%+' percentages."""
+        elements = [
+            {"id": "e1", "name": "主角", "category": "character", "priority": "core"},
+        ]
+        messages = build_outline_prompt(
+            genre=NovelGenre.XUANHUAN,
+            worldview_elements=elements,
+            total_chapters=10,
+            chapter_word_count=3000,
+            style_intensity="standard",
+        )
+        system_content = messages[0]["content"]
+        # Should NOT have fixed percentage-based phase rules
+        assert "前10%" not in system_content
+        assert "10%-50%" not in system_content
+        assert "50%+" not in system_content
+
+    def test_prompt_includes_element_name_list(self):
+        """The prompt should list element names for the LLM to reference."""
+        elements = [
+            {"id": "e1", "name": "灵气体系", "category": "power_system", "priority": "core"},
+            {"id": "e2", "name": "正邪之战", "category": "conflict", "priority": "core"},
+        ]
+        messages = build_outline_prompt(
+            genre=NovelGenre.XUANHUAN,
+            worldview_elements=elements,
+            total_chapters=5,
+            chapter_word_count=3000,
+            style_intensity="standard",
+        )
+        system_content = messages[0]["content"]
+        # Element names should be listed for LLM reference
+        assert "灵气体系" in system_content
+        assert "正邪之战" in system_content
+
+    def test_prompt_includes_genre_style_as_advisory(self):
         messages = build_outline_prompt(
             genre=NovelGenre.URBAN,
             worldview_elements=[],
             total_chapters=5,
             chapter_word_count=2000,
-            reveal_plan=[],
             style_intensity="intense",
         )
         system_content = messages[0]["content"]
         assert "都市" in system_content
-        assert "intense" in system_content.lower() or "紧凑" in system_content
+        # Style should be marked as advisory
+        assert "参考" in system_content
+
+
+# ─── build_chapter_prompt with LLM-derived phase ──────────────
+
+class TestBuildChapterPrompt:
+    def test_uses_outline_derived_phase(self):
+        """When phase is provided from the outline, it should be used."""
+        messages = build_chapter_prompt(
+            genre=NovelGenre.XUANHUAN,
+            chapter_num=3,
+            chapter_title="暗涌",
+            chapter_summary="主角发现暗流",
+            key_events=["事件A"],
+            elements_to_reveal=[],
+            style_intensity="standard",
+            context={},
+            chapter_word_count=3000,
+            total_chapters=10,
+            phase="暗涌",
+            phase_guidance="秘密逐渐浮出水面",
+        )
+        system_content = messages[0]["content"]
+        assert "暗涌" in system_content
+        assert "秘密逐渐浮出水面" in system_content
+
+    def test_fallback_phase_when_not_provided(self):
+        """When phase is empty, should fall back to position-based heuristic."""
+        messages = build_chapter_prompt(
+            genre=NovelGenre.XUANHUAN,
+            chapter_num=1,
+            chapter_title="开始",
+            chapter_summary="开始",
+            key_events=[],
+            elements_to_reveal=[],
+            style_intensity="standard",
+            context={},
+            chapter_word_count=3000,
+            total_chapters=10,
+        )
+        system_content = messages[0]["content"]
+        # Should have some phase name
+        assert "引入期" in system_content or "展开期" in system_content or "深入期" in system_content
+
+    def test_style_marked_as_advisory(self):
+        """The chapter prompt should mark style guidance as advisory."""
+        messages = build_chapter_prompt(
+            genre=NovelGenre.URBAN,
+            chapter_num=1,
+            chapter_title="第一章",
+            chapter_summary="测试",
+            key_events=[],
+            elements_to_reveal=[],
+            style_intensity="standard",
+            context={},
+            chapter_word_count=2000,
+            total_chapters=10,
+        )
+        system_content = messages[0]["content"]
+        assert "参考" in system_content

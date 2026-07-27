@@ -320,13 +320,30 @@ def _mock_worldview_extraction(user_msg: str) -> str:
 
 
 def _mock_outline(system_msg: str, user_msg: str) -> str:
-    """Mock outline response — generates chapters matching the project's total_chapters."""
+    """Mock outline response — generates chapters and reveal_plan matching the project's total_chapters."""
     import json as _json
     import re as _re
 
     # Parse total_chapters from the system prompt: "请为全部{N}章生成大纲"
     match = _re.search(r"全部(\d+)章", system_msg)
     total = int(match.group(1)) if match else 5
+
+    # Extract element names from the user prompt's worldview data
+    # Look for patterns like "  - name（priority）: description" in the prompt
+    element_names = []
+    for line in user_msg.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            # Extract name: everything after "- " up to first ( or （ or :
+            name_part = stripped[2:]
+            for delim in ["(", "（", "：", ":"]:
+                pos = name_part.find(delim)
+                if pos > 0:
+                    name_part = name_part[:pos]
+                    break
+            name = name_part.strip()
+            if name and len(name) < 20 and name not in element_names:
+                element_names.append(name)
 
     mock_titles = [
         "觉醒", "初入江湖", "暗流涌动", "风起云涌", "暗棋",
@@ -337,19 +354,48 @@ def _mock_outline(system_msg: str, user_msg: str) -> str:
         "命运", "终章序曲", "最后的选择", "决战", "终章",
     ]
 
+    phases = ["起势", "暗涌", "暗涌", "起势", "暗涌",
+              "转折", "爆发", "爆发", "转折", "爆发",
+              "深入", "深入", "爆发", "转折", "深入",
+              "爆发", "深入", "爆发", "深入", "转折",
+              "终局", "终局", "终局", "终局", "终局",
+              "终局", "终局", "终局", "终局", "终局"]
+
     chapters = []
+    reveal_plan = []
     for i in range(1, total + 1):
         title = mock_titles[i - 1] if i <= len(mock_titles) else f"第{i}章"
+        phase = phases[i - 1] if i <= len(phases) else "推进"
+
+        # Assign elements to chapters (spread across the story)
+        reveal_elems = []
+        if element_names:
+            # Reveal 1-2 elements per chapter, cycling through
+            idx = (i - 1) % max(len(element_names), 1)
+            reveal_elems = [element_names[idx]]
+            if i > 1 and len(element_names) > 1:
+                idx2 = (i - 1 + 1) % len(element_names)
+                if idx2 != idx:
+                    reveal_elems.append(element_names[idx2])
+
         chapters.append({
             "chapter_num": i,
             "title": title,
             "summary": f"第{i}章内容概述，主角继续冒险，逐步揭示世界观设定。",
             "key_events": [f"关键事件{i}-1", f"关键事件{i}-2"],
-            "reveal_elements": [f"要素{i}"],
+            "reveal_elements": reveal_elems,
+        })
+
+        reveal_plan.append({
+            "chapter": i,
+            "phase": phase,
+            "elements": reveal_elems,
+            "summary": f"{phase}阶段，推进主线剧情",
         })
 
     return "```json\n" + _json.dumps({
         "story_arc": "一个普通少年在偶然获得神秘传承后，踏上修炼之路，逐步揭开大陆隐藏的远古秘密，最终面对足以颠覆世界的终极抉择。",
+        "reveal_plan": reveal_plan,
         "chapters": chapters,
     }, ensure_ascii=False, indent=2) + "\n```"
 

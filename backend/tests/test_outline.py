@@ -16,6 +16,8 @@ from app.api.outline import (
     _extract_json,
     _normalize_chapter,
     _normalize_outline_data,
+    _normalize_reveal_plan,
+    _derive_reveal_plan_from_chapters,
     _parse_outline_response,
     _to_int,
     _to_list,
@@ -413,6 +415,155 @@ class TestNormalizeOutlineData:
 
 
 # ════════════════════════════════════════════════════════════
+# Unit tests: reveal_plan normalization (LLM-generated)
+# ════════════════════════════════════════════════════════════
+
+
+class TestNormalizeRevealPlan:
+    def test_valid_reveal_plan_passthrough(self):
+        """A well-formed LLM-generated reveal_plan passes through normalized."""
+        raw = [
+            {"chapter": 1, "phase": "起势", "elements": ["灵气体系"], "summary": "开场"},
+            {"chapter": 2, "phase": "暗涌", "elements": ["主角身世"], "summary": "发现秘密"},
+        ]
+        result = _normalize_reveal_plan(raw, 2)
+        assert len(result) == 2
+        assert result[0]["chapter"] == 1
+        assert result[0]["phase"] == "起势"
+        assert result[0]["elements"] == ["灵气体系"]
+        assert result[0]["summary"] == "开场"
+
+    def test_missing_chapters_filled(self):
+        """Missing chapter entries are filled with defaults."""
+        raw = [
+            {"chapter": 1, "phase": "起势", "elements": ["el1"], "summary": ""},
+            {"chapter": 3, "phase": "爆发", "elements": ["el3"], "summary": ""},
+        ]
+        result = _normalize_reveal_plan(raw, 5)
+        assert len(result) == 5
+        assert result[0]["chapter"] == 1
+        assert result[1]["chapter"] == 2
+        assert result[1]["phase"] == "推进"  # default
+        assert result[1]["elements"] == []
+        assert result[2]["chapter"] == 3
+        assert result[2]["phase"] == "爆发"
+        assert result[3]["chapter"] == 4
+        assert result[4]["chapter"] == 5
+
+    def test_missing_fields_get_defaults(self):
+        """Entries with missing fields get defaults."""
+        raw = [{"chapter": 1}]  # Missing phase, elements, summary
+        result = _normalize_reveal_plan(raw, 1)
+        assert len(result) == 1
+        assert result[0]["phase"] == "推进"
+        assert result[0]["elements"] == []
+        assert result[0]["summary"] == ""
+
+    def test_chapter_num_as_string_converted(self):
+        raw = [{"chapter": "3", "phase": "爆发", "elements": ["el1"], "summary": "test"}]
+        result = _normalize_reveal_plan(raw, 5)
+        assert len(result) == 5
+        assert result[2]["chapter"] == 3
+        assert isinstance(result[2]["chapter"], int)
+
+    def test_elements_string_split_to_list(self):
+        raw = [{"chapter": 1, "phase": "起势", "elements": "el1, el2, el3", "summary": ""}]
+        result = _normalize_reveal_plan(raw, 1)
+        assert result[0]["elements"] == ["el1", "el2", "el3"]
+
+    def test_non_list_input_returns_empty(self):
+        assert _normalize_reveal_plan("not a list", 5) == []
+        assert _normalize_reveal_plan(None, 5) == []
+        assert _normalize_reveal_plan({}, 5) == []
+
+    def test_non_dict_entries_skipped(self):
+        raw = ["garbage", {"chapter": 1, "phase": "test", "elements": [], "summary": ""}, 42]
+        result = _normalize_reveal_plan(raw, 3)
+        assert len(result) == 3
+        assert result[0]["phase"] == "test"
+        assert result[1]["phase"] == "推进"  # default
+
+    def test_zero_or_negative_chapter_skipped(self):
+        raw = [
+            {"chapter": 0, "phase": "invalid", "elements": [], "summary": ""},
+            {"chapter": -1, "phase": "invalid", "elements": [], "summary": ""},
+            {"chapter": 1, "phase": "valid", "elements": ["el1"], "summary": ""},
+        ]
+        result = _normalize_reveal_plan(raw, 3)
+        assert len(result) == 3
+        assert result[0]["phase"] == "valid"
+        assert result[1]["phase"] == "推进"  # default
+
+
+class TestDeriveRevealPlanFromChapters:
+    def test_derive_from_chapter_reveal_elements(self):
+        """Derive reveal_plan from chapters' reveal_elements."""
+        chapters = [
+            {"chapter_num": 1, "reveal_elements": ["灵气体系", "主角身世"], "summary": "ch1"},
+            {"chapter_num": 2, "reveal_elements": ["势力关系"], "summary": "ch2"},
+            {"chapter_num": 3, "reveal_elements": [], "summary": "ch3"},
+        ]
+        result = _derive_reveal_plan_from_chapters(chapters)
+        assert len(result) == 3
+        assert result[0]["chapter"] == 1
+        assert result[0]["elements"] == ["灵气体系", "主角身世"]
+        assert result[0]["summary"] == "ch1"
+        assert result[1]["chapter"] == 2
+        assert result[1]["elements"] == ["势力关系"]
+        assert result[2]["chapter"] == 3
+        assert result[2]["elements"] == []
+
+    def test_uses_chapter_phase_if_present(self):
+        chapters = [
+            {"chapter_num": 1, "phase": "起势", "reveal_elements": ["el1"], "summary": ""},
+        ]
+        result = _derive_reveal_plan_from_chapters(chapters)
+        assert result[0]["phase"] == "起势"
+
+    def test_default_phase_when_missing(self):
+        chapters = [
+            {"chapter_num": 1, "reveal_elements": [], "summary": ""},
+        ]
+        result = _derive_reveal_plan_from_chapters(chapters)
+        assert result[0]["phase"] == "推进"
+
+    def test_sorted_by_chapter_num(self):
+        chapters = [
+            {"chapter_num": 3, "reveal_elements": [], "summary": ""},
+            {"chapter_num": 1, "reveal_elements": [], "summary": ""},
+            {"chapter_num": 2, "reveal_elements": [], "summary": ""},
+        ]
+        result = _derive_reveal_plan_from_chapters(chapters)
+        assert result[0]["chapter"] == 1
+        assert result[1]["chapter"] == 2
+        assert result[2]["chapter"] == 3
+
+    def test_empty_chapters_returns_empty(self):
+        assert _derive_reveal_plan_from_chapters([]) == []
+
+    def test_non_list_returns_empty(self):
+        assert _derive_reveal_plan_from_chapters("not a list") == []
+        assert _derive_reveal_plan_from_chapters(None) == []
+
+    def test_non_dict_chapters_skipped(self):
+        chapters = [
+            "garbage",
+            {"chapter_num": 1, "reveal_elements": ["el1"], "summary": ""},
+            42,
+        ]
+        result = _derive_reveal_plan_from_chapters(chapters)
+        assert len(result) == 1
+        assert result[0]["chapter"] == 1
+
+    def test_reveal_elements_string_split(self):
+        chapters = [
+            {"chapter_num": 1, "reveal_elements": "el1, el2, el3", "summary": ""},
+        ]
+        result = _derive_reveal_plan_from_chapters(chapters)
+        assert result[0]["elements"] == ["el1", "el2", "el3"]
+
+
+# ════════════════════════════════════════════════════════════
 # Unit tests: _parse_outline_response (full pipeline)
 # ════════════════════════════════════════════════════════════
 
@@ -520,6 +671,33 @@ class TestParseOutlineResponse:
         result, warning = _parse_outline_response(raw, 1)
         assert result["story_arc"] == "弧"
         assert len(result["chapters"]) == 1
+
+    def test_parse_extracts_llm_generated_reveal_plan(self):
+        """When LLM includes reveal_plan in its response, it should be extracted."""
+        raw = '```json\n{"story_arc": "弧线", "reveal_plan": [{"chapter": 1, "phase": "起势", "elements": ["灵气体系"], "summary": "开场"}, {"chapter": 2, "phase": "暗涌", "elements": ["主角身世"], "summary": "发现秘密"}], "chapters": [{"chapter_num": 1, "title": "T1", "summary": "S1", "key_events": [], "reveal_elements": ["灵气体系"]}, {"chapter_num": 2, "title": "T2", "summary": "S2", "key_events": [], "reveal_elements": ["主角身世"]}]}\n```'
+        result, warning = _parse_outline_response(raw, 2)
+        assert "reveal_plan" in result
+        assert len(result["reveal_plan"]) == 2
+        assert result["reveal_plan"][0]["phase"] == "起势"
+        assert result["reveal_plan"][0]["elements"] == ["灵气体系"]
+        assert result["reveal_plan"][1]["phase"] == "暗涌"
+
+    def test_parse_derives_reveal_plan_when_missing(self):
+        """When LLM doesn't include reveal_plan, derive from chapters' reveal_elements."""
+        raw = '```json\n{"story_arc": "弧线", "chapters": [{"chapter_num": 1, "title": "T1", "summary": "S1", "key_events": [], "reveal_elements": ["灵气体系"]}, {"chapter_num": 2, "title": "T2", "summary": "S2", "key_events": [], "reveal_elements": ["主角身世"]}]}\n```'
+        result, warning = _parse_outline_response(raw, 2)
+        assert "reveal_plan" in result
+        assert len(result["reveal_plan"]) == 2
+        assert result["reveal_plan"][0]["elements"] == ["灵气体系"]
+        assert result["reveal_plan"][1]["elements"] == ["主角身世"]
+        # Derived plan should have default phase
+        assert result["reveal_plan"][0]["phase"] == "推进"
+
+    def test_parse_fallback_includes_empty_reveal_plan(self):
+        """Fallback outline should include empty reveal_plan."""
+        result, warning = _parse_outline_response("garbage", 3)
+        assert "reveal_plan" in result
+        assert result["reveal_plan"] == []
 
 
 # ════════════════════════════════════════════════════════════

@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.llm_client import llm_client
-from app.core.pacing_planner import pacing_planner
 from app.core.memory_store import memory_store
 from app.core.worldview_parser import worldview_parser
 from app.database import get_db, async_session
@@ -56,20 +55,12 @@ async def generate_outline(
             project_id, type(worldview.parsed_elements).__name__,
         )
 
-    # Build pacing plan
-    reveal_plan = pacing_planner.plan(
-        elements=elements,
-        total_chapters=project.total_chapters,
-        chapter_word_count=project.chapter_word_count,
-    )
-
-    # Generate outline via LLM
+    # Generate outline via LLM — the LLM designs its own structure, pacing, and reveal plan
     messages = build_outline_prompt(
         genre=project.genre,
         worldview_elements=elements,
         total_chapters=project.total_chapters,
         chapter_word_count=project.chapter_word_count,
-        reveal_plan=reveal_plan,
         style_intensity=project.style_intensity,
     )
 
@@ -88,12 +79,13 @@ async def generate_outline(
             detail=f"大纲生成失败，LLM 服务异常: {str(e)}",
         )
 
-    # Parse and normalize LLM response
+    # Parse and normalize LLM response (including LLM-generated reveal_plan)
     chapters_data, warning = _parse_outline_response(raw_response, project.total_chapters)
+    reveal_plan = chapters_data.get("reveal_plan", [])
     logger.info(
-        "Outline parsed for project %s: story_arc=%d chars, %d chapters, warning=%s",
-        project_id, len(chapters_data.get("story_arc", "")), len(chapters_data.get("chapters", [])),
-        warning or "none",
+        "Outline parsed for project %s: story_arc=%d chars, %d chapters, %d reveal_plan entries, warning=%s",
+        project_id, len(chapters_data.get("story_arc", "")),
+        len(chapters_data.get("chapters", [])), len(reveal_plan), warning or "none",
     )
 
     # Delete existing outline if any (query directly)
@@ -162,24 +154,16 @@ async def generate_outline_stream(
             project_id, type(worldview.parsed_elements).__name__,
         )
 
-    reveal_plan = pacing_planner.plan(
-        elements=elements,
-        total_chapters=project.total_chapters,
-        chapter_word_count=project.chapter_word_count,
-    )
-
     messages = build_outline_prompt(
         genre=project.genre,
         worldview_elements=elements,
         total_chapters=project.total_chapters,
         chapter_word_count=project.chapter_word_count,
-        reveal_plan=reveal_plan,
         style_intensity=project.style_intensity,
     )
 
     project_id_val = project_id
     total_chapters_val = project.total_chapters
-    reveal_plan_val = reveal_plan
 
     async def event_stream() -> AsyncGenerator[str, None]:
         # Send start event
@@ -204,12 +188,13 @@ async def generate_outline_stream(
                 project_id_val, chunk_count, len(full_response),
             )
 
-            # Parse the complete response
+            # Parse the complete response (including LLM-generated reveal_plan)
             chapters_data, warning = _parse_outline_response(full_response, total_chapters_val)
+            reveal_plan_val = chapters_data.get("reveal_plan", [])
             logger.info(
-                "Outline parsed for project %s: story_arc=%d chars, %d chapters, warning=%s",
+                "Outline parsed for project %s: story_arc=%d chars, %d chapters, %d reveal_plan entries, warning=%s",
                 project_id_val, len(chapters_data.get("story_arc", "")),
-                len(chapters_data.get("chapters", [])), warning or "none",
+                len(chapters_data.get("chapters", [])), len(reveal_plan_val), warning or "none",
             )
 
             # Save to DB in a fresh session
@@ -314,16 +299,9 @@ async def update_outline(
     outline.story_arc = data.story_arc
     outline.chapters = [c.model_dump() for c in data.chapters]
 
-    # Rebuild reveal plan based on edited chapters
-    wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
-    worldview = wv_result.scalar_one_or_none()
-    if worldview:
-        elements = worldview_parser.normalize_elements(worldview.parsed_elements)
-        outline.reveal_plan = pacing_planner.plan(
-            elements=elements,
-            total_chapters=project.total_chapters,
-            chapter_word_count=project.chapter_word_count,
-        )
+    # Derive reveal_plan from the edited chapters' reveal_elements
+    # (no longer re-computing via mechanical pacing_planner)
+    outline.reveal_plan = _derive_reveal_plan_from_chapters(outline.chapters)
 
     await db.commit()
     await db.refresh(outline)
@@ -378,6 +356,15 @@ def _parse_outline_response(raw: str, total_chapters: int) -> tuple[dict[str, An
             data = json.loads(json_str)
             if isinstance(data, dict):
                 normalized = _normalize_outline_data(data, total_chapters)
+
+                # Extract LLM-generated reveal_plan, or derive from chapters
+                raw_reveal_plan = data.get("reveal_plan", [])
+                if isinstance(raw_reveal_plan, list) and raw_reveal_plan:
+                    normalized["reveal_plan"] = _normalize_reveal_plan(raw_reveal_plan, total_chapters)
+                else:
+                    normalized["reveal_plan"] = _derive_reveal_plan_from_chapters(normalized["chapters"])
+                    logger.info("LLM did not include reveal_plan — derived from chapters' reveal_elements")
+
                 # Check if we got fewer chapters than expected from the LLM
                 raw_chapters = data.get("chapters", [])
                 llm_chapter_count = len(raw_chapters) if isinstance(raw_chapters, list) else 0
@@ -406,6 +393,7 @@ def _parse_outline_response(raw: str, total_chapters: int) -> tuple[dict[str, An
             }
             for i in range(total_chapters)
         ],
+        "reveal_plan": [],
     }, warning
 
 
@@ -653,3 +641,72 @@ def _normalize_outline_data(data: dict[str, Any], total_chapters: int) -> dict[s
         "story_arc": story_arc,
         "chapters": result_chapters,
     }
+
+
+def _normalize_reveal_plan(
+    raw_plan: list[Any],
+    total_chapters: int,
+) -> list[dict[str, Any]]:
+    """Normalize the LLM-generated reveal_plan.
+
+    Ensures each entry has: chapter (int), phase (str), elements (list[str]), summary (str).
+    Fills in missing chapters with empty entries.
+    """
+    if not isinstance(raw_plan, list):
+        return []
+
+    by_chapter: dict[int, dict[str, Any]] = {}
+    for entry in raw_plan:
+        if not isinstance(entry, dict):
+            continue
+        ch = _to_int(entry.get("chapter"), 0)
+        if ch <= 0:
+            continue
+        by_chapter[ch] = {
+            "chapter": ch,
+            "phase": _to_str(entry.get("phase")) or "推进",
+            "elements": _to_list(entry.get("elements")),
+            "summary": _to_str(entry.get("summary")),
+        }
+
+    # Ensure all chapters have an entry
+    result = []
+    for i in range(1, total_chapters + 1):
+        if i in by_chapter:
+            result.append(by_chapter[i])
+        else:
+            result.append({
+                "chapter": i,
+                "phase": "推进",
+                "elements": [],
+                "summary": "",
+            })
+
+    return result
+
+
+def _derive_reveal_plan_from_chapters(chapters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Derive a minimal reveal_plan from chapters' reveal_elements.
+
+    Used when the LLM doesn't include a reveal_plan in its response,
+    or when the user edits the outline.
+    """
+    if not isinstance(chapters, list):
+        return []
+
+    plan = []
+    for ch in chapters:
+        if not isinstance(ch, dict):
+            continue
+        ch_num = ch.get("chapter_num", 0)
+        if ch_num <= 0:
+            continue
+        reveal_elements = _to_list(ch.get("reveal_elements"))
+        plan.append({
+            "chapter": ch_num,
+            "phase": ch.get("phase", "") or "推进",
+            "elements": reveal_elements,
+            "summary": _to_str(ch.get("summary")),
+        })
+
+    return sorted(plan, key=lambda e: e["chapter"])

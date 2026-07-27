@@ -12,46 +12,68 @@ def build_outline_prompt(
     worldview_elements: list[dict[str, Any]],
     total_chapters: int,
     chapter_word_count: int,
-    reveal_plan: list[dict[str, Any]],
     style_intensity: str = "standard",
 ) -> list[dict[str, str]]:
-    """Build the system + user prompt for generating story outline."""
+    """Build the system + user prompt for generating story outline.
+
+    The prompt is LLM-driven: the LLM decides chapter structure, pacing,
+    phase division, and element reveal schedule based on the worldview content.
+    No pre-computed reveal_plan is injected — the LLM generates its own.
+    """
 
     style_text = style_engine.get_style_prompt(genre, style_intensity)
 
     # Format worldview elements for the prompt (includes meta details)
     elements_text = _format_elements(worldview_elements)
 
-    # Format reveal plan (convert element IDs to names for LLM readability)
-    plan_text = _format_reveal_plan(reveal_plan, worldview_elements)
+    # Build a list of element names for the LLM to reference
+    element_names = [e["name"] for e in worldview_elements if e.get("name")]
 
     system_prompt = f"""你是一位专业的网文创作顾问，擅长{genre.value}类型的网络小说。
-你的任务是根据用户提供的世界观设定，生成一个完整的故事大纲。
+你的任务是根据用户提供的世界观设定，动态构筑一个完整的故事大纲。
 
 {style_text}
 
-【世界观渐进式揭示原则】
-1. 世界观信息不要在开头集中倾倒，而是根据章节节奏逐步展开
-2. 引入期（前10%）只揭示主角处境和核心矛盾雏形
-3. 展开期（10%-50%）逐步揭露核心体系、势力关系、关键配角
-4. 深入期（50%+）揭示深层设定、回收费伏笔、爆发世界观冲突
-5. 每章设定描述不超过总字数的20%
-6. 设定通过剧情和对话自然带出，不用说明文段落
+以上写作风格仅供参考，你需要根据世界观的实际内容灵活调整节奏和叙事方式，而非生搬硬套。
+
+【核心原则：大纲由世界观驱动，而非套用固定模板】
+1. 故事的结构、章节划分、节奏起伏必须从世界观的角色、矛盾、体系、历史中自然推导
+2. 不要使用固定的三段式（引入-展开-深入）模板，而是根据故事本身的需要设计叙事节奏
+3. 每一章的标题、内容、关键事件应与世界观设定紧密相关，体现独特的设定元素
+4. 世界观中的核心矛盾决定主线冲突，角色动机决定情节走向，力量体系决定成长节奏
+
+【渐进式揭示原则】
+1. 世界观信息不要在开头集中倾倒，而是根据故事节奏自然展开
+2. 早期章节着重建立角色处境和冲突雏形，适度暗示世界观深度
+3. 中段章节逐步展开核心体系、势力关系、关键配角，推动矛盾升级
+4. 后段章节揭示深层设定、回收伏笔、爆发世界观层面的终极冲突
+5. 每章设定描述不超过总字数的20%，通过剧情和对话自然带出，不用说明文段落
+6. 你需要自己决定每章揭示哪些世界观要素，并输出一份揭示计划（reveal_plan）
 
 【关键要求】
 1. 大纲必须严格基于【世界观数据】中的设定进行构建，不得凭空创造与世界观无关的角色、势力或体系
-2. 每章的 reveal_elements 必须从【揭示节奏计划】中该章对应的要素名称中选取，保持一致
-3. story_arc 需要整合世界观中的核心矛盾和角色动机
-4. 章节标题应体现世界观特色（如涉及力量体系、势力名称等）
+2. story_arc 需要整合世界观中的核心矛盾和角色动机
+3. 章节标题应体现世界观特色（如涉及力量体系、势力名称、关键地名等）
+4. 每章的 reveal_elements 必须从以下世界观要素列表中选取：{", ".join(element_names) if element_names else "（无世界观要素）"}
+5. reveal_plan 中的 elements 必须与对应章节的 reveal_elements 一致
+6. reveal_plan 中的 phase 由你根据故事节奏自由命名（如"起势""暗涌""爆发""转折""终局"等），不要使用固定模板名称
 
 【输出格式要求】
 请输出一个JSON对象，格式如下：
 {{
-  "story_arc": "整个故事的弧线描述（2-3句话）",
+  "story_arc": "整个故事的弧线描述（2-3句话，需整合世界观核心矛盾）",
+  "reveal_plan": [
+    {{
+      "chapter": 1,
+      "phase": "你为这一阶段命名的叙事阶段名称",
+      "elements": ["要素名称1", "要素名称2"],
+      "summary": "该阶段叙事意图简述（一句话）"
+    }}
+  ],
   "chapters": [
     {{
       "chapter_num": 1,
-      "title": "章节标题",
+      "title": "章节标题（体现世界观特色）",
       "summary": "本章内容概述（1-2句话）",
       "key_events": ["关键事件1", "关键事件2"],
       "reveal_elements": ["要素名称1", "要素名称2"]
@@ -59,17 +81,17 @@ def build_outline_prompt(
   ]
 }}
 
+注意：reveal_plan 的条目数可以少于章节数（多个章节可属于同一阶段），但必须覆盖全部章节。
 请为全部{total_chapters}章生成大纲。每章约{chapter_word_count}字。"""
 
-    user_prompt = f"""请根据以下信息生成故事大纲：
+    user_prompt = f"""请根据以下世界观设定，动态生成故事大纲：
 
 【世界观数据】
 {elements_text}
 
-【揭示节奏计划】
-{plan_text}
-
-请确保大纲中每章的 reveal_elements 与揭示计划中该章要揭示的要素名称完全一致。"""
+请仔细分析以上世界观中的角色关系、核心矛盾、力量体系、历史背景等要素，
+由此推导出最契合这个故事的结构和节奏，而非套用任何预设模板。
+确保 reveal_plan 与 chapters 中的 reveal_elements 保持一致。"""
 
     return [
         {"role": "system", "content": system_prompt},
@@ -88,8 +110,14 @@ def build_chapter_prompt(
     context: dict[str, Any],
     chapter_word_count: int,
     total_chapters: int,
+    phase: str = "",
+    phase_guidance: str = "",
 ) -> list[dict[str, str]]:
-    """Build the system + user prompt for generating a single chapter."""
+    """Build the system + user prompt for generating a single chapter.
+
+    The ``phase`` and ``phase_guidance`` come from the outline's LLM-generated
+    reveal_plan. If empty, they are derived from position as a fallback.
+    """
 
     style_text = style_engine.get_style_prompt(genre, style_intensity)
 
@@ -99,22 +127,24 @@ def build_chapter_prompt(
     # Format context from memory
     context_text = _format_context(context)
 
-    # Determine phase
-    phase_ratio = chapter_num / max(total_chapters, 1)
-    if phase_ratio < 0.15:
-        phase_name = "引入期"
-        phase_guidance = "保持神秘感，只揭示必要的初始信息，着重建立角色和氛围"
-    elif phase_ratio < 0.5:
-        phase_name = "展开期"
-        phase_guidance = "逐步展开核心设定，通过冲突和事件自然带出世界观要素"
-    else:
-        phase_name = "深入期"
-        phase_guidance = "深入世界观核心，回收伏笔，制造世界观层面的冲突"
+    # Use outline-derived phase, fall back to position-based heuristic
+    if not phase:
+        phase_ratio = chapter_num / max(total_chapters, 1)
+        if phase_ratio < 0.15:
+            phase = "引入期"
+        elif phase_ratio < 0.5:
+            phase = "展开期"
+        else:
+            phase = "深入期"
+    if not phase_guidance:
+        phase_guidance = "根据故事节奏自然推进，通过剧情和对话带出设定信息"
 
     system_prompt = f"""你是一位经验丰富的{genre.value}网文作者，正在创作一部连载小说。
-当前是第{chapter_num}章（共{total_chapters}章），处于{phase_name}。
+当前是第{chapter_num}章（共{total_chapters}章），当前叙事阶段：{phase}。
 
 {style_text}
+
+以上写作风格仅供参考，请根据本章情节和世界观设定灵活运用。
 
 【当前阶段写作指引】
 {phase_guidance}
