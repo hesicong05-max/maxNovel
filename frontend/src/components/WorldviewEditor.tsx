@@ -31,8 +31,15 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
   const [importText, setImportText] = useState("");
   const [importResult, setImportResult] = useState<{ count: number; done: boolean } | null>(null);
   const [source, setSource] = useState<WorldviewSource>("manual");
+  const [saved, setSaved] = useState(false);  // 本地追踪保存状态，解决 hasWorldview prop 闭锁问题
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // 始终尝试加载世界观 — 不仅依赖 hasWorldview prop（该 prop 可能因父组件未刷新而过时）
+  useEffect(() => {
+    loadWorldview();
+  }, [projectId]);
+
+  // 如果父组件刷新后 hasWorldview 变为 true，也重新加载
   useEffect(() => {
     if (hasWorldview) loadWorldview();
   }, [hasWorldview]);
@@ -40,6 +47,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
   async function loadWorldview() {
     try {
       const wv = await api.getWorldview(projectId);
+      if (!wv) return;  // 无世界观时不报错，静默返回
       setData({
         characters: wv.characters || [],
         geography: wv.geography || [],
@@ -51,6 +59,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
         raw_text: wv.raw_text,
         source: (wv.source as WorldviewSource) || "manual",
       });
+      setSaved(true);  // 已有世界观数据，标记为已保存
       if (wv.source === "imported") { setMode("import"); setSource("imported"); }
       else if (wv.source === "hybrid") { setMode("hybrid"); setSource("hybrid"); }
       if (wv.parsed_elements) {
@@ -63,7 +72,10 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
         setParsedInfo({ total: wv.parsed_elements.length, by_category: byCat, by_priority: byPri });
       }
     } catch (e) {
-      console.error("Failed to load worldview:", e);
+      // 404 表示无世界观，属正常情况
+      if (e instanceof Error && !e.message.includes("404")) {
+        console.error("Failed to load worldview:", e);
+      }
     }
   }
 
@@ -108,6 +120,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
     setLoading(true);
     try {
       await api.setWorldview(projectId, { ...data, source });
+      setSaved(true);  // 立即标记为已保存，使"进入下一步"按钮显示
       await loadWorldview();
       alert("世界观已保存");
     } catch (e) {
@@ -216,6 +229,11 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           {mode === "hybrid" && importResult?.done && (
             <div style={{ marginTop: "0.625rem", padding: "0.5rem 0.75rem", background: "var(--gold-light)", borderRadius: "var(--r-md)", fontSize: "12px", color: "var(--gold-dark)", borderLeft: "3px solid var(--gold)" }}>
               混合模式已激活 — 下方表单已填充提取的要素，你可以自由编辑、添加或删除任意内容
+            </div>
+          )}
+          {importResult?.done && !saved && (
+            <div style={{ marginTop: "0.625rem", padding: "0.5rem 0.75rem", background: "#fef9e7", borderRadius: "var(--r-md)", fontSize: "13px", color: "#7d6608", borderLeft: "3px solid #f39c12" }}>
+              ⚠️ 世界观已提取但尚未保存。请点击下方「保存世界观」按钮保存后，再进入下一步生成大纲。
             </div>
           )}
         </div>
@@ -352,12 +370,13 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
             </div>
           )}
 
-          {/* Actions */}
-          <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.875rem" }}>
+          {/* Actions — 底部导航按钮 */}
+          <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.875rem", flexWrap: "wrap" }}>
             <button className="btn btn-primary btn-lg" onClick={handleSave} disabled={loading}>
               {loading ? "保存中..." : "保存世界观"}
             </button>
-            {hasWorldview && (
+            {/* saved 或 hasWorldview 任一为 true 即显示"进入下一步" — 解决 prop 闭锁问题 */}
+            {(hasWorldview || saved) && (
               <button className="btn btn-danger btn-lg" onClick={onComplete}>
                 进入下一步 →
               </button>

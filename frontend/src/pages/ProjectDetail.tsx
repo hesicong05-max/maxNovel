@@ -101,7 +101,7 @@ export default function ProjectDetail() {
           hasOutline={project.has_outline}
           projectStatus={project.status}
           onComplete={async () => { await refreshProject(); setActiveStep("writing"); }}
-          onBack={() => setActiveStep("worldview")}
+          onBack={async () => { await refreshProject(); setActiveStep("worldview"); }}
         />
       )}
 
