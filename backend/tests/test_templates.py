@@ -510,6 +510,45 @@ class TestBuildOutlinePrompt:
         # Style should be marked as advisory
         assert "参考" in system_content
 
+    def test_story_arc_requests_comprehensive_summary(self):
+        """story_arc instruction should request a comprehensive summary (not 2-3 sentences)."""
+        messages = build_outline_prompt(
+            genre=NovelGenre.XUANHUAN,
+            worldview_elements=[
+                {"id": "e1", "name": "主角", "category": "character", "priority": "core"},
+            ],
+            total_chapters=10,
+            chapter_word_count=3000,
+        )
+        system_content = messages[0]["content"]
+        # Should request 300-600 chars, not 2-3 sentences
+        assert "300-600" in system_content
+        # Should mention the key dimensions
+        assert "核心主题" in system_content
+        assert "主线脉络" in system_content
+        assert "角色" in system_content and "弧线" in system_content
+        assert "世界观" in system_content and "驱动" in system_content
+        assert "情感基调" in system_content
+        # Should NOT have the old 2-3 sentence instruction
+        assert "2-3句话" not in system_content
+
+    def test_story_arc_must_be_based_on_worldview(self):
+        """story_arc instruction should require basing content on worldview data."""
+        messages = build_outline_prompt(
+            genre=NovelGenre.XUANHUAN,
+            worldview_elements=[
+                {"id": "e1", "name": "叶辰", "category": "character", "priority": "core"},
+            ],
+            total_chapters=5,
+            chapter_word_count=2000,
+        )
+        system_content = messages[0]["content"]
+        # Should require basing on worldview data
+        assert "基于世界观数据" in system_content or "基于世界观" in system_content
+        # Should mention specific aspects
+        assert "矛盾" in system_content
+        assert "节奏" in system_content
+
 
 # ─── build_chapter_prompt with LLM-derived phase ──────────────
 

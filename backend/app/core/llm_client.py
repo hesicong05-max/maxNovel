@@ -393,8 +393,27 @@ def _mock_outline(system_msg: str, user_msg: str) -> str:
             "summary": f"{phase}阶段，推进主线剧情",
         })
 
+    # Build a comprehensive story_arc based on extracted worldview elements
+    char_names = [n for n in element_names if n][:3]
+    char_str = "、".join(char_names) if char_names else "主角"
+    story_arc = (
+        f"【核心主题】一个关于成长、抉择与命运的故事。{char_str}在世界观的设定下，"
+        f"逐步发现自身与世界的深层联系，面对不断升级的矛盾和挑战，最终走向关键的终极抉择。\n"
+        f"【主线脉络】故事以{char_str}的成长为线索，从平凡的起点出发，逐步卷入世界观中的核心矛盾。"
+        f"随着力量的提升和视野的开阔，主角逐步揭开隐藏在世界表象之下的真相，"
+        f"在各方势力的博弈中寻找自己的立场。\n"
+        f"【关键矛盾】世界观中的核心矛盾推动主线发展，主角在势力冲突、理念对立和个人情感之间不断抉择。"
+        f"随着故事推进，矛盾从个人层面逐步升级到世界观层面的终极冲突。\n"
+        f"【角色弧线】{char_str}从普通少年成长为能够影响世界格局的关键人物，"
+        f"在经历中不断修正自己的信念和目标。配角的加入丰富了故事维度，各自承担不同的叙事功能。\n"
+        f"【世界观驱动】世界观中的力量体系决定成长节奏，地理设定影响剧情走向，"
+        f"历史事件埋下伏笔并在后期回收，特殊设定为故事增添独特魅力。\n"
+        f"【情感基调】整体氛围从平淡渐入高潮，前期侧重探索和成长，中段矛盾升级带来紧张感，"
+        f"后期进入决战与抉择的高潮，最终以收束和余韵收尾。"
+    )
+
     return "```json\n" + _json.dumps({
-        "story_arc": "一个普通少年在偶然获得神秘传承后，踏上修炼之路，逐步揭开大陆隐藏的远古秘密，最终面对足以颠覆世界的终极抉择。",
+        "story_arc": story_arc,
         "reveal_plan": reveal_plan,
         "chapters": chapters,
     }, ensure_ascii=False, indent=2) + "\n```"

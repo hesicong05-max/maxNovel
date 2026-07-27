@@ -148,7 +148,7 @@ export default function OutlineReview({ projectId, hasOutline, projectStatus, on
       {generating && (
         <div className="card empty-state">
           <h3>正在生成大纲...</h3>
-          <p>AI 正在根据世界观和写作范式规划故事弧线和章节安排</p>
+          <p>AI 正在根据世界观和写作范式规划故事大纲综述和章节安排</p>
           {streamProgress && (
             <div style={{ marginTop: "0.75rem", fontSize: "13px", color: "var(--text-3)" }}>
               <p>已接收 {streamProgress.chars} 字符的数据流...</p>
@@ -185,15 +185,18 @@ export default function OutlineReview({ projectId, hasOutline, projectStatus, on
             </div>
           )}
 
-          {/* Story arc */}
+          {/* Story arc — 大纲综述 */}
           <div className="card">
-            <label className="form-label">故事弧线</label>
+            <label className="form-label">故事大纲综述</label>
+            <p style={{ fontSize: "12px", color: "var(--text-3)", margin: "0 0 0.5rem 0" }}>
+              包含核心主题与思想、主线脉络与关键矛盾、角色成长弧线、世界观驱动逻辑、情感基调与节奏
+            </p>
             <textarea
               className="form-textarea"
               value={outline.story_arc}
               onChange={(e) => setOutline({ ...outline, story_arc: e.target.value })}
               disabled={isConfirmed}
-              style={{ minHeight: "60px" }}
+              style={{ minHeight: "180px", lineHeight: "1.6" }}
             />
           </div>
 
@@ -204,8 +207,8 @@ export default function OutlineReview({ projectId, hasOutline, projectStatus, on
               <div style={{ fontSize: "12px", maxHeight: "200px", overflowY: "auto" }}>
                 {outline.reveal_plan.slice(0, 10).map((entry) => (
                   <div key={entry.chapter} style={{ padding: "0.375rem 0", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                    <span className={`tag tag-phase-${entry.phase}`}>
-                      {entry.phase === "introduction" ? "引入" : entry.phase === "expansion" ? "展开" : "深入"}
+                    <span className="tag tag-gold">
+                      {entry.phase || "推进"}
                     </span>
                     <span style={{ color: "var(--text-2)" }}>第{entry.chapter}章: {entry.summary || "（无）"}</span>
                   </div>
