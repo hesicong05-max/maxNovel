@@ -116,8 +116,8 @@ async def generate_outline(
         "id": outline.id,
         "project_id": project_id,
         "story_arc": outline.story_arc,
-        "chapters": outline.chapters,
-        "reveal_plan": outline.reveal_plan,
+        "chapters": outline.chapters if isinstance(outline.chapters, list) else [],
+        "reveal_plan": outline.reveal_plan if isinstance(outline.reveal_plan, list) else [],
     }
     if warning:
         result["warning"] = warning
@@ -234,8 +234,8 @@ async def generate_outline_stream(
                     "id": outline.id,
                     "project_id": project_id_val,
                     "story_arc": outline.story_arc,
-                    "chapters": outline.chapters,
-                    "reveal_plan": outline.reveal_plan,
+                    "chapters": outline.chapters if isinstance(outline.chapters, list) else [],
+                    "reveal_plan": outline.reveal_plan if isinstance(outline.reveal_plan, list) else [],
                 }
 
                 event_data = {"type": "complete", "outline": result}
@@ -275,8 +275,8 @@ async def get_outline(
         "id": outline.id,
         "project_id": project_id,
         "story_arc": outline.story_arc,
-        "chapters": outline.chapters,
-        "reveal_plan": outline.reveal_plan,
+        "chapters": outline.chapters if isinstance(outline.chapters, list) else [],
+        "reveal_plan": outline.reveal_plan if isinstance(outline.reveal_plan, list) else [],
         "created_at": outline.created_at.isoformat() if outline.created_at else None,
         "updated_at": outline.updated_at.isoformat() if outline.updated_at else None,
     }
@@ -318,8 +318,8 @@ async def update_outline(
         "id": outline.id,
         "project_id": project_id,
         "story_arc": outline.story_arc,
-        "chapters": outline.chapters,
-        "reveal_plan": outline.reveal_plan,
+        "chapters": outline.chapters if isinstance(outline.chapters, list) else [],
+        "reveal_plan": outline.reveal_plan if isinstance(outline.reveal_plan, list) else [],
     }
 
 

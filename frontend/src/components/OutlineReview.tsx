@@ -2,6 +2,14 @@ import { useEffect, useState, useRef } from "react";
 import { api } from "@/services/api";
 import type { OutlineData, OutlineChapter } from "@/types";
 
+function normalizeOutline(data: OutlineData): OutlineData {
+  return {
+    ...data,
+    chapters: Array.isArray(data.chapters) ? data.chapters : [],
+    reveal_plan: Array.isArray(data.reveal_plan) ? data.reveal_plan : [],
+  };
+}
+
 interface Props {
   projectId: string;
   hasOutline: boolean;
@@ -33,7 +41,7 @@ export default function OutlineReview({ projectId, hasOutline, projectStatus, on
   async function loadOutline() {
     try {
       const data = await api.getOutline(projectId);
-      setOutline(data);
+      setOutline(normalizeOutline(data));
     } catch (e) {
       console.error("Failed to load outline:", e);
     }
@@ -63,7 +71,7 @@ export default function OutlineReview({ projectId, hasOutline, projectStatus, on
             break;
           case "complete":
             if (msg.outline) {
-              setOutline(msg.outline);
+              setOutline(normalizeOutline(msg.outline));
               setWarning(msg.warning || null);
               gotComplete = true;
             }
