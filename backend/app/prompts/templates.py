@@ -144,11 +144,20 @@ def build_chapter_prompt(
     total_chapters: int,
     phase: str = "",
     phase_guidance: str = "",
+    story_arc: str = "",
+    all_element_names: list[str] | None = None,
 ) -> list[dict[str, str]]:
     """Build the system + user prompt for generating a single chapter.
 
     The ``phase`` and ``phase_guidance`` come from the outline's LLM-generated
     reveal_plan. If empty, they are derived from position as a fallback.
+
+    ``story_arc`` is the overall story outline summary from the Outline model,
+    giving the LLM context about the big-picture direction.
+
+    ``all_element_names`` is a compact list of ALL worldview element names,
+    so the LLM knows which names are valid to reference (not just the ones
+    scheduled for reveal in this chapter).
     """
 
     genre = _normalize_genre(genre)
@@ -173,8 +182,21 @@ def build_chapter_prompt(
     if not phase_guidance:
         phase_guidance = "根据故事节奏自然推进，通过剧情和对话带出设定信息"
 
+    # Build the valid-names reference string
+    valid_names_str = "、".join(all_element_names) if all_element_names else "（无世界观要素）"
+
     system_prompt = f"""你是一位经验丰富的网文作者，正在创作一部连载小说。
 当前是第{chapter_num}章（共{total_chapters}章），当前叙事阶段：{phase}。
+
+【最高优先级原则：世界观即一切】
+故事中的所有角色名称、地名、势力名称、力量体系、历史事件、矛盾冲突，
+必须且只能来自用户提供的世界观数据。
+禁止凭空创造世界观中不存在的任何角色、势力、地名或体系。
+以下是世界观中所有合法的要素名称，写作时只能使用这些名称：
+{valid_names_str}
+
+【故事大纲方向】
+{story_arc or "（未提供大纲综述，请根据章节信息推进剧情）"}
 
 【以下写作风格指导仅用于叙事技巧参考，故事内容必须来自世界观设定】
 {style_text}
@@ -193,6 +215,7 @@ def build_chapter_prompt(
 - 本章目标字数：约{chapter_word_count}字
 - 保持叙事节奏，对话与叙述交替
 - 章节末尾留下钩子（悬念/期待），吸引读者继续
+- 直接输出纯文本正文，不要使用 Markdown 格式（#标题、**加粗**等）
 
 直接输出章节正文，不要加任何说明性文字或元标注。"""
 

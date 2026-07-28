@@ -34,13 +34,31 @@ class TestMockResponse:
         assert "chapters" in result
 
     def test_chapter_mock(self):
-        messages = [
-            {"role": "system", "content": "请生成章节内容 chapter"},
-            {"role": "user", "content": "第一章：觉醒"},
-        ]
-        result = _mock_response(messages)
+        # Test with worldview elements in the prompt
+        user_msg = """请写作第1章。
+
+【章节信息】
+标题：觉醒
+内容概述：主角发现自身力量
+
+【本章需要揭示的世界观要素】
+  - 林远（角色）: 天生灵觉的少年
+    · 性格: 坚韧
+
+【故事上下文】
+【前情回顾】
+  （本章为第一章）"""
+        result = _mock_chapter(user_msg)
         assert "林远" in result
         assert len(result) > 100
+        assert "开发模式" in result
+
+    def test_chapter_mock_no_elements(self):
+        # Test with no worldview elements (fallback)
+        user_msg = "请写作第1章。标题：测试"
+        result = _mock_chapter(user_msg)
+        assert len(result) > 10
+        assert "开发模式" in result
 
     def test_default_mock(self):
         messages = [

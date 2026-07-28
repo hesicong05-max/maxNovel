@@ -349,7 +349,14 @@ async def generate_chapter(
 ):
     """Generate a single chapter with streaming output."""
     # Verify ownership before streaming starts
-    await get_project_for_owner(project_id, current_user, db)
+    project = await get_project_for_owner(project_id, current_user, db)
+
+    # Validate chapter number range
+    if chapter_num < 1 or chapter_num > project.total_chapters:
+        raise HTTPException(
+            status_code=422,
+            detail=f"章节号 {chapter_num} 超出范围（1-{project.total_chapters}）",
+        )
 
     return StreamingResponse(
         _stream_single_chapter(project_id, chapter_num, current_user.id),
@@ -473,8 +480,12 @@ async def _stream_batch_generate(
                 db, project_id, chapter_num, batch_mode=True
             ):
                 # Parse the event to track success
-                if '"type": "complete"' in event or '"type":"complete"' in event:
-                    chapter_success = True
+                try:
+                    event_data = json.loads(event.replace("data: ", "").strip())
+                    if event_data.get("type") == "complete":
+                        chapter_success = True
+                except (json.JSONDecodeError, ValueError):
+                    pass
                 yield event
 
             if chapter_success:
@@ -517,6 +528,11 @@ async def _generate_chapter_core(
     project = result.scalar_one_or_none()
     if not project:
         yield _sse({"type": "error", "error": "项目不存在"})
+        return
+
+    # Validate chapter number range (safety net for batch generation)
+    if chapter_num < 1 or chapter_num > project.total_chapters:
+        yield _sse({"type": "error", "error": f"章节号 {chapter_num} 超出范围（1-{project.total_chapters}）"})
         return
 
     # Load outline
@@ -643,6 +659,8 @@ async def _generate_chapter_core(
         total_chapters=project.total_chapters,
         phase=phase,
         phase_guidance=phase_guidance,
+        story_arc=outline.story_arc or "",
+        all_element_names=[e["name"] for e in all_elements if e.get("name")],
     )
 
     # Stream content — use user-configured temperature from settings
@@ -650,9 +668,18 @@ async def _generate_chapter_core(
     llm_s = load_llm_settings()
     stream_temperature = llm_s.get("temperature", 0.8)
 
+    # Calculate max_tokens based on target word count.
+    # Chinese text: ~1-2 tokens per character, use 2x for safety + buffer.
+    # Cap at 8192 (common API limit for output tokens).
+    user_max_tokens = llm_s.get("max_tokens", 4096)
+    calculated_max = effective_wc * 2 + 500
+    stream_max_tokens = min(max(calculated_max, user_max_tokens, 2048), 8192)
+
     full_content = ""
     try:
-        async for chunk in llm_client.chat_stream(messages, temperature=stream_temperature):
+        async for chunk in llm_client.chat_stream(
+            messages, temperature=stream_temperature, max_tokens=stream_max_tokens
+        ):
             full_content += chunk
             yield _sse({"type": "content", "text": chunk, "chapter_num": chapter_num})
     except Exception as e:

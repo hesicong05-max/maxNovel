@@ -430,25 +430,73 @@ def _mock_outline(system_msg: str, user_msg: str) -> str:
 
 
 def _mock_chapter(user_msg: str) -> str:
-    return """少年林远站在悬崖边，山风猎猎吹过他的衣袍。
+    """Mock chapter content — uses worldview element names extracted from the prompt."""
+    import re as _re
 
-脚下是无尽的深渊，身后是追杀者的脚步声。他攥紧了拳头，感受着体内那股陌生而强大的力量——三日前，他不过是个在小镇上砍柴度日的普通人。
+    # Extract element names from "本章需要揭示的世界观要素" section
+    # Format: "  - name（category）: description"
+    element_names = []
+    for line in user_msg.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            name_part = stripped[2:]
+            # Cut at first ( or （ to get just the name
+            for delim in ["(", "（", "：", ":"]:
+                pos = name_part.find(delim)
+                if pos > 0:
+                    name_part = name_part[:pos]
+                    break
+            name = name_part.strip()
+            if name and len(name) < 30 and name not in element_names:
+                # Skip non-name lines like "本章为第一章"
+                if not name.startswith("（") and not name.startswith("第"):
+                    element_names.append(name)
 
-"别跑了！"身后的声音带着嘲弄，"一个连聚气境都没到的废物，能逃到哪里去？"
+    # Extract chapter title from "标题：xxx"
+    title_match = _re.search(r"标题[：:]\s*(.+)", user_msg)
+    title = title_match.group(1).strip() if title_match else ""
 
-林远没有回头。他在等——等体内那团灼热的光芒再次涌动。那是他坠入古洞时触碰到的神秘传承，一个改变了命运的意外。
+    # Build mock content using extracted names
+    if element_names:
+        char_name = element_names[0]
+        other_names = element_names[1:] if len(element_names) > 1 else []
+        other_str = "、".join(other_names) if other_names else "这个世界"
 
-风更大了。他闭上眼，感受着丹田中旋转的光团。
+        content = f"""{title or f'第章'}
 
-追杀者越来越近。
+{char_name}站在窗前，目光穿过城市的灯火，心中翻涌着复杂的情绪。
 
-就在刀锋即将触及他后背的一瞬间，林远猛然睁开双眼，一道金光从他体内迸发而出——
+身后传来脚步声，是{other_str}派来的人。
 
-那是整个大陆都已经消失了千年的力量。
+"你确定要这么做吗？"来人的声音带着一丝犹豫。
+
+{char_name}没有回头，只是淡淡地说："从一开始，就没有退路了。"
+
+夜风从窗缝里灌进来，吹动了桌上的文件。那上面印着几个刺眼的大字——
+
+一切的改变，就从今夜开始。
 
 ---
 
 *这是开发模式的模拟章节内容。配置 LLM API Key 后将生成真实的 AI 内容。*"""
+    else:
+        content = f"""{title or '第一章'}
+
+夜色如墨，万籁俱寂。
+
+主角独自站在命运的十字路口，回想着近日发生的一切。那些看似偶然的相遇、那些不经意间的暗示，此刻串联成一条清晰的线索——
+
+真相远比想象中更加复杂。
+
+但无论如何，既然选择了这条路，就没有回头的道理。
+
+前方的路或许充满荆棘，但也同样通向无限可能。
+
+---
+
+*这是开发模式的模拟章节内容。配置 LLM API Key 后将生成基于你世界观的 AI 内容。*"""
+
+    return content
 
 
 llm_client = LLMClient()
