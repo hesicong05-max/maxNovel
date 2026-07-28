@@ -19,8 +19,8 @@ SETTINGS_FILE = DATA_DIR / "llm_settings.json"
 
 DEFAULT_SETTINGS = {
     "api_key": "",
-    "base_url": "https://qianfan.baidubce.com/v2",
-    "model": "ernie-4.5-turbo-128k",
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat",
     "temperature": 0.8,
     "max_tokens": 4096,
 }
