@@ -16,9 +16,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy requirements and install into venv using Tsinghua PyPI mirror
+# Copy requirements and install into venv using Alibaba Cloud PyPI mirror
+# (Alibaba mirror is more reliable on Alibaba Cloud ECS and supports the pinned versions)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+RUN pip install \
+    --no-cache-dir \
+    --timeout 120 \
+    --retries 5 \
+    -i https://mirrors.aliyun.com/pypi/simple/ \
+    -r requirements.txt
 
 # ---- Runtime stage ----
 FROM m.daocloud.io/docker.io/library/python:3.13.1-slim
