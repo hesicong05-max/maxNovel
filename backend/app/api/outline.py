@@ -13,6 +13,7 @@ from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.llm_client import llm_client
 from app.core.memory_store import memory_store
 from app.core.project_files import save_outline_file
+from app.core.settings_store import load_settings
 from app.core.worldview_parser import worldview_parser
 from app.database import get_db, async_session
 from app.models.project import Outline, Project, ProjectStatus, Worldview
@@ -52,8 +53,17 @@ async def generate_outline(
     if not elements:
         logger.warning(
             "No worldview elements found for project %s — outline will lack worldview context. "
-            "parsed_elements type=%s",
+            "parsed_elements type=%s, raw characters=%d, conflicts=%d",
             project_id, type(worldview.parsed_elements).__name__,
+            len(worldview.characters or []), len(worldview.conflicts or []),
+        )
+    else:
+        logger.info(
+            "Worldview loaded for project %s: %d elements, characters=%d, conflicts=%d, power_system=%d",
+            project_id, len(elements),
+            len(worldview.characters or []),
+            len(worldview.conflicts or []),
+            len(worldview.power_system or []),
         )
 
     # Generate outline via LLM — the LLM designs its own structure, pacing, and reveal plan
@@ -63,6 +73,19 @@ async def generate_outline(
         total_chapters=project.total_chapters,
         chapter_word_count=project.chapter_word_count,
         style_intensity=project.style_intensity,
+    )
+
+    # Log LLM config and prompt size for debugging
+    s = load_settings()
+    logger.info(
+        "Outline generation: project=%s, api_key=%s, model=%s, elements=%d, "
+        "system_prompt=%d chars, user_prompt=%d chars",
+        project_id,
+        "configured" if s.get("api_key") else "MISSING (will use mock)",
+        s.get("model", "?"),
+        len(elements),
+        len(messages[0]["content"]),
+        len(messages[1]["content"]),
     )
 
     try:
@@ -127,6 +150,92 @@ async def generate_outline(
     return result
 
 
+@router.get("/{project_id}/diagnose")
+async def diagnose_outline(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Diagnostic endpoint: shows worldview elements, LLM config, and prompt preview.
+
+    Use this to debug why generated outlines don't relate to the worldview.
+    """
+    project = await get_project_for_owner(project_id, current_user, db)
+
+    # Check worldview
+    wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
+    worldview = wv_result.scalar_one_or_none()
+
+    if not worldview:
+        return {"error": "No worldview found for this project"}
+
+    elements = worldview_parser.normalize_elements(worldview.parsed_elements)
+
+    # Check LLM config
+    settings = load_settings()
+
+    # Build prompt preview
+    messages = build_outline_prompt(
+        genre=project.genre,
+        worldview_elements=elements,
+        total_chapters=project.total_chapters,
+        chapter_word_count=project.chapter_word_count,
+        style_intensity=project.style_intensity,
+    )
+
+    # Check if outline exists
+    ol_result = await db.execute(select(Outline).where(Outline.project_id == project_id))
+    existing_outline = ol_result.scalar_one_or_none()
+
+    return {
+        "project": {
+            "id": project.id,
+            "title": project.title,
+            "genre": project.genre.value,
+            "total_chapters": project.total_chapters,
+            "status": project.status.value,
+        },
+        "worldview": {
+            "source": worldview.source,
+            "has_raw_text": bool(worldview.raw_text),
+            "raw_text_length": len(worldview.raw_text or ""),
+            "characters_count": len(worldview.characters or []),
+            "geography_count": len(worldview.geography or []),
+            "factions_count": len(worldview.factions or []),
+            "power_system_count": len(worldview.power_system or []),
+            "history_count": len(worldview.history or []),
+            "conflicts_count": len(worldview.conflicts or []),
+            "special_settings_count": len(worldview.special_settings or []),
+            "parsed_elements_count": len(elements),
+            "parsed_elements_type": type(worldview.parsed_elements).__name__,
+            "characters_preview": [c.get("name", "?") for c in (worldview.characters or [])[:5]],
+            "conflicts_preview": [c.get("name", "?") for c in (worldview.conflicts or [])[:5]],
+        },
+        "llm": {
+            "api_key_configured": bool(settings.get("api_key")),
+            "api_key_prefix": (settings.get("api_key", "") or "")[:8] + "..." if settings.get("api_key") else "(empty)",
+            "base_url": settings.get("base_url", ""),
+            "model": settings.get("model", ""),
+            "using_mock": not bool(settings.get("api_key")),
+        },
+        "prompt": {
+            "system_prompt_length": len(messages[0]["content"]),
+            "user_prompt_length": len(messages[1]["content"]),
+            "user_prompt_first_800_chars": messages[1]["content"][:800],
+        },
+        "elements_preview": [
+            {"name": e["name"], "category": e["category"], "priority": e["priority"]}
+            for e in elements[:10]
+        ],
+        "existing_outline": {
+            "has_outline": existing_outline is not None,
+            "story_arc_length": len(existing_outline.story_arc) if existing_outline else 0,
+            "story_arc_preview": (existing_outline.story_arc[:300] + "...") if existing_outline and len(existing_outline.story_arc) > 300 else (existing_outline.story_arc if existing_outline else ""),
+            "chapters_count": len(existing_outline.chapters) if existing_outline and isinstance(existing_outline.chapters, list) else 0,
+        } if existing_outline else None,
+    }
+
+
 @router.post("/{project_id}/generate-stream")
 async def generate_outline_stream(
     project_id: str,
@@ -154,8 +263,16 @@ async def generate_outline_stream(
     if not elements:
         logger.warning(
             "No worldview elements found for project %s — outline will lack worldview context. "
-            "parsed_elements type=%s",
+            "parsed_elements type=%s, raw characters=%d, conflicts=%d",
             project_id, type(worldview.parsed_elements).__name__,
+            len(worldview.characters or []), len(worldview.conflicts or []),
+        )
+    else:
+        logger.info(
+            "Worldview loaded for project %s (stream): %d elements, characters=%d, conflicts=%d",
+            project_id, len(elements),
+            len(worldview.characters or []),
+            len(worldview.conflicts or []),
         )
 
     messages = build_outline_prompt(
@@ -164,6 +281,19 @@ async def generate_outline_stream(
         total_chapters=project.total_chapters,
         chapter_word_count=project.chapter_word_count,
         style_intensity=project.style_intensity,
+    )
+
+    # Log LLM config for debugging
+    s = load_settings()
+    logger.info(
+        "Outline stream generation: project=%s, api_key=%s, model=%s, elements=%d, "
+        "system_prompt=%d chars, user_prompt=%d chars",
+        project_id,
+        "configured" if s.get("api_key") else "MISSING (will use mock)",
+        s.get("model", "?"),
+        len(elements),
+        len(messages[0]["content"]),
+        len(messages[1]["content"]),
     )
 
     project_id_val = project_id
