@@ -42,66 +42,77 @@ def _load_worldview_elements(worldview: Worldview, project_id: str) -> list[dict
     3. Read worldview.json file and re-parse
 
     Returns the elements list (may be empty if all sources fail).
+    Raises HTTPException with a clear message if parsing fails due to malformed data.
     """
-    # Try DB parsed_elements first
-    elements = worldview_parser.normalize_elements(worldview.parsed_elements)
-    if elements:
-        logger.info(
-            "Elements loaded from DB parsed_elements: %d elements for project %s",
-            len(elements), project_id,
-        )
-        return elements
-
-    # Fallback 1: re-parse from DB structured fields
-    db_dict = {
-        "characters": worldview.characters or [],
-        "geography": worldview.geography or [],
-        "factions": worldview.factions or [],
-        "power_system": worldview.power_system or [],
-        "history": worldview.history or [],
-        "conflicts": worldview.conflicts or [],
-        "special_settings": worldview.special_settings or [],
-    }
-    total_in_db = sum(len(v) for v in db_dict.values())
-    if total_in_db > 0:
-        elements = worldview_parser.parse(db_dict)
+    try:
+        # Try DB parsed_elements first
+        elements = worldview_parser.normalize_elements(worldview.parsed_elements)
         if elements:
-            logger.warning(
-                "DB parsed_elements was empty — re-parsed from DB structured fields: "
-                "%d elements for project %s", len(elements), project_id,
+            logger.info(
+                "Elements loaded from DB parsed_elements: %d elements for project %s",
+                len(elements), project_id,
             )
             return elements
 
-    # Fallback 2: read from worldview.json file
-    wv_file = load_worldview_file(project_id)
-    if wv_file:
-        file_dict = {
-            "characters": wv_file.get("characters", []),
-            "geography": wv_file.get("geography", []),
-            "factions": wv_file.get("factions", []),
-            "power_system": wv_file.get("power_system", []),
-            "history": wv_file.get("history", []),
-            "conflicts": wv_file.get("conflicts", []),
-            "special_settings": wv_file.get("special_settings", []),
+        # Fallback 1: re-parse from DB structured fields
+        db_dict = {
+            "characters": worldview.characters or [],
+            "geography": worldview.geography or [],
+            "factions": worldview.factions or [],
+            "power_system": worldview.power_system or [],
+            "history": worldview.history or [],
+            "conflicts": worldview.conflicts or [],
+            "special_settings": worldview.special_settings or [],
         }
-        total_in_file = sum(len(v) for v in file_dict.values())
-        if total_in_file > 0:
-            elements = worldview_parser.parse(file_dict)
+        total_in_db = sum(len(v) for v in db_dict.values())
+        if total_in_db > 0:
+            elements = worldview_parser.parse(db_dict)
             if elements:
                 logger.warning(
-                    "DB parsed_elements AND DB structured fields were empty — "
-                    "loaded from worldview.json file: %d elements for project %s",
-                    len(elements), project_id,
+                    "DB parsed_elements was empty — re-parsed from DB structured fields: "
+                    "%d elements for project %s", len(elements), project_id,
                 )
                 return elements
 
-    logger.error(
-        "All worldview element sources are empty for project %s! "
-        "DB parsed_elements=%s, DB structured total=%d, file exists=%s",
-        project_id, type(worldview.parsed_elements).__name__,
-        total_in_db, wv_file is not None,
-    )
-    return []
+        # Fallback 2: read from worldview.json file
+        wv_file = load_worldview_file(project_id)
+        if wv_file:
+            file_dict = {
+                "characters": wv_file.get("characters", []),
+                "geography": wv_file.get("geography", []),
+                "factions": wv_file.get("factions", []),
+                "power_system": wv_file.get("power_system", []),
+                "history": wv_file.get("history", []),
+                "conflicts": wv_file.get("conflicts", []),
+                "special_settings": wv_file.get("special_settings", []),
+            }
+            total_in_file = sum(len(v) for v in file_dict.values())
+            if total_in_file > 0:
+                elements = worldview_parser.parse(file_dict)
+                if elements:
+                    logger.warning(
+                        "DB parsed_elements AND DB structured fields were empty — "
+                        "loaded from worldview.json file: %d elements for project %s",
+                        len(elements), project_id,
+                    )
+                    return elements
+
+        logger.error(
+            "All worldview element sources are empty for project %s! "
+            "DB parsed_elements=%s, DB structured total=%d, file exists=%s",
+            project_id, type(worldview.parsed_elements).__name__,
+            total_in_db, wv_file is not None,
+        )
+        return []
+    except Exception as e:
+        logger.error(
+            "Failed to parse worldview elements for project %s: %s",
+            project_id, str(e), exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"世界观数据解析失败: {str(e)}。请检查世界观内容格式，或尝试重新保存世界观。"
+        )
 
 
 @router.post("/{project_id}/generate")

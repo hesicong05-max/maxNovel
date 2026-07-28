@@ -21,12 +21,24 @@ class WorldviewParser:
       - background: Flavor/detail, revealed opportunistically
     """
 
+    def _as_dict(self, item: Any, default_name: str) -> dict[str, Any]:
+        """Ensure an item is a dict; if it's a string, wrap it as {name: string}.
+
+        Other types are converted to empty dict with the default name.
+        """
+        if isinstance(item, dict):
+            return item
+        if isinstance(item, str):
+            return {"name": item}
+        return {"name": default_name}
+
     def parse(self, worldview_data: dict[str, Any]) -> list[dict[str, Any]]:
         elements: list[dict[str, Any]] = []
         _counter = 0  # Ensures unique IDs even for same-name elements
 
         # Characters — main character(s) are core, others scale by importance
-        for i, char in enumerate(worldview_data.get("characters", [])):
+        for i, raw in enumerate(worldview_data.get("characters", [])):
+            char = self._as_dict(raw, f"角色{i+1}")
             priority = "core" if i == 0 else ("important" if i < 3 else "secondary")
             elements.append(self._make_element(
                 category="character",
@@ -39,7 +51,8 @@ class WorldviewParser:
             _counter += 1
 
         # Geography — starting location is core
-        for i, geo in enumerate(worldview_data.get("geography", [])):
+        for i, raw in enumerate(worldview_data.get("geography", [])):
+            geo = self._as_dict(raw, f"地点{i+1}")
             priority = "core" if i == 0 else ("important" if i < 2 else "secondary")
             elements.append(self._make_element(
                 category="geography",
@@ -52,7 +65,8 @@ class WorldviewParser:
             _counter += 1
 
         # Factions
-        for i, fac in enumerate(worldview_data.get("factions", [])):
+        for i, raw in enumerate(worldview_data.get("factions", [])):
+            fac = self._as_dict(raw, f"势力{i+1}")
             priority = "important" if i < 2 else "secondary"
             elements.append(self._make_element(
                 category="faction",
@@ -65,7 +79,8 @@ class WorldviewParser:
             _counter += 1
 
         # Power system — always core for xuanhuan/xianxia
-        for i, ps in enumerate(worldview_data.get("power_system", [])):
+        for i, raw in enumerate(worldview_data.get("power_system", [])):
+            ps = self._as_dict(raw, f"力量体系{i+1}")
             priority = "core" if i == 0 else "important"
             elements.append(self._make_element(
                 category="power_system",
@@ -78,7 +93,8 @@ class WorldviewParser:
             _counter += 1
 
         # History events
-        for i, hist in enumerate(worldview_data.get("history", [])):
+        for i, raw in enumerate(worldview_data.get("history", [])):
+            hist = self._as_dict(raw, f"历史事件{i+1}")
             priority = "important" if i < 2 else ("secondary" if i < 4 else "background")
             elements.append(self._make_element(
                 category="history",
@@ -91,7 +107,8 @@ class WorldviewParser:
             _counter += 1
 
         # Conflicts — always core
-        for i, conf in enumerate(worldview_data.get("conflicts", [])):
+        for i, raw in enumerate(worldview_data.get("conflicts", [])):
+            conf = self._as_dict(raw, f"矛盾{i+1}")
             priority = "core" if i == 0 else "important"
             elements.append(self._make_element(
                 category="conflict",
@@ -104,7 +121,8 @@ class WorldviewParser:
             _counter += 1
 
         # Special settings
-        for i, ss in enumerate(worldview_data.get("special_settings", [])):
+        for i, raw in enumerate(worldview_data.get("special_settings", [])):
+            ss = self._as_dict(raw, f"特殊设定{i+1}")
             priority = "important" if i < 2 else "secondary"
             elements.append(self._make_element(
                 category="special_setting",
