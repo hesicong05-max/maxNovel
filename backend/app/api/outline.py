@@ -250,6 +250,14 @@ async def generate_outline(
     }
     if warning:
         result["warning"] = warning
+
+    # Verify worldview alignment (post-generation check)
+    alignment_warning = _verify_worldview_alignment(chapters_data, elements)
+    if alignment_warning:
+        result.setdefault("warning", alignment_warning) if not warning else None
+        if not warning:
+            result["warning"] = alignment_warning
+
     return result
 
 
@@ -535,6 +543,13 @@ async def generate_outline_stream(
                 event_data = {"type": "complete", "outline": result}
                 if warning:
                     event_data["warning"] = warning
+
+                # Verify worldview alignment (post-generation check)
+                # elements is in the outer scope (captured by closure)
+                alignment_warning = _verify_worldview_alignment(chapters_data, elements)
+                if alignment_warning and not warning:
+                    event_data["warning"] = alignment_warning
+
                 yield f'data: {json.dumps(event_data, ensure_ascii=False)}\n\n'
 
         except Exception as e:
@@ -631,6 +646,64 @@ async def confirm_outline(
     await db.commit()
 
     return {"message": "大纲已确认，可以开始逐章生成", "status": project.status.value}
+
+
+def _verify_worldview_alignment(
+    chapters_data: dict[str, Any],
+    elements: list[dict[str, Any]],
+) -> str | None:
+    """Check if the generated outline actually uses worldview element names.
+
+    Returns a warning string if alignment is poor, or None if it looks good.
+    """
+    if not elements:
+        return None
+
+    # Collect all element names (2+ chars to avoid false matches)
+    element_names = [
+        e["name"] for e in elements
+        if e.get("name") and len(e["name"]) >= 2
+    ]
+    if not element_names:
+        return None
+
+    # Combine all text from the outline that should contain worldview references
+    story_arc = chapters_data.get("story_arc", "")
+    chapters = chapters_data.get("chapters", [])
+    all_text = story_arc
+    for ch in chapters:
+        if isinstance(ch, dict):
+            all_text += " " + _to_str(ch.get("title"))
+            all_text += " " + _to_str(ch.get("summary"))
+            for ev in _to_list(ch.get("key_events")):
+                all_text += " " + ev
+
+    # Check how many element names appear in the outline text
+    found_names = [name for name in element_names if name in all_text]
+    match_ratio = len(found_names) / len(element_names) if element_names else 0
+
+    logger.info(
+        "Worldview alignment check: %d/%d element names found in outline (ratio=%.0f%%). "
+        "Found: %s. Missing: %s",
+        len(found_names), len(element_names), match_ratio * 100,
+        found_names[:5],
+        [n for n in element_names if n not in found_names][:5],
+    )
+
+    if match_ratio < 0.2:
+        missing = [n for n in element_names if n not in found_names]
+        return (
+            f"⚠️ 大纲与世界观的匹配度较低（{len(found_names)}/{len(element_names)} 个世界观要素出现在大纲中）。"
+            f"缺失的要素包括：{', '.join(missing[:5])}。"
+            "建议重新生成大纲，或检查世界观内容是否完整。"
+        )
+    if match_ratio < 0.5:
+        return (
+            f"⚠️ 大纲部分内容可能未充分使用世界观设定（{len(found_names)}/{len(element_names)} 个要素匹配）。"
+            "建议检查大纲是否偏离了世界观设定。"
+        )
+
+    return None
 
 
 def _parse_outline_response(raw: str, total_chapters: int) -> tuple[dict[str, Any], str | None]:

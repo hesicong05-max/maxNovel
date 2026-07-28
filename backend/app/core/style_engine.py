@@ -214,8 +214,10 @@ class StyleEngine:
             lines.append(f"  - {key}: {val}")
 
         lines.append("")
-        lines.append("【常见元素】")
-        lines.append(f"  {', '.join(tmpl['common_tropes'])}")
+        lines.append("【重要提醒】")
+        lines.append("  以上风格指导仅涉及叙事技巧和节奏把控，不涉及具体内容设定。")
+        lines.append("  故事的角色、世界观、剧情走向必须完全来自用户提供的世界观数据，")
+        lines.append("  不得引入本类型常见的套路性内容（如特定题材、特定桥段等）。")
 
         return "\n".join(lines)
 
