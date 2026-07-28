@@ -172,6 +172,15 @@ class StyleEngine:
     }
 
     def get_template(self, genre: NovelGenre) -> dict[str, Any]:
+        # Handle string genre from DB (PostgreSQL may return string instead of enum)
+        if isinstance(genre, str) and not isinstance(genre, NovelGenre):
+            from app.models.project import NovelGenre as _NG
+            for g in _NG:
+                if g.value == genre or g.name == genre:
+                    genre = g
+                    break
+            else:
+                genre = NovelGenre.XUANHUAN
         return self.TEMPLATES.get(genre, self.TEMPLATES[NovelGenre.XUANHUAN])
 
     def get_style_prompt(self, genre: NovelGenre, style_intensity: str = "standard") -> str:

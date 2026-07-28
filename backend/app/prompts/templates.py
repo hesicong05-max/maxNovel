@@ -7,6 +7,23 @@ from app.core.style_engine import style_engine
 from app.models.project import NovelGenre
 
 
+def _normalize_genre(genre: Any) -> NovelGenre:
+    """Convert genre to NovelGenre enum, handling string inputs from DB.
+
+    In PostgreSQL, the Enum column may return a string instead of an
+    enum instance in certain edge cases (e.g. after alembic migration).
+    """
+    if isinstance(genre, NovelGenre):
+        return genre
+    if isinstance(genre, str):
+        for g in NovelGenre:
+            if g.value == genre or g.name == genre:
+                return g
+        # Default to xuanhuan if unknown
+        return NovelGenre.XUANHUAN
+    return NovelGenre.XUANHUAN
+
+
 def build_outline_prompt(
     genre: NovelGenre,
     worldview_elements: list[dict[str, Any]],
@@ -20,6 +37,8 @@ def build_outline_prompt(
     phase division, and element reveal schedule based on the worldview content.
     No pre-computed reveal_plan is injected — the LLM generates its own.
     """
+
+    genre = _normalize_genre(genre)
 
     style_text = style_engine.get_style_prompt(genre, style_intensity)
 
@@ -118,6 +137,8 @@ def build_chapter_prompt(
     The ``phase`` and ``phase_guidance`` come from the outline's LLM-generated
     reveal_plan. If empty, they are derived from position as a fallback.
     """
+
+    genre = _normalize_genre(genre)
 
     style_text = style_engine.get_style_prompt(genre, style_intensity)
 

@@ -20,8 +20,8 @@ class TestSettingsDefaults:
     def test_default_llm_settings(self):
         s = Settings(DEBUG=True)
         assert s.LLM_API_KEY == ""
-        assert s.LLM_BASE_URL == "https://qianfan.baidubce.com/v2"
-        assert s.LLM_MODEL == "ernie-4.5-turbo-128k"
+        assert s.LLM_BASE_URL == "https://api.deepseek.com/v1"
+        assert s.LLM_MODEL == "deepseek-chat"
         assert s.LLM_MAX_TOKENS == 4096
         assert s.LLM_TEMPERATURE == 0.8
 

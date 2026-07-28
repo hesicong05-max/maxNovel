@@ -111,62 +111,74 @@ async def generate_outline(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Generate a story outline based on worldview and pacing plan (non-streaming fallback)."""
-    project = await get_project_for_owner(project_id, current_user, db)
+    try:
+        project = await get_project_for_owner(project_id, current_user, db)
 
-    # Query worldview directly (avoid lazy loading)
-    wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
-    worldview = wv_result.scalar_one_or_none()
-    if not worldview:
-        raise HTTPException(status_code=400, detail="请先上传世界观")
+        # Query worldview directly (avoid lazy loading)
+        wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
+        worldview = wv_result.scalar_one_or_none()
+        if not worldview:
+            raise HTTPException(status_code=400, detail="请先上传世界观")
 
-    # Load elements with fallback to file if DB is empty
-    elements = _load_worldview_elements(worldview, project_id)
+        # Load elements with fallback to file if DB is empty
+        elements = _load_worldview_elements(worldview, project_id)
 
-    if not elements:
-        raise HTTPException(
-            status_code=400,
-            detail="世界观要素为空，无法生成大纲。请确保已正确填写世界观内容并保存。"
+        if not elements:
+            raise HTTPException(
+                status_code=400,
+                detail="世界观要素为空，无法生成大纲。请确保已正确填写世界观内容并保存。"
+            )
+        else:
+            logger.info(
+                "Worldview loaded for project %s: %d elements, characters=%d, conflicts=%d, power_system=%d",
+                project_id, len(elements),
+                len(worldview.characters or []),
+                len(worldview.conflicts or []),
+                len(worldview.power_system or []),
+            )
+
+        # Generate outline via LLM — the LLM designs its own structure, pacing, and reveal plan
+        messages = build_outline_prompt(
+            genre=project.genre,
+            worldview_elements=elements,
+            total_chapters=project.total_chapters,
+            chapter_word_count=project.chapter_word_count,
+            style_intensity=project.style_intensity,
         )
-    else:
+
+        # Log LLM config and prompt size for debugging
+        s = load_settings()
+        using_mock = not bool(s.get("api_key"))
         logger.info(
-            "Worldview loaded for project %s: %d elements, characters=%d, conflicts=%d, power_system=%d",
-            project_id, len(elements),
-            len(worldview.characters or []),
-            len(worldview.conflicts or []),
-            len(worldview.power_system or []),
+            "Outline generation: project=%s, api_key=%s, model=%s, elements=%d, "
+            "system_prompt=%d chars, user_prompt=%d chars, using_mock=%s",
+            project_id,
+            "configured" if s.get("api_key") else "MISSING (will use mock)",
+            s.get("model", "?"),
+            len(elements),
+            len(messages[0]["content"]),
+            len(messages[1]["content"]),
+            using_mock,
+        )
+        # Log first 500 chars of user prompt to verify worldview data is included
+        logger.info(
+            "Outline user prompt preview (first 500 chars):\n%s",
+            messages[1]["content"][:500],
         )
 
-    # Generate outline via LLM — the LLM designs its own structure, pacing, and reveal plan
-    messages = build_outline_prompt(
-        genre=project.genre,
-        worldview_elements=elements,
-        total_chapters=project.total_chapters,
-        chapter_word_count=project.chapter_word_count,
-        style_intensity=project.style_intensity,
-    )
-
-    # Log LLM config and prompt size for debugging
-    s = load_settings()
-    using_mock = not bool(s.get("api_key"))
-    logger.info(
-        "Outline generation: project=%s, api_key=%s, model=%s, elements=%d, "
-        "system_prompt=%d chars, user_prompt=%d chars, using_mock=%s",
-        project_id,
-        "configured" if s.get("api_key") else "MISSING (will use mock)",
-        s.get("model", "?"),
-        len(elements),
-        len(messages[0]["content"]),
-        len(messages[1]["content"]),
-        using_mock,
-    )
-    # Log first 500 chars of user prompt to verify worldview data is included
-    logger.info(
-        "Outline user prompt preview (first 500 chars):\n%s",
-        messages[1]["content"][:500],
-    )
-
-    # Use user-configured temperature (fallback to 0.7 for outline generation)
-    outline_temperature = s.get("temperature", 0.7) or 0.7
+        # Use user-configured temperature (fallback to 0.7 for outline generation)
+        outline_temperature = s.get("temperature", 0.7) or 0.7
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Outline setup failed for project %s: %s",
+            project_id, str(e), exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"大纲生成初始化失败: {str(e)}",
+        )
 
     try:
         raw_response = await llm_client.chat(
@@ -365,62 +377,74 @@ async def generate_outline_stream(
       data: {"type":"complete","outline":{...}}\n\n
       data: {"type":"error","message":"..."}\n\n
     """
-    project = await get_project_for_owner(project_id, current_user, db)
+    try:
+        project = await get_project_for_owner(project_id, current_user, db)
 
-    wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
-    worldview = wv_result.scalar_one_or_none()
-    if not worldview:
-        raise HTTPException(status_code=400, detail="请先上传世界观")
+        wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
+        worldview = wv_result.scalar_one_or_none()
+        if not worldview:
+            raise HTTPException(status_code=400, detail="请先上传世界观")
 
-    # Load elements with fallback to file if DB is empty
-    elements = _load_worldview_elements(worldview, project_id)
+        # Load elements with fallback to file if DB is empty
+        elements = _load_worldview_elements(worldview, project_id)
 
-    if not elements:
-        raise HTTPException(
-            status_code=400,
-            detail="世界观要素为空，无法生成大纲。请确保已正确填写世界观内容并保存。"
+        if not elements:
+            raise HTTPException(
+                status_code=400,
+                detail="世界观要素为空，无法生成大纲。请确保已正确填写世界观内容并保存。"
+            )
+        else:
+            logger.info(
+                "Worldview loaded for project %s (stream): %d elements, characters=%d, conflicts=%d",
+                project_id, len(elements),
+                len(worldview.characters or []),
+                len(worldview.conflicts or []),
+            )
+
+        messages = build_outline_prompt(
+            genre=project.genre,
+            worldview_elements=elements,
+            total_chapters=project.total_chapters,
+            chapter_word_count=project.chapter_word_count,
+            style_intensity=project.style_intensity,
         )
-    else:
+
+        # Log LLM config for debugging
+        s = load_settings()
+        using_mock = not bool(s.get("api_key"))
         logger.info(
-            "Worldview loaded for project %s (stream): %d elements, characters=%d, conflicts=%d",
-            project_id, len(elements),
-            len(worldview.characters or []),
-            len(worldview.conflicts or []),
+            "Outline stream generation: project=%s, api_key=%s, model=%s, elements=%d, "
+            "system_prompt=%d chars, user_prompt=%d chars, using_mock=%s",
+            project_id,
+            "configured" if s.get("api_key") else "MISSING (will use mock)",
+            s.get("model", "?"),
+            len(elements),
+            len(messages[0]["content"]),
+            len(messages[1]["content"]),
+            using_mock,
+        )
+        # Log first 500 chars of user prompt to verify worldview data is included
+        logger.info(
+            "Outline stream user prompt preview (first 500 chars):\n%s",
+            messages[1]["content"][:500],
         )
 
-    messages = build_outline_prompt(
-        genre=project.genre,
-        worldview_elements=elements,
-        total_chapters=project.total_chapters,
-        chapter_word_count=project.chapter_word_count,
-        style_intensity=project.style_intensity,
-    )
+        # Use user-configured temperature (fallback to 0.7 for outline generation)
+        outline_temperature = s.get("temperature", 0.7) or 0.7
 
-    # Log LLM config for debugging
-    s = load_settings()
-    using_mock = not bool(s.get("api_key"))
-    logger.info(
-        "Outline stream generation: project=%s, api_key=%s, model=%s, elements=%d, "
-        "system_prompt=%d chars, user_prompt=%d chars, using_mock=%s",
-        project_id,
-        "configured" if s.get("api_key") else "MISSING (will use mock)",
-        s.get("model", "?"),
-        len(elements),
-        len(messages[0]["content"]),
-        len(messages[1]["content"]),
-        using_mock,
-    )
-    # Log first 500 chars of user prompt to verify worldview data is included
-    logger.info(
-        "Outline stream user prompt preview (first 500 chars):\n%s",
-        messages[1]["content"][:500],
-    )
-
-    # Use user-configured temperature (fallback to 0.7 for outline generation)
-    outline_temperature = s.get("temperature", 0.7) or 0.7
-
-    project_id_val = project_id
-    total_chapters_val = project.total_chapters
+        project_id_val = project_id
+        total_chapters_val = project.total_chapters
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Outline stream setup failed for project %s: %s",
+            project_id, str(e), exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"大纲生成初始化失败: {str(e)}",
+        )
 
     async def event_stream() -> AsyncGenerator[str, None]:
         # Send start event
