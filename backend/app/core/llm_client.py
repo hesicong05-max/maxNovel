@@ -76,6 +76,11 @@ class LLMClient:
         """
         self._reload()
         if not self.api_key:
+            logger.warning(
+                "LLM MOCK MODE: No API key configured — returning mock response. "
+                "The generated content will be generic and NOT based on your worldview data. "
+                "Configure API key via /settings page or .env file."
+            )
             return _mock_response(messages)
 
         client = await self._get_client()
@@ -156,6 +161,11 @@ class LLMClient:
         self._reload()
         if not self.api_key:
             # Simulate streaming for dev/demo
+            logger.warning(
+                "LLM MOCK MODE (stream): No API key configured — returning mock response. "
+                "The generated content will be generic and NOT based on your worldview data. "
+                "Configure API key via /settings page or .env file."
+            )
             mock_text = _mock_response(messages)
             chunk_size = 20
             for i in range(0, len(mock_text), chunk_size):

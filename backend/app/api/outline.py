@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.llm_client import llm_client
 from app.core.memory_store import memory_store
-from app.core.project_files import save_outline_file
+from app.core.project_files import save_outline_file, load_worldview_file
 from app.core.settings_store import load_settings
 from app.core.worldview_parser import worldview_parser
 from app.database import get_db, async_session
@@ -33,6 +33,77 @@ router = APIRouter(prefix="/api/outline", tags=["outline"])
 OUTLINE_MAX_TOKENS = 8192
 
 
+def _load_worldview_elements(worldview: Worldview, project_id: str) -> list[dict[str, Any]]:
+    """Load worldview elements with fallback to file if DB parsed_elements is empty.
+
+    Priority:
+    1. DB parsed_elements (normalized)
+    2. Re-parse from DB structured fields (characters, geography, etc.)
+    3. Read worldview.json file and re-parse
+
+    Returns the elements list (may be empty if all sources fail).
+    """
+    # Try DB parsed_elements first
+    elements = worldview_parser.normalize_elements(worldview.parsed_elements)
+    if elements:
+        logger.info(
+            "Elements loaded from DB parsed_elements: %d elements for project %s",
+            len(elements), project_id,
+        )
+        return elements
+
+    # Fallback 1: re-parse from DB structured fields
+    db_dict = {
+        "characters": worldview.characters or [],
+        "geography": worldview.geography or [],
+        "factions": worldview.factions or [],
+        "power_system": worldview.power_system or [],
+        "history": worldview.history or [],
+        "conflicts": worldview.conflicts or [],
+        "special_settings": worldview.special_settings or [],
+    }
+    total_in_db = sum(len(v) for v in db_dict.values())
+    if total_in_db > 0:
+        elements = worldview_parser.parse(db_dict)
+        if elements:
+            logger.warning(
+                "DB parsed_elements was empty — re-parsed from DB structured fields: "
+                "%d elements for project %s", len(elements), project_id,
+            )
+            return elements
+
+    # Fallback 2: read from worldview.json file
+    wv_file = load_worldview_file(project_id)
+    if wv_file:
+        file_dict = {
+            "characters": wv_file.get("characters", []),
+            "geography": wv_file.get("geography", []),
+            "factions": wv_file.get("factions", []),
+            "power_system": wv_file.get("power_system", []),
+            "history": wv_file.get("history", []),
+            "conflicts": wv_file.get("conflicts", []),
+            "special_settings": wv_file.get("special_settings", []),
+        }
+        total_in_file = sum(len(v) for v in file_dict.values())
+        if total_in_file > 0:
+            elements = worldview_parser.parse(file_dict)
+            if elements:
+                logger.warning(
+                    "DB parsed_elements AND DB structured fields were empty — "
+                    "loaded from worldview.json file: %d elements for project %s",
+                    len(elements), project_id,
+                )
+                return elements
+
+    logger.error(
+        "All worldview element sources are empty for project %s! "
+        "DB parsed_elements=%s, DB structured total=%d, file exists=%s",
+        project_id, type(worldview.parsed_elements).__name__,
+        total_in_db, wv_file is not None,
+    )
+    return []
+
+
 @router.post("/{project_id}/generate")
 async def generate_outline(
     project_id: str,
@@ -48,14 +119,13 @@ async def generate_outline(
     if not worldview:
         raise HTTPException(status_code=400, detail="请先上传世界观")
 
-    elements = worldview_parser.normalize_elements(worldview.parsed_elements)
+    # Load elements with fallback to file if DB is empty
+    elements = _load_worldview_elements(worldview, project_id)
 
     if not elements:
-        logger.warning(
-            "No worldview elements found for project %s — outline will lack worldview context. "
-            "parsed_elements type=%s, raw characters=%d, conflicts=%d",
-            project_id, type(worldview.parsed_elements).__name__,
-            len(worldview.characters or []), len(worldview.conflicts or []),
+        raise HTTPException(
+            status_code=400,
+            detail="世界观要素为空，无法生成大纲。请确保已正确填写世界观内容并保存。"
         )
     else:
         logger.info(
@@ -77,20 +147,30 @@ async def generate_outline(
 
     # Log LLM config and prompt size for debugging
     s = load_settings()
+    using_mock = not bool(s.get("api_key"))
     logger.info(
         "Outline generation: project=%s, api_key=%s, model=%s, elements=%d, "
-        "system_prompt=%d chars, user_prompt=%d chars",
+        "system_prompt=%d chars, user_prompt=%d chars, using_mock=%s",
         project_id,
         "configured" if s.get("api_key") else "MISSING (will use mock)",
         s.get("model", "?"),
         len(elements),
         len(messages[0]["content"]),
         len(messages[1]["content"]),
+        using_mock,
     )
+    # Log first 500 chars of user prompt to verify worldview data is included
+    logger.info(
+        "Outline user prompt preview (first 500 chars):\n%s",
+        messages[1]["content"][:500],
+    )
+
+    # Use user-configured temperature (fallback to 0.7 for outline generation)
+    outline_temperature = s.get("temperature", 0.7) or 0.7
 
     try:
         raw_response = await llm_client.chat(
-            messages, temperature=0.7, max_tokens=OUTLINE_MAX_TOKENS
+            messages, temperature=outline_temperature, max_tokens=OUTLINE_MAX_TOKENS
         )
         logger.info(
             "Outline LLM response for project %s: %d chars, %d elements, %d chapters",
@@ -162,17 +242,22 @@ async def diagnose_outline(
     """
     project = await get_project_for_owner(project_id, current_user, db)
 
-    # Check worldview
+    # Check worldview from DB
     wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
     worldview = wv_result.scalar_one_or_none()
 
     if not worldview:
         return {"error": "No worldview found for this project"}
 
-    elements = worldview_parser.normalize_elements(worldview.parsed_elements)
+    # Load elements using the same fallback logic as generate_outline
+    elements = _load_worldview_elements(worldview, project_id)
+
+    # Also load worldview file for comparison
+    wv_file = load_worldview_file(project_id)
 
     # Check LLM config
     settings = load_settings()
+    using_mock = not bool(settings.get("api_key"))
 
     # Build prompt preview
     messages = build_outline_prompt(
@@ -187,6 +272,35 @@ async def diagnose_outline(
     ol_result = await db.execute(select(Outline).where(Outline.project_id == project_id))
     existing_outline = ol_result.scalar_one_or_none()
 
+    # DB structured fields summary
+    db_structured = {
+        "characters": len(worldview.characters or []),
+        "geography": len(worldview.geography or []),
+        "factions": len(worldview.factions or []),
+        "power_system": len(worldview.power_system or []),
+        "history": len(worldview.history or []),
+        "conflicts": len(worldview.conflicts or []),
+        "special_settings": len(worldview.special_settings or []),
+    }
+
+    # Worldview file summary
+    file_summary = None
+    if wv_file:
+        file_summary = {
+            "exists": True,
+            "source": wv_file.get("source"),
+            "characters": len(wv_file.get("characters", [])),
+            "geography": len(wv_file.get("geography", [])),
+            "factions": len(wv_file.get("factions", [])),
+            "power_system": len(wv_file.get("power_system", [])),
+            "history": len(wv_file.get("history", [])),
+            "conflicts": len(wv_file.get("conflicts", [])),
+            "special_settings": len(wv_file.get("special_settings", [])),
+            "parsed_elements_in_file": len(wv_file.get("parsed_elements", [])) if isinstance(wv_file.get("parsed_elements"), list) else "not-list",
+        }
+    else:
+        file_summary = {"exists": False}
+
     return {
         "project": {
             "id": project.id,
@@ -199,29 +313,29 @@ async def diagnose_outline(
             "source": worldview.source,
             "has_raw_text": bool(worldview.raw_text),
             "raw_text_length": len(worldview.raw_text or ""),
-            "characters_count": len(worldview.characters or []),
-            "geography_count": len(worldview.geography or []),
-            "factions_count": len(worldview.factions or []),
-            "power_system_count": len(worldview.power_system or []),
-            "history_count": len(worldview.history or []),
-            "conflicts_count": len(worldview.conflicts or []),
-            "special_settings_count": len(worldview.special_settings or []),
+            "db_structured_counts": db_structured,
+            "db_structured_total": sum(db_structured.values()),
             "parsed_elements_count": len(elements),
             "parsed_elements_type": type(worldview.parsed_elements).__name__,
             "characters_preview": [c.get("name", "?") for c in (worldview.characters or [])[:5]],
             "conflicts_preview": [c.get("name", "?") for c in (worldview.conflicts or [])[:5]],
         },
+        "worldview_file": file_summary,
         "llm": {
             "api_key_configured": bool(settings.get("api_key")),
-            "api_key_prefix": (settings.get("api_key", "") or "")[:8] + "..." if settings.get("api_key") else "(empty)",
+            "api_key_prefix": (settings.get("api_key", "") or "")[:8] + "..." if settings.get("api_key") else "(empty — MOCK MODE will be used!)",
             "base_url": settings.get("base_url", ""),
             "model": settings.get("model", ""),
-            "using_mock": not bool(settings.get("api_key")),
+            "using_mock": using_mock,
+            "temperature": settings.get("temperature", 0.7),
+            "max_tokens": settings.get("max_tokens", 4096),
+            "warning": "⚠️ API Key 未配置！大纲将使用 mock 模式生成，内容与世界观无关。" if using_mock else None,
         },
         "prompt": {
             "system_prompt_length": len(messages[0]["content"]),
             "user_prompt_length": len(messages[1]["content"]),
-            "user_prompt_first_800_chars": messages[1]["content"][:800],
+            "user_prompt_first_500_chars": messages[1]["content"][:500],
+            "has_worldview_data": "【世界观数据】" in messages[1]["content"],
         },
         "elements_preview": [
             {"name": e["name"], "category": e["category"], "priority": e["priority"]}
@@ -258,14 +372,13 @@ async def generate_outline_stream(
     if not worldview:
         raise HTTPException(status_code=400, detail="请先上传世界观")
 
-    elements = worldview_parser.normalize_elements(worldview.parsed_elements)
+    # Load elements with fallback to file if DB is empty
+    elements = _load_worldview_elements(worldview, project_id)
 
     if not elements:
-        logger.warning(
-            "No worldview elements found for project %s — outline will lack worldview context. "
-            "parsed_elements type=%s, raw characters=%d, conflicts=%d",
-            project_id, type(worldview.parsed_elements).__name__,
-            len(worldview.characters or []), len(worldview.conflicts or []),
+        raise HTTPException(
+            status_code=400,
+            detail="世界观要素为空，无法生成大纲。请确保已正确填写世界观内容并保存。"
         )
     else:
         logger.info(
@@ -285,16 +398,26 @@ async def generate_outline_stream(
 
     # Log LLM config for debugging
     s = load_settings()
+    using_mock = not bool(s.get("api_key"))
     logger.info(
         "Outline stream generation: project=%s, api_key=%s, model=%s, elements=%d, "
-        "system_prompt=%d chars, user_prompt=%d chars",
+        "system_prompt=%d chars, user_prompt=%d chars, using_mock=%s",
         project_id,
         "configured" if s.get("api_key") else "MISSING (will use mock)",
         s.get("model", "?"),
         len(elements),
         len(messages[0]["content"]),
         len(messages[1]["content"]),
+        using_mock,
     )
+    # Log first 500 chars of user prompt to verify worldview data is included
+    logger.info(
+        "Outline stream user prompt preview (first 500 chars):\n%s",
+        messages[1]["content"][:500],
+    )
+
+    # Use user-configured temperature (fallback to 0.7 for outline generation)
+    outline_temperature = s.get("temperature", 0.7) or 0.7
 
     project_id_val = project_id
     total_chapters_val = project.total_chapters
@@ -308,7 +431,7 @@ async def generate_outline_stream(
 
         try:
             async for chunk in llm_client.chat_stream(
-                messages, temperature=0.7, max_tokens=OUTLINE_MAX_TOKENS
+                messages, temperature=outline_temperature, max_tokens=OUTLINE_MAX_TOKENS
             ):
                 full_response += chunk
                 chunk_count += 1
