@@ -31,16 +31,19 @@ export default function ProjectDetail() {
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [id]);
 
-  async function loadProject(projectId: string) {
+  async function loadProject(projectId: string, autoStep = true) {
     try {
       const data = await api.getProject(projectId);
       setProject(data);
-      if (data.status === "draft" || data.status === "worldview_set") {
-        setActiveStep("worldview");
-      } else if (data.status === "outline_pending" || data.status === "outline_confirmed") {
-        setActiveStep("outline");
-      } else {
-        setActiveStep("writing");
+      // Only auto-set step on initial load, not when switching manually
+      if (autoStep) {
+        if (data.status === "draft" || data.status === "worldview_set") {
+          setActiveStep("worldview");
+        } else if (data.status === "outline_pending" || data.status === "outline_confirmed") {
+          setActiveStep("outline");
+        } else {
+          setActiveStep("writing");
+        }
       }
     } catch (e) {
       console.error("Failed to load project:", e);
@@ -50,11 +53,12 @@ export default function ProjectDetail() {
   }
 
   async function refreshProject() {
-    if (id) await loadProject(id);
+    if (id) await loadProject(id, false);
   }
 
   async function goToStep(step: Step) {
     // Refresh project to get latest has_worldview / has_outline before switching
+    // autoStep=false: don't override the step we're switching to
     await refreshProject();
     setActiveStep(step);
   }
@@ -96,13 +100,13 @@ export default function ProjectDetail() {
         ))}
       </div>
 
-      {/* Progress panel at top of writing step */}
+      {/* Progress panel — only show on writing step */}
       {activeStep === "writing" && project.has_outline && (
         <ProgressPanel projectId={project.id} />
       )}
 
-      {/* Step content */}
-      {activeStep === "worldview" && (
+      {/* Step content — CSS display toggling keeps components mounted to preserve state */}
+      <div style={{ display: activeStep === "worldview" ? "block" : "none" }}>
         <WorldviewEditor
           projectId={project.id}
           hasWorldview={project.has_worldview}
@@ -110,9 +114,9 @@ export default function ProjectDetail() {
           onComplete={async () => { await refreshProject(); setActiveStep("outline"); }}
           onBack={() => navigate("/")}
         />
-      )}
+      </div>
 
-      {activeStep === "outline" && (
+      <div style={{ display: activeStep === "outline" ? "block" : "none" }}>
         <OutlineReview
           projectId={project.id}
           hasOutline={project.has_outline}
@@ -120,16 +124,16 @@ export default function ProjectDetail() {
           onComplete={async () => { await refreshProject(); setActiveStep("writing"); }}
           onBack={async () => { await refreshProject(); setActiveStep("worldview"); }}
         />
-      )}
+      </div>
 
-      {activeStep === "writing" && (
+      <div style={{ display: activeStep === "writing" ? "block" : "none" }}>
         <ChapterWriter
           projectId={project.id}
           totalChapters={project.total_chapters}
           onProgress={refreshProject}
           onBack={() => setActiveStep("outline")}
         />
-      )}
+      </div>
     </div>
   );
 }

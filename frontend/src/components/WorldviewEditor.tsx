@@ -32,22 +32,25 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
   const [importResult, setImportResult] = useState<{ count: number; done: boolean } | null>(null);
   const [source, setSource] = useState<WorldviewSource>("manual");
   const [saved, setSaved] = useState(false);  // 本地追踪保存状态，解决 hasWorldview prop 闭锁问题
+  const loadedRef = useRef(false);  // 防止已加载的数据被 hasWorldview 变化覆盖
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 始终尝试加载世界观 — 不仅依赖 hasWorldview prop（该 prop 可能因父组件未刷新而过时）
   useEffect(() => {
+    loadedRef.current = false;  // projectId 变化时重置
     loadWorldview();
   }, [projectId]);
 
-  // 如果父组件刷新后 hasWorldview 变为 true，也重新加载
+  // 如果父组件刷新后 hasWorldview 变为 true，也重新加载 — 但仅在尚未加载时
   useEffect(() => {
-    if (hasWorldview) loadWorldview();
+    if (hasWorldview && !loadedRef.current) loadWorldview();
   }, [hasWorldview]);
 
   async function loadWorldview() {
     try {
       const wv = await api.getWorldview(projectId);
       if (!wv) return;  // 无世界观时不报错，静默返回
+      loadedRef.current = true;  // 标记已加载，防止后续 hasWorldview 变化覆盖
       setData({
         characters: wv.characters || [],
         geography: wv.geography || [],
