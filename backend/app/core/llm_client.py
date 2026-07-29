@@ -21,6 +21,10 @@ _RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 _RETRY_DELAYS = [1, 2, 4]  # seconds, exponential backoff
 
 
+class LLMResponseTruncatedError(RuntimeError):
+    """Raised when the provider stops because the output token limit was reached."""
+
+
 class LLMClient:
     """Async client for OpenAI-compatible chat completions API."""
 
@@ -103,7 +107,10 @@ class LLMClient:
                     delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
                     logger.warning(
                         "LLM API retryable error (HTTP %d), attempt %d/%d, retrying in %ds",
-                        resp.status_code, attempt + 1, _MAX_RETRIES, delay,
+                        resp.status_code,
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        delay,
                     )
                     await asyncio.sleep(delay)
                     continue
@@ -113,17 +120,31 @@ class LLMClient:
                         err_data = resp.json()
                         err_msg = err_data.get("error", {}).get("message", resp.text)
                     except Exception:
-                        err_msg = resp.text[:200] if resp.text else f"HTTP {resp.status_code}"
-                    raise RuntimeError(f"LLM API 错误 (HTTP {resp.status_code}): {err_msg}")
+                        err_msg = (
+                            resp.text[:200] if resp.text else f"HTTP {resp.status_code}"
+                        )
+                    raise RuntimeError(
+                        f"LLM API 错误 (HTTP {resp.status_code}): {err_msg}"
+                    )
 
                 data = resp.json()
-                return data["choices"][0]["message"]["content"]
+                choice = data["choices"][0]
+                if choice.get("finish_reason") == "length":
+                    raise LLMResponseTruncatedError(
+                        "LLM 输出达到 token 上限，内容不完整，请提高最大输出 token 或降低目标字数"
+                    )
+                return choice["message"]["content"]
 
             except httpx.TimeoutException:
                 last_error = RuntimeError("LLM API 请求超时")
                 if attempt < _MAX_RETRIES:
                     delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
-                    logger.warning("LLM timeout, attempt %d/%d, retrying in %ds", attempt + 1, _MAX_RETRIES, delay)
+                    logger.warning(
+                        "LLM timeout, attempt %d/%d, retrying in %ds",
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        delay,
+                    )
                     await asyncio.sleep(delay)
                     continue
                 raise last_error
@@ -131,7 +152,12 @@ class LLMClient:
                 last_error = RuntimeError("无法连接到 LLM API 服务器")
                 if attempt < _MAX_RETRIES:
                     delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
-                    logger.warning("LLM connect error, attempt %d/%d, retrying in %ds", attempt + 1, _MAX_RETRIES, delay)
+                    logger.warning(
+                        "LLM connect error, attempt %d/%d, retrying in %ds",
+                        attempt + 1,
+                        _MAX_RETRIES,
+                        delay,
+                    )
                     await asyncio.sleep(delay)
                     continue
                 raise last_error
@@ -140,7 +166,12 @@ class LLMClient:
             except Exception as e:
                 if attempt < _MAX_RETRIES:
                     delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
-                    logger.warning("LLM unexpected error: %s, attempt %d/%d", str(e), attempt + 1, _MAX_RETRIES)
+                    logger.warning(
+                        "LLM unexpected error: %s, attempt %d/%d",
+                        str(e),
+                        attempt + 1,
+                        _MAX_RETRIES,
+                    )
                     await asyncio.sleep(delay)
                     continue
                 raise
@@ -190,11 +221,16 @@ class LLMClient:
                     headers=self._headers(),
                     json=payload,
                 ) as resp:
-                    if resp.status_code in _RETRY_STATUS_CODES and attempt < _MAX_RETRIES:
+                    if (
+                        resp.status_code in _RETRY_STATUS_CODES
+                        and attempt < _MAX_RETRIES
+                    ):
                         delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
                         logger.warning(
                             "LLM stream retryable error (HTTP %d), attempt %d/%d",
-                            resp.status_code, attempt + 1, _MAX_RETRIES,
+                            resp.status_code,
+                            attempt + 1,
+                            _MAX_RETRIES,
                         )
                         await asyncio.sleep(delay)
                         continue
@@ -203,11 +239,19 @@ class LLMClient:
                         body = await resp.aread()
                         try:
                             err_data = json.loads(body)
-                            err_msg = err_data.get("error", {}).get("message", body.decode("utf-8", errors="replace"))
+                            err_msg = err_data.get("error", {}).get(
+                                "message", body.decode("utf-8", errors="replace")
+                            )
                         except Exception:
-                            err_msg = body.decode("utf-8", errors="replace")[:200] or f"HTTP {resp.status_code}"
-                        raise RuntimeError(f"LLM API 错误 (HTTP {resp.status_code}): {err_msg}")
+                            err_msg = (
+                                body.decode("utf-8", errors="replace")[:200]
+                                or f"HTTP {resp.status_code}"
+                            )
+                        raise RuntimeError(
+                            f"LLM API 错误 (HTTP {resp.status_code}): {err_msg}"
+                        )
 
+                    response_truncated = False
                     async for line in resp.aiter_lines():
                         if line.startswith("data: "):
                             data_str = line[6:]
@@ -223,18 +267,30 @@ class LLMClient:
                                     # Detect truncation
                                     finish_reason = choices[0].get("finish_reason")
                                     if finish_reason == "length":
-                                        logger.warning("LLM response truncated (finish_reason=length, max_tokens reached)")
+                                        response_truncated = True
+                                        logger.warning(
+                                            "LLM response truncated (finish_reason=length, max_tokens reached)"
+                                        )
                             except (json.JSONDecodeError, KeyError, IndexError):
                                 continue
+                    if response_truncated:
+                        raise LLMResponseTruncatedError(
+                            "LLM 输出达到 token 上限，内容不完整，请提高最大输出 token 或降低目标字数"
+                        )
                     return  # Success, exit retry loop
 
             except (httpx.TimeoutException, httpx.ConnectError) as e:
                 if attempt < _MAX_RETRIES:
                     delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
-                    logger.warning("LLM stream connection error: %s, attempt %d/%d", str(e), attempt + 1, _MAX_RETRIES)
+                    logger.warning(
+                        "LLM stream connection error: %s, attempt %d/%d",
+                        str(e),
+                        attempt + 1,
+                        _MAX_RETRIES,
+                    )
                     await asyncio.sleep(delay)
                     continue
-                raise RuntimeError(f"LLM API 连接失败: {str(e)}")
+                raise RuntimeError(f"LLM API 连接失败: {e!s}")
             except RuntimeError:
                 raise
 
@@ -252,7 +308,7 @@ class LLMClient:
                 json={
                     "model": self.model,
                     "messages": [
-                        {"role": "user", "content": "请回复\"连接成功\"四个字。"}
+                        {"role": "user", "content": '请回复"连接成功"四个字。'}
                     ],
                     "max_tokens": 20,
                     "temperature": 0,
@@ -268,7 +324,10 @@ class LLMClient:
                     error_msg = error_data.get("error", {}).get("message", resp.text)
                 except Exception:
                     error_msg = resp.text[:200] if resp.text else "未知错误"
-                return {"success": False, "error": f"HTTP {resp.status_code}: {error_msg}"}
+                return {
+                    "success": False,
+                    "error": f"HTTP {resp.status_code}: {error_msg}",
+                }
         except httpx.ConnectError:
             return {"success": False, "error": "无法连接到 API 服务器，请检查 Base URL"}
         except httpx.TimeoutException:
@@ -356,20 +415,70 @@ def _mock_outline(system_msg: str, user_msg: str) -> str:
                 element_names.append(name)
 
     mock_titles = [
-        "觉醒", "初入江湖", "暗流涌动", "风起云涌", "暗棋",
-        "破茧", "风云际会", "暗夜追踪", "龙争虎斗", "破局",
-        "逆流而上", "风暴前夕", "惊雷", "棋局", "暗战",
-        "破阵", "逆袭", "巅峰对决", "真相", "抉择",
-        "归来", "新的征程", "暗影之下", "破晓", "对决",
-        "命运", "终章序曲", "最后的选择", "决战", "终章",
+        "觉醒",
+        "初入江湖",
+        "暗流涌动",
+        "风起云涌",
+        "暗棋",
+        "破茧",
+        "风云际会",
+        "暗夜追踪",
+        "龙争虎斗",
+        "破局",
+        "逆流而上",
+        "风暴前夕",
+        "惊雷",
+        "棋局",
+        "暗战",
+        "破阵",
+        "逆袭",
+        "巅峰对决",
+        "真相",
+        "抉择",
+        "归来",
+        "新的征程",
+        "暗影之下",
+        "破晓",
+        "对决",
+        "命运",
+        "终章序曲",
+        "最后的选择",
+        "决战",
+        "终章",
     ]
 
-    phases = ["起势", "暗涌", "暗涌", "起势", "暗涌",
-              "转折", "爆发", "爆发", "转折", "爆发",
-              "深入", "深入", "爆发", "转折", "深入",
-              "爆发", "深入", "爆发", "深入", "转折",
-              "终局", "终局", "终局", "终局", "终局",
-              "终局", "终局", "终局", "终局", "终局"]
+    phases = [
+        "起势",
+        "暗涌",
+        "暗涌",
+        "起势",
+        "暗涌",
+        "转折",
+        "爆发",
+        "爆发",
+        "转折",
+        "爆发",
+        "深入",
+        "深入",
+        "爆发",
+        "转折",
+        "深入",
+        "爆发",
+        "深入",
+        "爆发",
+        "深入",
+        "转折",
+        "终局",
+        "终局",
+        "终局",
+        "终局",
+        "终局",
+        "终局",
+        "终局",
+        "终局",
+        "终局",
+        "终局",
+    ]
 
     chapters = []
     reveal_plan = []
@@ -388,20 +497,24 @@ def _mock_outline(system_msg: str, user_msg: str) -> str:
                 if idx2 != idx:
                     reveal_elems.append(element_names[idx2])
 
-        chapters.append({
-            "chapter_num": i,
-            "title": title,
-            "summary": f"第{i}章内容概述，主角继续冒险，逐步揭示世界观设定。",
-            "key_events": [f"关键事件{i}-1", f"关键事件{i}-2"],
-            "reveal_elements": reveal_elems,
-        })
+        chapters.append(
+            {
+                "chapter_num": i,
+                "title": title,
+                "summary": f"第{i}章内容概述，主角继续冒险，逐步揭示世界观设定。",
+                "key_events": [f"关键事件{i}-1", f"关键事件{i}-2"],
+                "reveal_elements": reveal_elems,
+            }
+        )
 
-        reveal_plan.append({
-            "chapter": i,
-            "phase": phase,
-            "elements": reveal_elems,
-            "summary": f"{phase}阶段，推进主线剧情",
-        })
+        reveal_plan.append(
+            {
+                "chapter": i,
+                "phase": phase,
+                "elements": reveal_elems,
+                "summary": f"{phase}阶段，推进主线剧情",
+            }
+        )
 
     # Build a comprehensive story_arc based on extracted worldview elements
     char_names = [n for n in element_names if n][:3]
@@ -422,11 +535,19 @@ def _mock_outline(system_msg: str, user_msg: str) -> str:
         f"后期进入决战与抉择的高潮，最终以收束和余韵收尾。"
     )
 
-    return "```json\n" + _json.dumps({
-        "story_arc": story_arc,
-        "reveal_plan": reveal_plan,
-        "chapters": chapters,
-    }, ensure_ascii=False, indent=2) + "\n```"
+    return (
+        "```json\n"
+        + _json.dumps(
+            {
+                "story_arc": story_arc,
+                "reveal_plan": reveal_plan,
+                "chapters": chapters,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n```"
+    )
 
 
 def _mock_chapter(user_msg: str) -> str:
@@ -462,7 +583,7 @@ def _mock_chapter(user_msg: str) -> str:
         other_names = element_names[1:] if len(element_names) > 1 else []
         other_str = "、".join(other_names) if other_names else "这个世界"
 
-        content = f"""{title or f'第章'}
+        content = f"""{title or "第章"}
 
 {char_name}站在窗前，目光穿过城市的灯火，心中翻涌着复杂的情绪。
 
@@ -480,7 +601,7 @@ def _mock_chapter(user_msg: str) -> str:
 
 *这是开发模式的模拟章节内容。配置 LLM API Key 后将生成真实的 AI 内容。*"""
     else:
-        content = f"""{title or '第一章'}
+        content = f"""{title or "第一章"}
 
 夜色如墨，万籁俱寂。
 

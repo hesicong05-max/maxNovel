@@ -57,6 +57,7 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
 
   // === AbortController for SSE streams ===
   const abortRef = useRef<AbortController | null>(null);
+  const chapterSelectionRequestRef = useRef(0);
 
   // Cancel any active SSE stream on unmount
   useEffect(() => {
@@ -69,9 +70,10 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
   }, []);
 
   useEffect(() => {
+    chapterSelectionRequestRef.current += 1;
     loadChapters();
     loadWordCounts();
-  }, []);
+  }, [projectId, totalChapters]);
 
   useEffect(() => {
     if (contentRef.current) contentRef.current.scrollTop = contentRef.current.scrollHeight;
@@ -127,11 +129,25 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
     abortRef.current = controller;
     try {
       let fullContent = "";
+      let receivedTerminalEvent = false;
       for await (const msg of api.streamChapter(projectId, currentChapter, controller.signal)) {
         if (msg.type === "metadata") { setMeta(msg); }
         else if (msg.type === "content" && msg.text) { fullContent += msg.text; setStreamContent(fullContent); }
-        else if (msg.type === "complete") { await loadChapters(); onProgress(); }
-        else if (msg.type === "error") { alert("生成失败: " + msg.error); await loadChapters(); break; }
+        else if (msg.type === "complete") {
+          receivedTerminalEvent = true;
+          await loadChapters();
+          onProgress();
+        }
+        else if (msg.type === "error") {
+          receivedTerminalEvent = true;
+          alert("生成失败: " + msg.error);
+          await loadChapters();
+          break;
+        }
+      }
+      if (!receivedTerminalEvent && !controller.signal.aborted) {
+        alert("生成连接意外中断，未确认章节是否完成，请重试");
+        await loadChapters();
       }
     } catch (e) {
       if (controller.signal.aborted) return; // Ignore abort errors
@@ -144,12 +160,14 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
 
   async function handleSelectChapter(chNum: number) {
     if (batchStatus === "running") return;
+    const requestId = ++chapterSelectionRequestRef.current;
     setCurrentChapter(chNum);
     setStreamContent("");
     setMeta(null);
     setEditing(false);
     try {
       const ch = await api.getChapter(projectId, chNum);
+      if (requestId !== chapterSelectionRequestRef.current) return;
       if (ch.content) { setStreamContent(ch.content); setEditTitle(ch.title); setEditContent(ch.content); }
     } catch { /* chapter doesn't exist yet */ }
   }
@@ -251,6 +269,7 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
 
     try {
       let currentChContent = "";
+      let receivedBatchComplete = false;
       for await (const msg of api.streamBatchGenerate(projectId, batchSkipExisting, controller.signal)) {
         if (msg.type === "batch_start") {
           setBatchProgress({ current: 0, total: msg.total_to_generate || 0 });
@@ -284,8 +303,13 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
           currentChContent = "";
         }
         else if (msg.type === "batch_complete") {
+          receivedBatchComplete = true;
           setBatchStatus("done");
         }
+      }
+      if (!receivedBatchComplete && !controller.signal.aborted) {
+        setBatchStatus("error");
+        alert("批量生成连接意外中断，请检查已保存章节后重试");
       }
       await loadChapters();
       onProgress();

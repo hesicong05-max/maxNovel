@@ -34,39 +34,61 @@ class MemoryStore:
             chapter_summaries=[],
         )
         db.add(memory)
-        await db.flush()  # flush to get ID, but don't commit — let caller manage transaction
+        await (
+            db.flush()
+        )  # flush to get ID, but don't commit — let caller manage transaction
         return memory
 
-    async def mark_revealed(self, db: AsyncSession, memory: StoryMemory, element_ids: list[str], chapter_num: int):
+    async def mark_revealed(
+        self,
+        db: AsyncSession,
+        memory: StoryMemory,
+        element_ids: list[str],
+        chapter_num: int,
+    ):
         """Mark elements as revealed in a specific chapter. Does NOT commit — caller is responsible."""
         revealed = set(memory.revealed_elements or [])
         for eid in element_ids:
             revealed.add(eid)
         memory.revealed_elements = list(revealed)
 
-    async def update_character_state(self, db: AsyncSession, memory: StoryMemory,
-                                      char_name: str, state: dict[str, Any]):
+    async def update_character_state(
+        self,
+        db: AsyncSession,
+        memory: StoryMemory,
+        char_name: str,
+        state: dict[str, Any],
+    ):
         """Update a character's current state. Does NOT commit — caller is responsible."""
         states = dict(memory.character_states or {})
         states[char_name] = state
         memory.character_states = states
 
-    async def plant_foreshadow(self, db: AsyncSession, memory: StoryMemory,
-                               description: str, planted_chapter: int,
-                               resolve_by: int | None = None):
+    async def plant_foreshadow(
+        self,
+        db: AsyncSession,
+        memory: StoryMemory,
+        description: str,
+        planted_chapter: int,
+        resolve_by: int | None = None,
+    ):
         """Plant a new foreshadow. Does NOT commit — caller is responsible."""
         foreshadows = list(memory.foreshadows or [])
         fs_id = f"fs_{len(foreshadows) + 1}_{planted_chapter}"
-        foreshadows.append({
-            "id": fs_id,
-            "description": description,
-            "planted_chapter": planted_chapter,
-            "status": "planted",  # planted / strengthened / resolved
-            "resolve_by": resolve_by,
-        })
+        foreshadows.append(
+            {
+                "id": fs_id,
+                "description": description,
+                "planted_chapter": planted_chapter,
+                "status": "planted",  # planted / strengthened / resolved
+                "resolve_by": resolve_by,
+            }
+        )
         memory.foreshadows = foreshadows
 
-    async def resolve_foreshadow(self, db: AsyncSession, memory: StoryMemory, fs_id: str, chapter_num: int):
+    async def resolve_foreshadow(
+        self, db: AsyncSession, memory: StoryMemory, fs_id: str, chapter_num: int
+    ):
         """Mark a foreshadow as resolved. Does NOT commit — caller is responsible."""
         foreshadows = list(memory.foreshadows or [])
         for fs in foreshadows:
@@ -76,15 +98,29 @@ class MemoryStore:
                 break
         memory.foreshadows = foreshadows
 
-    async def add_timeline_event(self, db: AsyncSession, memory: StoryMemory,
-                                 chapter: int, event: str, description: str):
-        """Add an event to the story timeline. Does NOT commit — caller is responsible."""
+    async def add_timeline_event(
+        self,
+        db: AsyncSession,
+        memory: StoryMemory,
+        chapter: int,
+        event: str,
+        description: str,
+    ):
+        """Add or replace a chapter event. Does NOT commit — caller is responsible."""
         timeline = list(memory.timeline or [])
-        timeline.append({"chapter": chapter, "event": event, "description": description})
+        timeline = [
+            item
+            for item in timeline
+            if not (item.get("chapter") == chapter and item.get("event") == event)
+        ]
+        timeline.append(
+            {"chapter": chapter, "event": event, "description": description}
+        )
         memory.timeline = timeline
 
-    async def add_chapter_summary(self, db: AsyncSession, memory: StoryMemory,
-                                  chapter_num: int, summary: str):
+    async def add_chapter_summary(
+        self, db: AsyncSession, memory: StoryMemory, chapter_num: int, summary: str
+    ):
         """Add or update a chapter summary. Does NOT commit — caller is responsible."""
         summaries = list(memory.chapter_summaries or [])
         # Replace if already exists
@@ -93,8 +129,9 @@ class MemoryStore:
         summaries.sort(key=lambda s: s["chapter_num"])
         memory.chapter_summaries = summaries
 
-    async def get_context_for_chapter(self, memory: StoryMemory, chapter_num: int,
-                                      max_summaries: int = 5) -> dict[str, Any]:
+    async def get_context_for_chapter(
+        self, memory: StoryMemory, chapter_num: int, max_summaries: int = 5
+    ) -> dict[str, Any]:
         """
         Build a context summary for generating a new chapter.
         Includes recent summaries (not all, to fit context window),
@@ -102,11 +139,14 @@ class MemoryStore:
         """
         summaries = list(memory.chapter_summaries or [])
         # Get the most recent N summaries before current chapter
-        relevant = [s for s in summaries if s["chapter_num"] < chapter_num][-max_summaries:]
+        relevant = [s for s in summaries if s["chapter_num"] < chapter_num][
+            -max_summaries:
+        ]
 
         # Pending foreshadows that should be resolved or strengthened
         pending_fs = [
-            fs for fs in (memory.foreshadows or [])
+            fs
+            for fs in (memory.foreshadows or [])
             if fs["status"] in ("planted", "strengthened")
             and (fs.get("resolve_by") is None or fs["resolve_by"] >= chapter_num)
         ]

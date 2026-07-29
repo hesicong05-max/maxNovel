@@ -1,9 +1,11 @@
 """Worldview upload and parsing API."""
 
+import io
 import logging
 import os
 import tempfile
-from typing import Annotated, Any
+import zipfile
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
@@ -14,7 +16,7 @@ from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.project_files import save_worldview_file
 from app.core.worldview_parser import worldview_parser
 from app.database import get_db
-from app.models.project import Project, ProjectStatus, Worldview
+from app.models.project import ProjectStatus, Worldview
 from app.schemas.models import (
     WorldviewCreate,
     WorldviewImportRequest,
@@ -28,13 +30,26 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_EXTENSIONS = {".txt", ".md", ".markdown", ".doc", ".docx"}
 MAX_UPLOAD_SIZE = app_settings.MAX_UPLOAD_SIZE
+MAX_DOCX_ENTRIES = 5000
+MAX_DOCX_UNCOMPRESSED_SIZE = 50 * 1024 * 1024
+MAX_EXTRACTED_TEXT_CHARS = 200_000
 
 
 def _extract_text_from_docx(file_bytes: bytes) -> str:
-    """Extract text from a .docx file using python-docx."""
-    import io
-
+    """Extract text from a bounded .docx archive using python-docx."""
     from docx import Document
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as archive:
+            entries = archive.infolist()
+            uncompressed_size = sum(entry.file_size for entry in entries)
+    except zipfile.BadZipFile as exc:
+        raise ValueError("文件不是有效的 DOCX 文档") from exc
+
+    if len(entries) > MAX_DOCX_ENTRIES:
+        raise ValueError("DOCX 内部文件数量异常")
+    if uncompressed_size > MAX_DOCX_UNCOMPRESSED_SIZE:
+        raise ValueError("DOCX 解压后内容过大")
 
     doc = Document(io.BytesIO(file_bytes))
     paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
@@ -63,7 +78,12 @@ async def _extract_text_from_doc(file_bytes: bytes, filename: str) -> str:
     output_path = tmp_path + ".txt"
     try:
         proc = await aio.create_subprocess_exec(
-            "textutil", "-convert", "txt", "-output", output_path, tmp_path,
+            "textutil",
+            "-convert",
+            "txt",
+            "-output",
+            output_path,
+            tmp_path,
             stdout=aio.subprocess.PIPE,
             stderr=aio.subprocess.PIPE,
         )
@@ -72,7 +92,9 @@ async def _extract_text_from_doc(file_bytes: bytes, filename: str) -> str:
         except aio.TimeoutError:
             proc.kill()
             await proc.wait()
-            raise HTTPException(status_code=422, detail="解析 .doc 文件超时，请尝试转换为 .docx 格式")
+            raise HTTPException(
+                status_code=422, detail="解析 .doc 文件超时，请尝试转换为 .docx 格式"
+            )
 
         if proc.returncode == 0 and os.path.exists(output_path):
             with open(output_path, "r", encoding="utf-8", errors="replace") as f:
@@ -114,15 +136,16 @@ async def upload_worldview_file(
         )
 
     # Read file content in chunks with size limit (prevents OOM on large uploads)
-    file_bytes = b""
+    file_buffer = bytearray()
     while chunk := await file.read(1024 * 1024):  # 1MB chunks
-        file_bytes += chunk
-        if len(file_bytes) > MAX_UPLOAD_SIZE:
+        file_buffer.extend(chunk)
+        if len(file_buffer) > MAX_UPLOAD_SIZE:
             max_mb = MAX_UPLOAD_SIZE / (1024 * 1024)
             raise HTTPException(
                 status_code=413,
                 detail=f"文件过大，最大允许 {max_mb:.0f}MB",
             )
+    file_bytes = bytes(file_buffer)
     file_size = len(file_bytes)
     logger.info("File upload: %s (%d bytes)", filename, file_size)
 
@@ -144,9 +167,10 @@ async def upload_worldview_file(
         try:
             text = _extract_text_from_docx(file_bytes)
         except Exception as e:
+            logger.exception("DOCX parsing failed for %s: %s", filename, e)
             raise HTTPException(
                 status_code=422,
-                detail=f"解析 .docx 文件失败: {str(e)}",
+                detail="解析 .docx 文件失败，请确认文件有效且内容大小正常",
             )
     elif ext == ".doc":
         try:
@@ -154,9 +178,10 @@ async def upload_worldview_file(
         except HTTPException:
             raise
         except Exception as e:
+            logger.exception("DOC parsing failed for %s: %s", filename, e)
             raise HTTPException(
                 status_code=422,
-                detail=f"解析 .doc 文件失败: {str(e)}",
+                detail="解析 .doc 文件失败，请尝试转换为 .docx 格式后重新上传",
             )
     else:
         raise HTTPException(status_code=400, detail=f"不支持的文件格式: {ext}")
@@ -165,6 +190,11 @@ async def upload_worldview_file(
         raise HTTPException(
             status_code=400,
             detail="从文件中提取的文本内容过短，至少需要 10 个字符",
+        )
+    if len(text) > MAX_EXTRACTED_TEXT_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"提取文本过长，最多允许 {MAX_EXTRACTED_TEXT_CHARS} 个字符，请精简后重试",
         )
 
     return {"text": text, "filename": filename, "char_count": len(text)}
@@ -193,7 +223,7 @@ async def import_worldview(
             data.document_text, project.genre.value
         )
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=f"解析失败: {str(e)}")
+        raise HTTPException(status_code=422, detail=f"解析失败: {e!s}")
 
     # Count total elements
     total = (
@@ -230,7 +260,9 @@ async def set_worldview(
     project = await get_project_for_owner(project_id, current_user, db)
 
     # Delete existing worldview if any (query directly to avoid lazy loading)
-    wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
+    wv_result = await db.execute(
+        select(Worldview).where(Worldview.project_id == project_id)
+    )
     existing_wv = wv_result.scalar_one_or_none()
     if existing_wv:
         await db.delete(existing_wv)
@@ -287,7 +319,9 @@ async def get_worldview(
 ):
     await get_project_for_owner(project_id, current_user, db)
 
-    result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
+    result = await db.execute(
+        select(Worldview).where(Worldview.project_id == project_id)
+    )
     worldview = result.scalar_one_or_none()
     if not worldview:
         raise HTTPException(status_code=404, detail="世界观不存在，请先上传")
@@ -317,10 +351,14 @@ async def get_worldview_summary(
 ):
     await get_project_for_owner(project_id, current_user, db)
 
-    result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
+    result = await db.execute(
+        select(Worldview).where(Worldview.project_id == project_id)
+    )
     worldview = result.scalar_one_or_none()
     if not worldview:
         raise HTTPException(status_code=404, detail="世界观不存在")
 
-    summary = worldview_parser.summary(worldview_parser.normalize_elements(worldview.parsed_elements))
+    summary = worldview_parser.summary(
+        worldview_parser.normalize_elements(worldview.parsed_elements)
+    )
     return summary

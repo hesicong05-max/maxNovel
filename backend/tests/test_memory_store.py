@@ -1,7 +1,8 @@
 """Unit tests for memory_store — story memory management."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from app.core.memory_store import MemoryStore
 from app.models.project import StoryMemory
@@ -20,6 +21,7 @@ def _make_memory(**kwargs) -> StoryMemory:
 
 
 # ─── get_or_create tests ─────────────────────────────────────
+
 
 class TestGetOrCreate:
     @pytest.mark.asyncio
@@ -40,6 +42,7 @@ class TestGetOrCreate:
     async def test_create_new_memory(self):
         """Should create new memory when none exists."""
         mock_db = AsyncMock()
+        mock_db.add = MagicMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
         mock_db.execute.return_value = mock_result
@@ -59,6 +62,7 @@ class TestGetOrCreate:
 
 # ─── mark_revealed tests ──────────────────────────────────────
 
+
 class TestMarkRevealed:
     @pytest.mark.asyncio
     async def test_mark_single_element(self):
@@ -73,7 +77,9 @@ class TestMarkRevealed:
         mock_db = AsyncMock()
         memory = _make_memory(revealed_elements=[])
         store = MemoryStore()
-        await store.mark_revealed(mock_db, memory, ["el_1", "el_2", "el_3"], chapter_num=2)
+        await store.mark_revealed(
+            mock_db, memory, ["el_1", "el_2", "el_3"], chapter_num=2
+        )
         assert len(memory.revealed_elements) == 3
 
     @pytest.mark.asyncio
@@ -107,13 +113,16 @@ class TestMarkRevealed:
 
 # ─── update_character_state tests ────────────────────────────
 
+
 class TestUpdateCharacterState:
     @pytest.mark.asyncio
     async def test_add_new_character(self):
         mock_db = AsyncMock()
         memory = _make_memory()
         store = MemoryStore()
-        await store.update_character_state(mock_db, memory, "林远", {"location": "青云镇", "mood": "平静"})
+        await store.update_character_state(
+            mock_db, memory, "林远", {"location": "青云镇", "mood": "平静"}
+        )
         assert "林远" in memory.character_states
         assert memory.character_states["林远"]["location"] == "青云镇"
 
@@ -122,7 +131,9 @@ class TestUpdateCharacterState:
         mock_db = AsyncMock()
         memory = _make_memory(character_states={"林远": {"location": "青云镇"}})
         store = MemoryStore()
-        await store.update_character_state(mock_db, memory, "林远", {"location": "天玄宗", "mood": "紧张"})
+        await store.update_character_state(
+            mock_db, memory, "林远", {"location": "天玄宗", "mood": "紧张"}
+        )
         assert memory.character_states["林远"]["location"] == "天玄宗"
         assert memory.character_states["林远"]["mood"] == "紧张"
 
@@ -131,8 +142,12 @@ class TestUpdateCharacterState:
         mock_db = AsyncMock()
         memory = _make_memory()
         store = MemoryStore()
-        await store.update_character_state(mock_db, memory, "林远", {"location": "镇上"})
-        await store.update_character_state(mock_db, memory, "苏瑶", {"location": "宗门"})
+        await store.update_character_state(
+            mock_db, memory, "林远", {"location": "镇上"}
+        )
+        await store.update_character_state(
+            mock_db, memory, "苏瑶", {"location": "宗门"}
+        )
         assert len(memory.character_states) == 2
 
     @pytest.mark.asyncio
@@ -141,11 +156,14 @@ class TestUpdateCharacterState:
         memory = _make_memory()
         memory.character_states = None
         store = MemoryStore()
-        await store.update_character_state(mock_db, memory, "林远", {"location": "镇上"})
+        await store.update_character_state(
+            mock_db, memory, "林远", {"location": "镇上"}
+        )
         assert "林远" in memory.character_states
 
 
 # ─── foreshadow tests ────────────────────────────────────────
+
 
 class TestForeshadow:
     @pytest.mark.asyncio
@@ -153,7 +171,9 @@ class TestForeshadow:
         mock_db = AsyncMock()
         memory = _make_memory()
         store = MemoryStore()
-        await store.plant_foreshadow(mock_db, memory, "神秘玉佩的秘密", planted_chapter=1)
+        await store.plant_foreshadow(
+            mock_db, memory, "神秘玉佩的秘密", planted_chapter=1
+        )
         assert len(memory.foreshadows) == 1
         fs = memory.foreshadows[0]
         assert fs["description"] == "神秘玉佩的秘密"
@@ -166,7 +186,9 @@ class TestForeshadow:
         mock_db = AsyncMock()
         memory = _make_memory()
         store = MemoryStore()
-        await store.plant_foreshadow(mock_db, memory, "伏笔", planted_chapter=1, resolve_by=10)
+        await store.plant_foreshadow(
+            mock_db, memory, "伏笔", planted_chapter=1, resolve_by=10
+        )
         assert memory.foreshadows[0]["resolve_by"] == 10
 
     @pytest.mark.asyncio
@@ -193,9 +215,13 @@ class TestForeshadow:
     async def test_resolve_nonexistent_foreshadow(self):
         """Resolving a non-existent foreshadow should not raise."""
         mock_db = AsyncMock()
-        memory = _make_memory(foreshadows=[{"id": "fs_1_1", "status": "planted", "planted_chapter": 1}])
+        memory = _make_memory(
+            foreshadows=[{"id": "fs_1_1", "status": "planted", "planted_chapter": 1}]
+        )
         store = MemoryStore()
-        await store.resolve_foreshadow(mock_db, memory, "nonexistent_id", chapter_num=10)
+        await store.resolve_foreshadow(
+            mock_db, memory, "nonexistent_id", chapter_num=10
+        )
         # Original foreshadow should be unchanged
         assert memory.foreshadows[0]["status"] == "planted"
 
@@ -211,13 +237,16 @@ class TestForeshadow:
 
 # ─── timeline tests ─────────────────────────────────────────
 
+
 class TestTimeline:
     @pytest.mark.asyncio
     async def test_add_timeline_event(self):
         mock_db = AsyncMock()
         memory = _make_memory()
         store = MemoryStore()
-        await store.add_timeline_event(mock_db, memory, chapter=1, event="主角觉醒", description="林远获得了传承")
+        await store.add_timeline_event(
+            mock_db, memory, chapter=1, event="主角觉醒", description="林远获得了传承"
+        )
         assert len(memory.timeline) == 1
         event = memory.timeline[0]
         assert event["chapter"] == 1
@@ -230,8 +259,33 @@ class TestTimeline:
         memory = _make_memory()
         store = MemoryStore()
         for i in range(5):
-            await store.add_timeline_event(mock_db, memory, chapter=i+1, event=f"事件{i+1}", description=f"描述{i+1}")
+            await store.add_timeline_event(
+                mock_db,
+                memory,
+                chapter=i + 1,
+                event=f"事件{i + 1}",
+                description=f"描述{i + 1}",
+            )
         assert len(memory.timeline) == 5
+
+    @pytest.mark.asyncio
+    async def test_same_chapter_event_is_replaced(self):
+        mock_db = AsyncMock()
+        memory = _make_memory()
+        store = MemoryStore()
+        await store.add_timeline_event(
+            mock_db, memory, chapter=1, event="章节生成", description="旧摘要"
+        )
+        await store.add_timeline_event(
+            mock_db, memory, chapter=1, event="章节生成", description="新摘要"
+        )
+        assert memory.timeline == [
+            {
+                "chapter": 1,
+                "event": "章节生成",
+                "description": "新摘要",
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_add_on_null_timeline(self):
@@ -239,11 +293,14 @@ class TestTimeline:
         memory = _make_memory()
         memory.timeline = None
         store = MemoryStore()
-        await store.add_timeline_event(mock_db, memory, chapter=1, event="事件", description="描述")
+        await store.add_timeline_event(
+            mock_db, memory, chapter=1, event="事件", description="描述"
+        )
         assert len(memory.timeline) == 1
 
 
 # ─── chapter summary tests ───────────────────────────────────
+
 
 class TestChapterSummary:
     @pytest.mark.asyncio
@@ -251,7 +308,9 @@ class TestChapterSummary:
         mock_db = AsyncMock()
         memory = _make_memory()
         store = MemoryStore()
-        await store.add_chapter_summary(mock_db, memory, chapter_num=1, summary="第一章摘要")
+        await store.add_chapter_summary(
+            mock_db, memory, chapter_num=1, summary="第一章摘要"
+        )
         assert len(memory.chapter_summaries) == 1
         assert memory.chapter_summaries[0]["chapter_num"] == 1
         assert memory.chapter_summaries[0]["summary"] == "第一章摘要"
@@ -262,8 +321,12 @@ class TestChapterSummary:
         mock_db = AsyncMock()
         memory = _make_memory()
         store = MemoryStore()
-        await store.add_chapter_summary(mock_db, memory, chapter_num=1, summary="旧摘要")
-        await store.add_chapter_summary(mock_db, memory, chapter_num=1, summary="新摘要")
+        await store.add_chapter_summary(
+            mock_db, memory, chapter_num=1, summary="旧摘要"
+        )
+        await store.add_chapter_summary(
+            mock_db, memory, chapter_num=1, summary="新摘要"
+        )
         assert len(memory.chapter_summaries) == 1
         assert memory.chapter_summaries[0]["summary"] == "新摘要"
 
@@ -291,6 +354,7 @@ class TestChapterSummary:
 
 # ─── get_context_for_chapter tests ───────────────────────────
 
+
 class TestGetContextForChapter:
     @pytest.mark.asyncio
     async def test_empty_memory_context(self):
@@ -305,11 +369,13 @@ class TestGetContextForChapter:
 
     @pytest.mark.asyncio
     async def test_returns_recent_summaries(self):
-        memory = _make_memory(chapter_summaries=[
-            {"chapter_num": 1, "summary": "一"},
-            {"chapter_num": 2, "summary": "二"},
-            {"chapter_num": 3, "summary": "三"},
-        ])
+        memory = _make_memory(
+            chapter_summaries=[
+                {"chapter_num": 1, "summary": "一"},
+                {"chapter_num": 2, "summary": "二"},
+                {"chapter_num": 3, "summary": "三"},
+            ]
+        )
         store = MemoryStore()
         ctx = await store.get_context_for_chapter(memory, chapter_num=5)
         assert len(ctx["recent_summaries"]) == 3
@@ -317,11 +383,13 @@ class TestGetContextForChapter:
     @pytest.mark.asyncio
     async def test_filters_future_summaries(self):
         """Should only return summaries before the current chapter."""
-        memory = _make_memory(chapter_summaries=[
-            {"chapter_num": 1, "summary": "一"},
-            {"chapter_num": 5, "summary": "五"},
-            {"chapter_num": 10, "summary": "十"},
-        ])
+        memory = _make_memory(
+            chapter_summaries=[
+                {"chapter_num": 1, "summary": "一"},
+                {"chapter_num": 5, "summary": "五"},
+                {"chapter_num": 10, "summary": "十"},
+            ]
+        )
         store = MemoryStore()
         ctx = await store.get_context_for_chapter(memory, chapter_num=5)
         chapters = [s["chapter_num"] for s in ctx["recent_summaries"]]
@@ -331,21 +399,42 @@ class TestGetContextForChapter:
     @pytest.mark.asyncio
     async def test_max_summaries_limit(self):
         """Should respect max_summaries parameter."""
-        memory = _make_memory(chapter_summaries=[
-            {"chapter_num": i, "summary": f"ch{i}"} for i in range(1, 11)
-        ])
+        memory = _make_memory(
+            chapter_summaries=[
+                {"chapter_num": i, "summary": f"ch{i}"} for i in range(1, 11)
+            ]
+        )
         store = MemoryStore()
-        ctx = await store.get_context_for_chapter(memory, chapter_num=15, max_summaries=3)
+        ctx = await store.get_context_for_chapter(
+            memory, chapter_num=15, max_summaries=3
+        )
         assert len(ctx["recent_summaries"]) == 3
 
     @pytest.mark.asyncio
     async def test_pending_foreshadows(self):
         """Should return foreshadows that are planted/strengthened and not overdue."""
-        memory = _make_memory(foreshadows=[
-            {"id": "fs_1", "status": "planted", "planted_chapter": 1, "resolve_by": 10},
-            {"id": "fs_2", "status": "resolved", "planted_chapter": 2, "resolve_by": 5},
-            {"id": "fs_3", "status": "strengthened", "planted_chapter": 3, "resolve_by": None},
-        ])
+        memory = _make_memory(
+            foreshadows=[
+                {
+                    "id": "fs_1",
+                    "status": "planted",
+                    "planted_chapter": 1,
+                    "resolve_by": 10,
+                },
+                {
+                    "id": "fs_2",
+                    "status": "resolved",
+                    "planted_chapter": 2,
+                    "resolve_by": 5,
+                },
+                {
+                    "id": "fs_3",
+                    "status": "strengthened",
+                    "planted_chapter": 3,
+                    "resolve_by": None,
+                },
+            ]
+        )
         store = MemoryStore()
         ctx = await store.get_context_for_chapter(memory, chapter_num=5)
         pending_ids = [fs["id"] for fs in ctx["pending_foreshadows"]]
@@ -356,9 +445,16 @@ class TestGetContextForChapter:
     @pytest.mark.asyncio
     async def test_foreshadow_overdue_filtered(self):
         """Foreshadows past their resolve_by should not appear."""
-        memory = _make_memory(foreshadows=[
-            {"id": "fs_1", "status": "planted", "planted_chapter": 1, "resolve_by": 5},
-        ])
+        memory = _make_memory(
+            foreshadows=[
+                {
+                    "id": "fs_1",
+                    "status": "planted",
+                    "planted_chapter": 1,
+                    "resolve_by": 5,
+                },
+            ]
+        )
         store = MemoryStore()
         ctx = await store.get_context_for_chapter(memory, chapter_num=10)
         # fs_1 has resolve_by=5, current chapter=10, so it should be filtered
@@ -367,9 +463,12 @@ class TestGetContextForChapter:
     @pytest.mark.asyncio
     async def test_timeline_last_10(self):
         """Should return only last 10 timeline events."""
-        memory = _make_memory(timeline=[
-            {"chapter": i, "event": f"事件{i}", "description": ""} for i in range(1, 21)
-        ])
+        memory = _make_memory(
+            timeline=[
+                {"chapter": i, "event": f"事件{i}", "description": ""}
+                for i in range(1, 21)
+            ]
+        )
         store = MemoryStore()
         ctx = await store.get_context_for_chapter(memory, chapter_num=25)
         assert len(ctx["timeline"]) == 10
@@ -381,7 +480,14 @@ class TestGetContextForChapter:
         memory = _make_memory(
             revealed_elements=["el_1", "el_2"],
             character_states={"林远": {"location": "宗门"}},
-            foreshadows=[{"id": "fs_1", "status": "planted", "planted_chapter": 1, "resolve_by": None}],
+            foreshadows=[
+                {
+                    "id": "fs_1",
+                    "status": "planted",
+                    "planted_chapter": 1,
+                    "resolve_by": None,
+                }
+            ],
             timeline=[{"chapter": 1, "event": "出发", "description": ""}],
             chapter_summaries=[{"chapter_num": 1, "summary": "第一章"}],
         )

@@ -5,10 +5,8 @@ Shared database, client, and auth fixtures are in conftest.py.
 
 import pytest
 
-from app.database import Base
-
-
 # ─── Health check ─────────────────────────────────────────────
+
 
 class TestHealthCheck:
     @pytest.mark.usefixtures("clean_db")
@@ -29,16 +27,21 @@ class TestHealthCheck:
 
 # ─── Projects CRUD ───────────────────────────────────────────
 
+
 class TestProjectsAPI:
     @pytest.mark.usefixtures("clean_db")
     async def test_create_project(self, client, auth_headers):
-        resp = await client.post("/api/projects", json={
-            "title": "测试小说",
-            "genre": "玄幻",
-            "total_chapters": 30,
-            "chapter_word_count": 3000,
-            "style_intensity": "standard",
-        }, headers=auth_headers)
+        resp = await client.post(
+            "/api/projects",
+            json={
+                "title": "测试小说",
+                "genre": "玄幻",
+                "total_chapters": 30,
+                "chapter_word_count": 3000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["title"] == "测试小说"
@@ -51,10 +54,16 @@ class TestProjectsAPI:
 
     @pytest.mark.usefixtures("clean_db")
     async def test_create_project_without_auth_401(self, client):
-        resp = await client.post("/api/projects", json={
-            "title": "无认证", "genre": "玄幻", "total_chapters": 30,
-            "chapter_word_count": 3000, "style_intensity": "standard",
-        })
+        resp = await client.post(
+            "/api/projects",
+            json={
+                "title": "无认证",
+                "genre": "玄幻",
+                "total_chapters": 30,
+                "chapter_word_count": 3000,
+                "style_intensity": "standard",
+            },
+        )
         assert resp.status_code == 401
 
     @pytest.mark.usefixtures("clean_db")
@@ -70,31 +79,73 @@ class TestProjectsAPI:
 
     @pytest.mark.usefixtures("clean_db")
     async def test_list_projects_after_create(self, client, auth_headers):
-        await client.post("/api/projects", json={
-            "title": "小说A", "genre": "都市", "total_chapters": 20, "chapter_word_count": 2000, "style_intensity": "standard",
-        }, headers=auth_headers)
-        await client.post("/api/projects", json={
-            "title": "小说B", "genre": "科幻", "total_chapters": 40, "chapter_word_count": 4000, "style_intensity": "intense",
-        }, headers=auth_headers)
+        await client.post(
+            "/api/projects",
+            json={
+                "title": "小说A",
+                "genre": "都市",
+                "total_chapters": 20,
+                "chapter_word_count": 2000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
+        await client.post(
+            "/api/projects",
+            json={
+                "title": "小说B",
+                "genre": "科幻",
+                "total_chapters": 40,
+                "chapter_word_count": 4000,
+                "style_intensity": "intense",
+            },
+            headers=auth_headers,
+        )
         resp = await client.get("/api/projects", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 2
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_list_projects_only_own(self, client, auth_headers, second_auth_headers):
+    async def test_list_projects_only_own(
+        self, client, auth_headers, second_auth_headers
+    ):
         """User A creates 2 projects, User B creates 1 — each should only see their own."""
         # User A creates 2 projects
-        await client.post("/api/projects", json={
-            "title": "A1", "genre": "都市", "total_chapters": 20, "chapter_word_count": 2000, "style_intensity": "standard",
-        }, headers=auth_headers)
-        await client.post("/api/projects", json={
-            "title": "A2", "genre": "科幻", "total_chapters": 40, "chapter_word_count": 4000, "style_intensity": "intense",
-        }, headers=auth_headers)
+        await client.post(
+            "/api/projects",
+            json={
+                "title": "A1",
+                "genre": "都市",
+                "total_chapters": 20,
+                "chapter_word_count": 2000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
+        await client.post(
+            "/api/projects",
+            json={
+                "title": "A2",
+                "genre": "科幻",
+                "total_chapters": 40,
+                "chapter_word_count": 4000,
+                "style_intensity": "intense",
+            },
+            headers=auth_headers,
+        )
         # User B creates 1 project
-        await client.post("/api/projects", json={
-            "title": "B1", "genre": "玄幻", "total_chapters": 10, "chapter_word_count": 1000, "style_intensity": "mild",
-        }, headers=second_auth_headers)
+        await client.post(
+            "/api/projects",
+            json={
+                "title": "B1",
+                "genre": "玄幻",
+                "total_chapters": 10,
+                "chapter_word_count": 1000,
+                "style_intensity": "mild",
+            },
+            headers=second_auth_headers,
+        )
 
         # User A should see only their 2 projects
         resp_a = await client.get("/api/projects", headers=auth_headers)
@@ -109,9 +160,17 @@ class TestProjectsAPI:
 
     @pytest.mark.usefixtures("clean_db")
     async def test_get_project_by_id(self, client, auth_headers):
-        create_resp = await client.post("/api/projects", json={
-            "title": "获取测试", "genre": "武侠", "total_chapters": 15, "chapter_word_count": 2500, "style_intensity": "mild",
-        }, headers=auth_headers)
+        create_resp = await client.post(
+            "/api/projects",
+            json={
+                "title": "获取测试",
+                "genre": "武侠",
+                "total_chapters": 15,
+                "chapter_word_count": 2500,
+                "style_intensity": "mild",
+            },
+            headers=auth_headers,
+        )
         pid = create_resp.json()["id"]
         resp = await client.get(f"/api/projects/{pid}", headers=auth_headers)
         assert resp.status_code == 200
@@ -123,11 +182,21 @@ class TestProjectsAPI:
         assert resp.status_code == 404
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_get_other_user_project_403(self, client, auth_headers, second_auth_headers):
+    async def test_get_other_user_project_403(
+        self, client, auth_headers, second_auth_headers
+    ):
         """User A should not access User B's project."""
-        create_resp = await client.post("/api/projects", json={
-            "title": "A的项目", "genre": "玄幻", "total_chapters": 10, "chapter_word_count": 1000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        create_resp = await client.post(
+            "/api/projects",
+            json={
+                "title": "A的项目",
+                "genre": "玄幻",
+                "total_chapters": 10,
+                "chapter_word_count": 1000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = create_resp.json()["id"]
         # User B tries to access
         resp = await client.get(f"/api/projects/{pid}", headers=second_auth_headers)
@@ -135,13 +204,29 @@ class TestProjectsAPI:
 
     @pytest.mark.usefixtures("clean_db")
     async def test_update_project(self, client, auth_headers):
-        create_resp = await client.post("/api/projects", json={
-            "title": "原标题", "genre": "玄幻", "total_chapters": 30, "chapter_word_count": 3000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        create_resp = await client.post(
+            "/api/projects",
+            json={
+                "title": "原标题",
+                "genre": "玄幻",
+                "total_chapters": 30,
+                "chapter_word_count": 3000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = create_resp.json()["id"]
-        resp = await client.put(f"/api/projects/{pid}", json={
-            "title": "新标题", "genre": "都市", "total_chapters": 20, "chapter_word_count": 2000, "style_intensity": "intense",
-        }, headers=auth_headers)
+        resp = await client.put(
+            f"/api/projects/{pid}",
+            json={
+                "title": "新标题",
+                "genre": "都市",
+                "total_chapters": 20,
+                "chapter_word_count": 2000,
+                "style_intensity": "intense",
+            },
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["title"] == "新标题"
@@ -150,9 +235,17 @@ class TestProjectsAPI:
 
     @pytest.mark.usefixtures("clean_db")
     async def test_delete_project(self, client, auth_headers):
-        create_resp = await client.post("/api/projects", json={
-            "title": "删除测试", "genre": "玄幻", "total_chapters": 10, "chapter_word_count": 1000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        create_resp = await client.post(
+            "/api/projects",
+            json={
+                "title": "删除测试",
+                "genre": "玄幻",
+                "total_chapters": 10,
+                "chapter_word_count": 1000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = create_resp.json()["id"]
         resp = await client.delete(f"/api/projects/{pid}", headers=auth_headers)
         assert resp.status_code == 200
@@ -167,23 +260,41 @@ class TestProjectsAPI:
 
     @pytest.mark.usefixtures("clean_db")
     async def test_create_project_missing_title_422(self, client, auth_headers):
-        resp = await client.post("/api/projects", json={
-            "genre": "玄幻", "total_chapters": 30, "chapter_word_count": 3000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        resp = await client.post(
+            "/api/projects",
+            json={
+                "genre": "玄幻",
+                "total_chapters": 30,
+                "chapter_word_count": 3000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         assert resp.status_code == 422
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_delete_other_user_project_403(self, client, auth_headers, second_auth_headers):
+    async def test_delete_other_user_project_403(
+        self, client, auth_headers, second_auth_headers
+    ):
         """User B should not delete User A's project."""
-        create_resp = await client.post("/api/projects", json={
-            "title": "A的项目", "genre": "玄幻", "total_chapters": 10, "chapter_word_count": 1000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        create_resp = await client.post(
+            "/api/projects",
+            json={
+                "title": "A的项目",
+                "genre": "玄幻",
+                "total_chapters": 10,
+                "chapter_word_count": 1000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = create_resp.json()["id"]
         resp = await client.delete(f"/api/projects/{pid}", headers=second_auth_headers)
         assert resp.status_code == 403
 
 
 # ─── Community API ───────────────────────────────────────────
+
 
 class TestCommunityAPI:
     @pytest.mark.usefixtures("clean_db")
@@ -195,18 +306,22 @@ class TestCommunityAPI:
 
     @pytest.mark.usefixtures("clean_db")
     async def test_create_novel(self, client, auth_headers):
-        resp = await client.post("/api/community/novels", json={
-            "title": "星辰大海",
-            "author_name": "测试作者",
-            "genre": "科幻",
-            "synopsis": "星际探险故事",
-            "story_outline": "主角穿越虫洞",
-            "chapter_notes": "第一章启航",
-            "allow_cocreation": True,
-            "tags": ["星际", "冒险"],
-            "total_chapters": 30,
-            "total_words": 90000,
-        }, headers=auth_headers)
+        resp = await client.post(
+            "/api/community/novels",
+            json={
+                "title": "星辰大海",
+                "author_name": "测试作者",
+                "genre": "科幻",
+                "synopsis": "星际探险故事",
+                "story_outline": "主角穿越虫洞",
+                "chapter_notes": "第一章启航",
+                "allow_cocreation": True,
+                "tags": ["星际", "冒险"],
+                "total_chapters": 30,
+                "total_words": 90000,
+            },
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["title"] == "星辰大海"
@@ -219,20 +334,41 @@ class TestCommunityAPI:
 
     @pytest.mark.usefixtures("clean_db")
     async def test_create_novel_without_auth_401(self, client):
-        resp = await client.post("/api/community/novels", json={
-            "title": "无认证", "author_name": "作者", "genre": "玄幻",
-            "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
-            "allow_cocreation": False, "tags": [], "total_chapters": 10, "total_words": 30000,
-        })
+        resp = await client.post(
+            "/api/community/novels",
+            json={
+                "title": "无认证",
+                "author_name": "作者",
+                "genre": "玄幻",
+                "synopsis": "简介",
+                "story_outline": "梗概",
+                "chapter_notes": "说明",
+                "allow_cocreation": False,
+                "tags": [],
+                "total_chapters": 10,
+                "total_words": 30000,
+            },
+        )
         assert resp.status_code == 401
 
     @pytest.mark.usefixtures("clean_db")
     async def test_get_novel_increments_views(self, client, auth_headers):
-        create_resp = await client.post("/api/community/novels", json={
-            "title": "测试", "author_name": "作者", "genre": "玄幻",
-            "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
-            "allow_cocreation": False, "tags": ["tag1"], "total_chapters": 10, "total_words": 30000,
-        }, headers=auth_headers)
+        create_resp = await client.post(
+            "/api/community/novels",
+            json={
+                "title": "测试",
+                "author_name": "作者",
+                "genre": "玄幻",
+                "synopsis": "简介",
+                "story_outline": "梗概",
+                "chapter_notes": "说明",
+                "allow_cocreation": False,
+                "tags": ["tag1"],
+                "total_chapters": 10,
+                "total_words": 30000,
+            },
+            headers=auth_headers,
+        )
         novel_id = create_resp.json()["id"]
         # Initial view (public, no auth needed)
         resp = await client.get(f"/api/community/novels/{novel_id}")
@@ -243,6 +379,7 @@ class TestCommunityAPI:
         assert resp.json()["view_count"] == 1  # still 1 due to dedup
         # Clear dedup cache and verify second view increments
         from app.api.community import _view_cache
+
         _view_cache.clear()
         resp = await client.get(f"/api/community/novels/{novel_id}")
         assert resp.json()["view_count"] == 2
@@ -254,11 +391,22 @@ class TestCommunityAPI:
 
     @pytest.mark.usefixtures("clean_db")
     async def test_like_novel(self, client, auth_headers):
-        create_resp = await client.post("/api/community/novels", json={
-            "title": "点赞测试", "author_name": "作者", "genre": "玄幻",
-            "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
-            "allow_cocreation": False, "tags": [], "total_chapters": 10, "total_words": 30000,
-        }, headers=auth_headers)
+        create_resp = await client.post(
+            "/api/community/novels",
+            json={
+                "title": "点赞测试",
+                "author_name": "作者",
+                "genre": "玄幻",
+                "synopsis": "简介",
+                "story_outline": "梗概",
+                "chapter_notes": "说明",
+                "allow_cocreation": False,
+                "tags": [],
+                "total_chapters": 10,
+                "total_words": 30000,
+            },
+            headers=auth_headers,
+        )
         novel_id = create_resp.json()["id"]
         resp = await client.post(f"/api/community/novels/{novel_id}/like")
         assert resp.status_code == 200
@@ -266,17 +414,32 @@ class TestCommunityAPI:
 
     @pytest.mark.usefixtures("clean_db")
     async def test_update_novel(self, client, auth_headers):
-        create_resp = await client.post("/api/community/novels", json={
-            "title": "原标题", "author_name": "作者", "genre": "玄幻",
-            "synopsis": "原简介", "story_outline": "原梗概", "chapter_notes": "原说明",
-            "allow_cocreation": False, "tags": ["tag1"], "total_chapters": 10, "total_words": 30000,
-        }, headers=auth_headers)
+        create_resp = await client.post(
+            "/api/community/novels",
+            json={
+                "title": "原标题",
+                "author_name": "作者",
+                "genre": "玄幻",
+                "synopsis": "原简介",
+                "story_outline": "原梗概",
+                "chapter_notes": "原说明",
+                "allow_cocreation": False,
+                "tags": ["tag1"],
+                "total_chapters": 10,
+                "total_words": 30000,
+            },
+            headers=auth_headers,
+        )
         novel_id = create_resp.json()["id"]
-        resp = await client.put(f"/api/community/novels/{novel_id}", json={
-            "synopsis": "新简介",
-            "tags": ["tag1", "tag2", "tag3"],
-            "allow_cocreation": True,
-        }, headers=auth_headers)
+        resp = await client.put(
+            f"/api/community/novels/{novel_id}",
+            json={
+                "synopsis": "新简介",
+                "tags": ["tag1", "tag2", "tag3"],
+                "allow_cocreation": True,
+            },
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["synopsis"] == "新简介"
@@ -284,57 +447,124 @@ class TestCommunityAPI:
         assert len(data["tags"]) == 3
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_update_other_user_novel_403(self, client, auth_headers, second_auth_headers):
+    async def test_update_other_user_novel_403(
+        self, client, auth_headers, second_auth_headers
+    ):
         """User B should not update User A's novel."""
-        create_resp = await client.post("/api/community/novels", json={
-            "title": "A的小说", "author_name": "作者", "genre": "玄幻",
-            "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
-            "allow_cocreation": False, "tags": [], "total_chapters": 10, "total_words": 30000,
-        }, headers=auth_headers)
+        create_resp = await client.post(
+            "/api/community/novels",
+            json={
+                "title": "A的小说",
+                "author_name": "作者",
+                "genre": "玄幻",
+                "synopsis": "简介",
+                "story_outline": "梗概",
+                "chapter_notes": "说明",
+                "allow_cocreation": False,
+                "tags": [],
+                "total_chapters": 10,
+                "total_words": 30000,
+            },
+            headers=auth_headers,
+        )
         novel_id = create_resp.json()["id"]
-        resp = await client.put(f"/api/community/novels/{novel_id}", json={
-            "synopsis": "篡改内容",
-        }, headers=second_auth_headers)
+        resp = await client.put(
+            f"/api/community/novels/{novel_id}",
+            json={
+                "synopsis": "篡改内容",
+            },
+            headers=second_auth_headers,
+        )
         assert resp.status_code == 403
 
     @pytest.mark.usefixtures("clean_db")
     async def test_delete_novel(self, client, auth_headers):
-        create_resp = await client.post("/api/community/novels", json={
-            "title": "删除", "author_name": "作者", "genre": "玄幻",
-            "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
-            "allow_cocreation": False, "tags": [], "total_chapters": 10, "total_words": 30000,
-        }, headers=auth_headers)
+        create_resp = await client.post(
+            "/api/community/novels",
+            json={
+                "title": "删除",
+                "author_name": "作者",
+                "genre": "玄幻",
+                "synopsis": "简介",
+                "story_outline": "梗概",
+                "chapter_notes": "说明",
+                "allow_cocreation": False,
+                "tags": [],
+                "total_chapters": 10,
+                "total_words": 30000,
+            },
+            headers=auth_headers,
+        )
         novel_id = create_resp.json()["id"]
-        resp = await client.delete(f"/api/community/novels/{novel_id}", headers=auth_headers)
+        resp = await client.delete(
+            f"/api/community/novels/{novel_id}", headers=auth_headers
+        )
         assert resp.status_code == 200
         # Verify deleted
         resp = await client.get(f"/api/community/novels/{novel_id}")
         assert resp.status_code == 404
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_delete_other_user_novel_403(self, client, auth_headers, second_auth_headers):
+    async def test_delete_other_user_novel_403(
+        self, client, auth_headers, second_auth_headers
+    ):
         """User B should not delete User A's novel."""
-        create_resp = await client.post("/api/community/novels", json={
-            "title": "A的小说", "author_name": "作者", "genre": "玄幻",
-            "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
-            "allow_cocreation": False, "tags": [], "total_chapters": 10, "total_words": 30000,
-        }, headers=auth_headers)
+        create_resp = await client.post(
+            "/api/community/novels",
+            json={
+                "title": "A的小说",
+                "author_name": "作者",
+                "genre": "玄幻",
+                "synopsis": "简介",
+                "story_outline": "梗概",
+                "chapter_notes": "说明",
+                "allow_cocreation": False,
+                "tags": [],
+                "total_chapters": 10,
+                "total_words": 30000,
+            },
+            headers=auth_headers,
+        )
         novel_id = create_resp.json()["id"]
-        resp = await client.delete(f"/api/community/novels/{novel_id}", headers=second_auth_headers)
+        resp = await client.delete(
+            f"/api/community/novels/{novel_id}", headers=second_auth_headers
+        )
         assert resp.status_code == 403
 
     @pytest.mark.usefixtures("clean_db")
     async def test_list_tags(self, client, auth_headers):
-        await client.post("/api/community/novels", json={
-            "title": "小说A", "author_name": "作者", "genre": "玄幻",
-            "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
-            "allow_cocreation": False, "tags": ["修仙", "冒险"], "total_chapters": 10, "total_words": 30000,
-        }, headers=auth_headers)
-        await client.post("/api/community/novels", json={
-            "title": "小说B", "author_name": "作者", "genre": "科幻",
-            "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
-            "allow_cocreation": False, "tags": ["修仙", "星际"], "total_chapters": 10, "total_words": 30000,
-        }, headers=auth_headers)
+        await client.post(
+            "/api/community/novels",
+            json={
+                "title": "小说A",
+                "author_name": "作者",
+                "genre": "玄幻",
+                "synopsis": "简介",
+                "story_outline": "梗概",
+                "chapter_notes": "说明",
+                "allow_cocreation": False,
+                "tags": ["修仙", "冒险"],
+                "total_chapters": 10,
+                "total_words": 30000,
+            },
+            headers=auth_headers,
+        )
+        await client.post(
+            "/api/community/novels",
+            json={
+                "title": "小说B",
+                "author_name": "作者",
+                "genre": "科幻",
+                "synopsis": "简介",
+                "story_outline": "梗概",
+                "chapter_notes": "说明",
+                "allow_cocreation": False,
+                "tags": ["修仙", "星际"],
+                "total_chapters": 10,
+                "total_words": 30000,
+            },
+            headers=auth_headers,
+        )
         resp = await client.get("/api/community/tags")
         assert resp.status_code == 200
         data = resp.json()
@@ -349,11 +579,22 @@ class TestCommunityAPI:
     @pytest.mark.usefixtures("clean_db")
     async def test_random_novels(self, client, auth_headers):
         for i in range(3):
-            await client.post("/api/community/novels", json={
-                "title": f"小说{i}", "author_name": "作者", "genre": "玄幻",
-                "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
-                "allow_cocreation": False, "tags": [], "total_chapters": 10, "total_words": 30000,
-            }, headers=auth_headers)
+            await client.post(
+                "/api/community/novels",
+                json={
+                    "title": f"小说{i}",
+                    "author_name": "作者",
+                    "genre": "玄幻",
+                    "synopsis": "简介",
+                    "story_outline": "梗概",
+                    "chapter_notes": "说明",
+                    "allow_cocreation": False,
+                    "tags": [],
+                    "total_chapters": 10,
+                    "total_words": 30000,
+                },
+                headers=auth_headers,
+            )
         resp = await client.get("/api/community/novels/random?limit=2")
         assert resp.status_code == 200
         data = resp.json()
@@ -361,16 +602,38 @@ class TestCommunityAPI:
 
     @pytest.mark.usefixtures("clean_db")
     async def test_filter_by_tag(self, client, auth_headers):
-        await client.post("/api/community/novels", json={
-            "title": "修仙文", "author_name": "作者", "genre": "仙侠",
-            "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
-            "allow_cocreation": False, "tags": ["修仙"], "total_chapters": 10, "total_words": 30000,
-        }, headers=auth_headers)
-        await client.post("/api/community/novels", json={
-            "title": "科幻文", "author_name": "作者", "genre": "科幻",
-            "synopsis": "简介", "story_outline": "梗概", "chapter_notes": "说明",
-            "allow_cocreation": False, "tags": ["星际"], "total_chapters": 10, "total_words": 30000,
-        }, headers=auth_headers)
+        await client.post(
+            "/api/community/novels",
+            json={
+                "title": "修仙文",
+                "author_name": "作者",
+                "genre": "仙侠",
+                "synopsis": "简介",
+                "story_outline": "梗概",
+                "chapter_notes": "说明",
+                "allow_cocreation": False,
+                "tags": ["修仙"],
+                "total_chapters": 10,
+                "total_words": 30000,
+            },
+            headers=auth_headers,
+        )
+        await client.post(
+            "/api/community/novels",
+            json={
+                "title": "科幻文",
+                "author_name": "作者",
+                "genre": "科幻",
+                "synopsis": "简介",
+                "story_outline": "梗概",
+                "chapter_notes": "说明",
+                "allow_cocreation": False,
+                "tags": ["星际"],
+                "total_chapters": 10,
+                "total_words": 30000,
+            },
+            headers=auth_headers,
+        )
         resp = await client.get("/api/community/novels?tag=修仙")
         assert resp.status_code == 200
         data = resp.json()
@@ -380,10 +643,11 @@ class TestCommunityAPI:
 
 # ─── Settings API ────────────────────────────────────────────
 
+
 class TestSettingsAPI:
     @pytest.mark.usefixtures("clean_db")
-    async def test_get_llm_settings(self, client, auth_headers):
-        resp = await client.get("/api/settings/llm", headers=auth_headers)
+    async def test_get_llm_settings(self, client, admin_headers):
+        resp = await client.get("/api/settings/llm", headers=admin_headers)
         assert resp.status_code == 200
         data = resp.json()
         # API key should be masked or empty
@@ -395,27 +659,40 @@ class TestSettingsAPI:
         assert resp.status_code == 401
 
     @pytest.mark.usefixtures("clean_db")
+    async def test_get_llm_settings_non_admin_403(self, client, auth_headers):
+        resp = await client.get("/api/settings/llm", headers=auth_headers)
+        assert resp.status_code == 403
+
+    @pytest.mark.usefixtures("clean_db")
     async def test_update_llm_settings(self, client, admin_headers):
         """Only admin users can update LLM settings."""
-        resp = await client.post("/api/settings/llm", json={
-            "api_key": "sk-test-key-12345",
-            "base_url": "https://api.openai.com/v1",
-            "model": "gpt-4o",
-            "temperature": 0.8,
-            "max_tokens": 4096,
-        }, headers=admin_headers)
+        resp = await client.post(
+            "/api/settings/llm",
+            json={
+                "api_key": "sk-test-key-12345",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            },
+            headers=admin_headers,
+        )
         assert resp.status_code == 200
 
     @pytest.mark.usefixtures("clean_db")
     async def test_update_llm_settings_non_admin_403(self, client, auth_headers):
         """Non-admin users cannot update LLM settings."""
-        resp = await client.post("/api/settings/llm", json={
-            "api_key": "sk-test-key-12345",
-            "base_url": "https://api.openai.com/v1",
-            "model": "gpt-4o",
-            "temperature": 0.8,
-            "max_tokens": 4096,
-        }, headers=auth_headers)
+        resp = await client.post(
+            "/api/settings/llm",
+            json={
+                "api_key": "sk-test-key-12345",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            },
+            headers=auth_headers,
+        )
         assert resp.status_code == 403
 
     @pytest.mark.usefixtures("clean_db")
@@ -430,45 +707,74 @@ class TestSettingsAPI:
 
 # ─── Auth API ───────────────────────────────────────────────
 
+
 class TestAuthAPI:
     @pytest.mark.usefixtures("clean_db")
     async def test_register(self, client):
-        resp = await client.post("/api/auth/register", json={
-            "email": "test@example.com",
-            "username": "testuser",
-            "password": "test123456",
-        })
+        resp = await client.post(
+            "/api/auth/register",
+            json={
+                "email": "test@example.com",
+                "username": "testuser",
+                "password": "test123456",
+            },
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert "token" in data
         assert data["user"]["email"] == "test@example.com"
         assert data["user"]["username"] == "testuser"
+        assert data["user"]["is_admin"] is False
 
     @pytest.mark.usefixtures("clean_db")
     async def test_register_duplicate_email_409(self, client):
-        await client.post("/api/auth/register", json={
-            "email": "dup@example.com", "username": "user1", "password": "pass123456",
-        })
-        resp = await client.post("/api/auth/register", json={
-            "email": "dup@example.com", "username": "user2", "password": "pass123456",
-        })
+        await client.post(
+            "/api/auth/register",
+            json={
+                "email": "dup@example.com",
+                "username": "user1",
+                "password": "pass123456",
+            },
+        )
+        resp = await client.post(
+            "/api/auth/register",
+            json={
+                "email": "dup@example.com",
+                "username": "user2",
+                "password": "pass123456",
+            },
+        )
         assert resp.status_code == 409
 
     @pytest.mark.usefixtures("clean_db")
     async def test_register_short_password_422(self, client):
-        resp = await client.post("/api/auth/register", json={
-            "email": "short@example.com", "username": "user", "password": "123",
-        })
+        resp = await client.post(
+            "/api/auth/register",
+            json={
+                "email": "short@example.com",
+                "username": "user",
+                "password": "123",
+            },
+        )
         assert resp.status_code == 422
 
     @pytest.mark.usefixtures("clean_db")
     async def test_login_success(self, client):
-        await client.post("/api/auth/register", json={
-            "email": "login@example.com", "username": "loginuser", "password": "pass123456",
-        })
-        resp = await client.post("/api/auth/login", json={
-            "email": "login@example.com", "password": "pass123456",
-        })
+        await client.post(
+            "/api/auth/register",
+            json={
+                "email": "login@example.com",
+                "username": "loginuser",
+                "password": "pass123456",
+            },
+        )
+        resp = await client.post(
+            "/api/auth/login",
+            json={
+                "email": "login@example.com",
+                "password": "pass123456",
+            },
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert "token" in data
@@ -476,28 +782,48 @@ class TestAuthAPI:
 
     @pytest.mark.usefixtures("clean_db")
     async def test_login_wrong_password_401(self, client):
-        await client.post("/api/auth/register", json={
-            "email": "wrong@example.com", "username": "wronguser", "password": "pass123456",
-        })
-        resp = await client.post("/api/auth/login", json={
-            "email": "wrong@example.com", "password": "wrongpassword",
-        })
+        await client.post(
+            "/api/auth/register",
+            json={
+                "email": "wrong@example.com",
+                "username": "wronguser",
+                "password": "pass123456",
+            },
+        )
+        resp = await client.post(
+            "/api/auth/login",
+            json={
+                "email": "wrong@example.com",
+                "password": "wrongpassword",
+            },
+        )
         assert resp.status_code == 401
 
     @pytest.mark.usefixtures("clean_db")
     async def test_login_nonexistent_user_401(self, client):
-        resp = await client.post("/api/auth/login", json={
-            "email": "nobody@example.com", "password": "pass123456",
-        })
+        resp = await client.post(
+            "/api/auth/login",
+            json={
+                "email": "nobody@example.com",
+                "password": "pass123456",
+            },
+        )
         assert resp.status_code == 401
 
     @pytest.mark.usefixtures("clean_db")
     async def test_get_me_with_token(self, client):
-        register_resp = await client.post("/api/auth/register", json={
-            "email": "me@example.com", "username": "meuser", "password": "pass123456",
-        })
+        register_resp = await client.post(
+            "/api/auth/register",
+            json={
+                "email": "me@example.com",
+                "username": "meuser",
+                "password": "pass123456",
+            },
+        )
         token = register_resp.json()["token"]
-        resp = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        resp = await client.get(
+            "/api/auth/me", headers={"Authorization": f"Bearer {token}"}
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["email"] == "me@example.com"
@@ -510,31 +836,91 @@ class TestAuthAPI:
 
     @pytest.mark.usefixtures("clean_db")
     async def test_get_me_with_invalid_token_401(self, client):
-        resp = await client.get("/api/auth/me", headers={"Authorization": "Bearer invalid-token-here"})
+        resp = await client.get(
+            "/api/auth/me", headers={"Authorization": "Bearer invalid-token-here"}
+        )
         assert resp.status_code == 401
 
 
 # ─── Worldview API ───────────────────────────────────────────
 
+
 class TestWorldviewAPI:
     @pytest.mark.usefixtures("clean_db")
     async def test_set_worldview(self, client, auth_headers):
         """Create a project, then set its worldview."""
-        proj = await client.post("/api/projects", json={
-            "title": "世界观测试", "genre": "玄幻", "total_chapters": 10,
-            "chapter_word_count": 2000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        proj = await client.post(
+            "/api/projects",
+            json={
+                "title": "世界观测试",
+                "genre": "玄幻",
+                "total_chapters": 10,
+                "chapter_word_count": 2000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = proj.json()["id"]
-        resp = await client.post(f"/api/worldview/{pid}", json={
-            "characters": [{"name": "林远", "personality": "坚韧", "background": "孤儿", "motivation": "寻真相", "ability": "灵觉", "relations": []}],
-            "geography": [{"name": "苍澜大陆", "description": "主大陆", "significance": "故事舞台"}],
-            "factions": [{"name": "天玄宗", "stance": "正道", "power_level": "顶级", "relations": []}],
-            "power_system": [{"name": "灵气修炼", "levels": "聚气→筑基", "rules": "吸灵气", "limitations": "有瓶颈"}],
-            "history": [{"event": "远古大战", "time": "万年前", "description": "上古大战", "impact": "灵气枯竭"}],
-            "conflicts": [{"name": "正邪之争", "type": "阵营冲突", "parties": "正道vs魔道", "stakes": "控制权", "resolution_hint": "第三条路"}],
-            "special_settings": [{"name": "灵根", "description": "天赋", "rules": "五行灵根"}],
-            "source": "manual",
-        }, headers=auth_headers)
+        resp = await client.post(
+            f"/api/worldview/{pid}",
+            json={
+                "characters": [
+                    {
+                        "name": "林远",
+                        "personality": "坚韧",
+                        "background": "孤儿",
+                        "motivation": "寻真相",
+                        "ability": "灵觉",
+                        "relations": [],
+                    }
+                ],
+                "geography": [
+                    {
+                        "name": "苍澜大陆",
+                        "description": "主大陆",
+                        "significance": "故事舞台",
+                    }
+                ],
+                "factions": [
+                    {
+                        "name": "天玄宗",
+                        "stance": "正道",
+                        "power_level": "顶级",
+                        "relations": [],
+                    }
+                ],
+                "power_system": [
+                    {
+                        "name": "灵气修炼",
+                        "levels": "聚气→筑基",
+                        "rules": "吸灵气",
+                        "limitations": "有瓶颈",
+                    }
+                ],
+                "history": [
+                    {
+                        "event": "远古大战",
+                        "time": "万年前",
+                        "description": "上古大战",
+                        "impact": "灵气枯竭",
+                    }
+                ],
+                "conflicts": [
+                    {
+                        "name": "正邪之争",
+                        "type": "阵营冲突",
+                        "parties": "正道vs魔道",
+                        "stakes": "控制权",
+                        "resolution_hint": "第三条路",
+                    }
+                ],
+                "special_settings": [
+                    {"name": "灵根", "description": "天赋", "rules": "五行灵根"}
+                ],
+                "source": "manual",
+            },
+            headers=auth_headers,
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["project_id"] == pid
@@ -544,16 +930,41 @@ class TestWorldviewAPI:
     @pytest.mark.usefixtures("clean_db")
     async def test_get_worldview(self, client, auth_headers):
         """Set worldview then get it back."""
-        proj = await client.post("/api/projects", json={
-            "title": "获取世界观", "genre": "玄幻", "total_chapters": 10,
-            "chapter_word_count": 2000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        proj = await client.post(
+            "/api/projects",
+            json={
+                "title": "获取世界观",
+                "genre": "玄幻",
+                "total_chapters": 10,
+                "chapter_word_count": 2000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = proj.json()["id"]
-        await client.post(f"/api/worldview/{pid}", json={
-            "characters": [{"name": "角色A", "personality": "冷静", "background": "", "motivation": "", "ability": "", "relations": []}],
-            "geography": [], "factions": [], "power_system": [], "history": [],
-            "conflicts": [], "special_settings": [], "source": "manual",
-        }, headers=auth_headers)
+        await client.post(
+            f"/api/worldview/{pid}",
+            json={
+                "characters": [
+                    {
+                        "name": "角色A",
+                        "personality": "冷静",
+                        "background": "",
+                        "motivation": "",
+                        "ability": "",
+                        "relations": [],
+                    }
+                ],
+                "geography": [],
+                "factions": [],
+                "power_system": [],
+                "history": [],
+                "conflicts": [],
+                "special_settings": [],
+                "source": "manual",
+            },
+            headers=auth_headers,
+        )
         resp = await client.get(f"/api/worldview/{pid}", headers=auth_headers)
         assert resp.status_code == 200
         assert len(resp.json()["characters"]) == 1
@@ -561,79 +972,168 @@ class TestWorldviewAPI:
     @pytest.mark.usefixtures("clean_db")
     async def test_get_worldview_not_set_404(self, client, auth_headers):
         """Get worldview before setting should return 404."""
-        proj = await client.post("/api/projects", json={
-            "title": "无世界观", "genre": "玄幻", "total_chapters": 10,
-            "chapter_word_count": 2000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        proj = await client.post(
+            "/api/projects",
+            json={
+                "title": "无世界观",
+                "genre": "玄幻",
+                "total_chapters": 10,
+                "chapter_word_count": 2000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = proj.json()["id"]
         resp = await client.get(f"/api/worldview/{pid}", headers=auth_headers)
         assert resp.status_code == 404
 
     @pytest.mark.usefixtures("clean_db")
     async def test_worldview_without_auth_401(self, client, auth_headers):
-        proj = await client.post("/api/projects", json={
-            "title": "权限测试", "genre": "玄幻", "total_chapters": 10,
-            "chapter_word_count": 2000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        proj = await client.post(
+            "/api/projects",
+            json={
+                "title": "权限测试",
+                "genre": "玄幻",
+                "total_chapters": 10,
+                "chapter_word_count": 2000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = proj.json()["id"]
-        resp = await client.post(f"/api/worldview/{pid}", json={
-            "characters": [], "geography": [], "factions": [], "power_system": [],
-            "history": [], "conflicts": [], "special_settings": [], "source": "manual",
-        })
+        resp = await client.post(
+            f"/api/worldview/{pid}",
+            json={
+                "characters": [],
+                "geography": [],
+                "factions": [],
+                "power_system": [],
+                "history": [],
+                "conflicts": [],
+                "special_settings": [],
+                "source": "manual",
+            },
+        )
         assert resp.status_code == 401
 
     @pytest.mark.usefixtures("clean_db")
     async def test_worldview_summary(self, client, auth_headers):
-        proj = await client.post("/api/projects", json={
-            "title": "摘要测试", "genre": "玄幻", "total_chapters": 10,
-            "chapter_word_count": 2000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        proj = await client.post(
+            "/api/projects",
+            json={
+                "title": "摘要测试",
+                "genre": "玄幻",
+                "total_chapters": 10,
+                "chapter_word_count": 2000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = proj.json()["id"]
-        await client.post(f"/api/worldview/{pid}", json={
-            "characters": [{"name": "主角", "personality": "勇敢", "background": "", "motivation": "", "ability": "", "relations": []}],
-            "geography": [{"name": "城镇", "description": "起始地", "significance": ""}],
-            "factions": [], "power_system": [], "history": [],
-            "conflicts": [], "special_settings": [], "source": "manual",
-        }, headers=auth_headers)
+        await client.post(
+            f"/api/worldview/{pid}",
+            json={
+                "characters": [
+                    {
+                        "name": "主角",
+                        "personality": "勇敢",
+                        "background": "",
+                        "motivation": "",
+                        "ability": "",
+                        "relations": [],
+                    }
+                ],
+                "geography": [
+                    {"name": "城镇", "description": "起始地", "significance": ""}
+                ],
+                "factions": [],
+                "power_system": [],
+                "history": [],
+                "conflicts": [],
+                "special_settings": [],
+                "source": "manual",
+            },
+            headers=auth_headers,
+        )
         resp = await client.get(f"/api/worldview/{pid}/summary", headers=auth_headers)
         assert resp.status_code == 200
 
 
 # ─── Outline API ─────────────────────────────────────────────
 
+
 class TestOutlineAPI:
     @pytest.mark.usefixtures("clean_db")
     async def test_generate_outline(self, client, auth_headers):
         """Generate outline for a project with worldview (mock LLM)."""
-        proj = await client.post("/api/projects", json={
-            "title": "大纲测试", "genre": "玄幻", "total_chapters": 5,
-            "chapter_word_count": 2000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        proj = await client.post(
+            "/api/projects",
+            json={
+                "title": "大纲测试",
+                "genre": "玄幻",
+                "total_chapters": 5,
+                "chapter_word_count": 2000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = proj.json()["id"]
         # Set worldview first
-        await client.post(f"/api/worldview/{pid}", json={
-            "characters": [{"name": "林远", "personality": "坚韧", "background": "", "motivation": "", "ability": "", "relations": []}],
-            "geography": [{"name": "大陆", "description": "", "significance": ""}],
-            "factions": [], "power_system": [], "history": [],
-            "conflicts": [], "special_settings": [], "source": "manual",
-        }, headers=auth_headers)
+        await client.post(
+            f"/api/worldview/{pid}",
+            json={
+                "characters": [
+                    {
+                        "name": "林远",
+                        "personality": "坚韧",
+                        "background": "",
+                        "motivation": "",
+                        "ability": "",
+                        "relations": [],
+                    }
+                ],
+                "geography": [{"name": "大陆", "description": "", "significance": ""}],
+                "factions": [],
+                "power_system": [],
+                "history": [],
+                "conflicts": [],
+                "special_settings": [],
+                "source": "manual",
+            },
+            headers=auth_headers,
+        )
         # Mock the LLM client to return a mock outline (avoid real API call)
-        from unittest.mock import AsyncMock, patch
-        mock_outline = '```json\n{"story_arc": "测试故事弧", "chapters": [{"chapter_num": 1, "title": "觉醒", "summary": "主角觉醒", "key_events": ["事件"], "reveal_elements": ["el_1"]}]}\n```'
+        from unittest.mock import patch
+
         with patch("app.core.llm_client.load_settings") as mock_load:
-            mock_load.return_value = {"api_key": "", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+            mock_load.return_value = {
+                "api_key": "",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
             # Generate outline (will use mock response since no API key)
-            resp = await client.post(f"/api/outline/{pid}/generate", headers=auth_headers)
+            resp = await client.post(
+                f"/api/outline/{pid}/generate", headers=auth_headers
+            )
             assert resp.status_code == 200
             data = resp.json()
             assert "story_arc" in data or "chapters" in data or "reveal_plan" in data
 
     @pytest.mark.usefixtures("clean_db")
     async def test_get_outline_not_found_404(self, client, auth_headers):
-        proj = await client.post("/api/projects", json={
-            "title": "无大纲", "genre": "玄幻", "total_chapters": 5,
-            "chapter_word_count": 2000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        proj = await client.post(
+            "/api/projects",
+            json={
+                "title": "无大纲",
+                "genre": "玄幻",
+                "total_chapters": 5,
+                "chapter_word_count": 2000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = proj.json()["id"]
         resp = await client.get(f"/api/outline/{pid}", headers=auth_headers)
         assert resp.status_code == 404
@@ -641,14 +1141,22 @@ class TestOutlineAPI:
 
 # ─── Chapter API ─────────────────────────────────────────────
 
+
 class TestChapterAPI:
     @pytest.mark.usefixtures("clean_db")
     async def test_list_chapters_empty(self, client, auth_headers):
         """List chapters for a new project should return empty list."""
-        proj = await client.post("/api/projects", json={
-            "title": "章节测试", "genre": "玄幻", "total_chapters": 5,
-            "chapter_word_count": 2000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        proj = await client.post(
+            "/api/projects",
+            json={
+                "title": "章节测试",
+                "genre": "玄幻",
+                "total_chapters": 5,
+                "chapter_word_count": 2000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = proj.json()["id"]
         resp = await client.get(f"/api/chapters/{pid}", headers=auth_headers)
         assert resp.status_code == 200
@@ -657,20 +1165,36 @@ class TestChapterAPI:
     @pytest.mark.usefixtures("clean_db")
     async def test_get_word_counts(self, client, auth_headers):
         """Get word count configuration for a project."""
-        proj = await client.post("/api/projects", json={
-            "title": "字数配置", "genre": "玄幻", "total_chapters": 5,
-            "chapter_word_count": 2000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        proj = await client.post(
+            "/api/projects",
+            json={
+                "title": "字数配置",
+                "genre": "玄幻",
+                "total_chapters": 5,
+                "chapter_word_count": 2000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = proj.json()["id"]
-        resp = await client.get(f"/api/chapters/{pid}/word-counts", headers=auth_headers)
+        resp = await client.get(
+            f"/api/chapters/{pid}/word-counts", headers=auth_headers
+        )
         assert resp.status_code == 200
 
     @pytest.mark.usefixtures("clean_db")
     async def test_list_chapters_without_auth_401(self, client, auth_headers):
-        proj = await client.post("/api/projects", json={
-            "title": "权限测试", "genre": "玄幻", "total_chapters": 5,
-            "chapter_word_count": 2000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        proj = await client.post(
+            "/api/projects",
+            json={
+                "title": "权限测试",
+                "genre": "玄幻",
+                "total_chapters": 5,
+                "chapter_word_count": 2000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = proj.json()["id"]
         resp = await client.get(f"/api/chapters/{pid}")
         assert resp.status_code == 401
@@ -678,14 +1202,22 @@ class TestChapterAPI:
 
 # ─── Export API ──────────────────────────────────────────────
 
+
 class TestExportAPI:
     @pytest.mark.usefixtures("clean_db")
     async def test_export_empty_project_txt(self, client, auth_headers):
         """Export a project with no chapters as txt."""
-        proj = await client.post("/api/projects", json={
-            "title": "导出测试", "genre": "玄幻", "total_chapters": 5,
-            "chapter_word_count": 2000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        proj = await client.post(
+            "/api/projects",
+            json={
+                "title": "导出测试",
+                "genre": "玄幻",
+                "total_chapters": 5,
+                "chapter_word_count": 2000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = proj.json()["id"]
         resp = await client.get(f"/api/export/{pid}/txt", headers=auth_headers)
         assert resp.status_code == 200
@@ -694,10 +1226,17 @@ class TestExportAPI:
     @pytest.mark.usefixtures("clean_db")
     async def test_export_empty_project_markdown(self, client, auth_headers):
         """Export a project with no chapters as markdown."""
-        proj = await client.post("/api/projects", json={
-            "title": "MD导出", "genre": "玄幻", "total_chapters": 5,
-            "chapter_word_count": 2000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        proj = await client.post(
+            "/api/projects",
+            json={
+                "title": "MD导出",
+                "genre": "玄幻",
+                "total_chapters": 5,
+                "chapter_word_count": 2000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = proj.json()["id"]
         resp = await client.get(f"/api/export/{pid}/markdown", headers=auth_headers)
         assert resp.status_code == 200
@@ -710,21 +1249,37 @@ class TestExportAPI:
 
     @pytest.mark.usefixtures("clean_db")
     async def test_export_without_auth_401(self, client, auth_headers):
-        proj = await client.post("/api/projects", json={
-            "title": "导出权限", "genre": "玄幻", "total_chapters": 5,
-            "chapter_word_count": 2000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        proj = await client.post(
+            "/api/projects",
+            json={
+                "title": "导出权限",
+                "genre": "玄幻",
+                "total_chapters": 5,
+                "chapter_word_count": 2000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = proj.json()["id"]
         resp = await client.get(f"/api/export/{pid}/txt")
         assert resp.status_code == 401
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_export_other_user_project_403(self, client, auth_headers, second_auth_headers):
+    async def test_export_other_user_project_403(
+        self, client, auth_headers, second_auth_headers
+    ):
         """User B should not export User A's project."""
-        proj = await client.post("/api/projects", json={
-            "title": "A的项目", "genre": "玄幻", "total_chapters": 5,
-            "chapter_word_count": 2000, "style_intensity": "standard",
-        }, headers=auth_headers)
+        proj = await client.post(
+            "/api/projects",
+            json={
+                "title": "A的项目",
+                "genre": "玄幻",
+                "total_chapters": 5,
+                "chapter_word_count": 2000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
         pid = proj.json()["id"]
         resp = await client.get(f"/api/export/{pid}/txt", headers=second_auth_headers)
         assert resp.status_code == 403

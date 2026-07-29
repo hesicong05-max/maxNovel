@@ -11,11 +11,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.auth import User, get_current_user, get_optional_user, get_project_for_owner
+from app.core.auth import (
+    User,
+    get_current_user,
+    get_optional_user,
+    get_project_for_owner,
+)
 from app.core.rate_limiter import limiter
 from app.database import get_db
 from app.models.community import CommunityNovel, CommunityTag
-from app.models.project import Chapter, Project
+from app.models.project import Chapter
 from app.schemas.models import (
     CommunityNovelBrief,
     CommunityNovelCreate,
@@ -55,10 +60,13 @@ def _should_count_view(ip_hash: str, novel_id: str) -> bool:
 
 # ── Helpers ──────────────────────────────────────────────
 
+
 async def _get_or_create_tag(db: AsyncSession, name: str) -> CommunityTag:
     """Find an existing tag by name (case-insensitive) or create a new one."""
     result = await db.execute(
-        select(CommunityTag).where(func.lower(CommunityTag.name) == func.lower(name.strip()))
+        select(CommunityTag).where(
+            func.lower(CommunityTag.name) == func.lower(name.strip())
+        )
     )
     tag = result.scalar_one_or_none()
     if not tag:
@@ -68,7 +76,9 @@ async def _get_or_create_tag(db: AsyncSession, name: str) -> CommunityTag:
     return tag
 
 
-async def _sync_tags(db: AsyncSession, novel: CommunityNovel, tag_names: list[str], is_new: bool = False) -> None:
+async def _sync_tags(
+    db: AsyncSession, novel: CommunityNovel, tag_names: list[str], is_new: bool = False
+) -> None:
     """Replace the novel's tag set with the given list.
 
     Args:
@@ -137,18 +147,19 @@ async def _novel_to_response(novel: CommunityNovel) -> CommunityNovelResponse:
 
 def _check_novel_ownership(novel: CommunityNovel, user: User) -> None:
     """Verify that the user owns the novel. Raises 403 if not."""
-    if novel.owner_id is not None and novel.owner_id != user.id:
+    if novel.owner_id is None or novel.owner_id != user.id:
         raise HTTPException(status_code=403, detail="无权操作此小说")
 
 
 # ── Novel CRUD ───────────────────────────────────────────
+
 
 @router.get("/novels", response_model=list[CommunityNovelBrief])
 async def list_novels(
     db: Annotated[AsyncSession, Depends(get_db)],
     offset: int = Query(0, ge=0),
     limit: int = Query(12, ge=1, le=50),
-    tag: str | None = Query(None),
+    tag: str | None = Query(None, max_length=50),
     sort: str = Query("latest", pattern="^(latest|popular|random)$"),
 ):
     """List community novels with pagination, optional tag filter, and sort order. Public."""
@@ -160,7 +171,9 @@ async def list_novels(
         )
 
     if sort == "popular":
-        query = query.order_by(CommunityNovel.like_count.desc(), CommunityNovel.view_count.desc())
+        query = query.order_by(
+            CommunityNovel.like_count.desc(), CommunityNovel.view_count.desc()
+        )
     elif sort == "random":
         query = query.order_by(func.random())
     else:
@@ -177,31 +190,27 @@ async def list_novels(
 async def get_random_novels(
     db: Annotated[AsyncSession, Depends(get_db)],
     limit: int = Query(6, ge=1, le=30),
-    exclude: str | None = Query(None, description="Comma-separated novel IDs to exclude"),
+    exclude: str | None = Query(
+        None,
+        max_length=5000,
+        description="Comma-separated novel IDs to exclude",
+    ),
 ):
     """Return random novels for infinite scroll refresh. Public."""
     exclude_ids = set()
     if exclude:
-        exclude_ids = {eid.strip() for eid in exclude.split(",") if eid.strip()}
+        exclude_ids = {
+            eid.strip()
+            for eid in exclude.split(",")[:100]
+            if 0 < len(eid.strip()) <= 32
+        }
 
-    # Get all IDs first, then random sample
-    id_query = select(CommunityNovel.id)
+    # Sample directly in the database instead of loading every novel ID into
+    # application memory as the community grows.
+    query = select(CommunityNovel).options(selectinload(CommunityNovel.tags))
     if exclude_ids:
-        id_query = id_query.where(~CommunityNovel.id.in_(exclude_ids))
-    id_result = await db.execute(id_query)
-    all_ids = [row[0] for row in id_result.all()]
-
-    if not all_ids:
-        return []
-
-    sample_size = min(limit, len(all_ids))
-    sampled_ids = random.sample(all_ids, sample_size)
-
-    result = await db.execute(
-        select(CommunityNovel)
-        .options(selectinload(CommunityNovel.tags))
-        .where(CommunityNovel.id.in_(sampled_ids))
-    )
+        query = query.where(~CommunityNovel.id.in_(exclude_ids))
+    result = await db.execute(query.order_by(func.random()).limit(limit))
     novels = result.scalars().unique().all()
 
     # Shuffle to avoid always returning in the same DB order
@@ -381,7 +390,9 @@ async def like_novel(
     - Authenticated users: one like per user per novel (stored in liked_by)
     - Anonymous: one like per IP per novel (IP hash stored in liked_by, 24h TTL via rate limit)
     """
-    result = await db.execute(select(CommunityNovel).where(CommunityNovel.id == novel_id))
+    result = await db.execute(
+        select(CommunityNovel).where(CommunityNovel.id == novel_id)
+    )
     novel = result.scalar_one_or_none()
     if not novel:
         raise HTTPException(status_code=404, detail="小说不存在")
@@ -408,6 +419,7 @@ async def like_novel(
 
 # ── Tags ──────────────────────────────────────────────────
 
+
 @router.get("/tags", response_model=list[CommunityTagResponse])
 async def list_tags(
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -425,6 +437,7 @@ async def list_tags(
 
 # ── Helper: gather project stats for upload ───────────────
 
+
 @router.get("/projects/{project_id}/stats")
 async def get_project_stats(
     project_id: str,
@@ -435,14 +448,17 @@ async def get_project_stats(
     project = await get_project_for_owner(project_id, current_user, db)
 
     ch_result = await db.execute(
-        select(func.count(Chapter.id), func.coalesce(func.sum(Chapter.word_count), 0))
-        .where(Chapter.project_id == project_id)
+        select(
+            func.count(Chapter.id), func.coalesce(func.sum(Chapter.word_count), 0)
+        ).where(Chapter.project_id == project_id)
     )
     ch_count, total_words = ch_result.one()
 
     return {
         "title": project.title,
-        "genre": project.genre.value if hasattr(project.genre, "value") else str(project.genre),
+        "genre": project.genre.value
+        if hasattr(project.genre, "value")
+        else str(project.genre),
         "total_chapters": project.total_chapters,
         "chapter_count": ch_count,
         "total_words": total_words,

@@ -1,7 +1,6 @@
 """User model for authentication."""
 
-import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import Boolean, Column, DateTime, String
 from sqlalchemy.orm import relationship
@@ -11,7 +10,7 @@ from app.models.project import gen_id
 
 
 def _utcnow() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class User(Base):

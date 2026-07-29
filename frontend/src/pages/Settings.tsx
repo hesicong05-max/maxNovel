@@ -227,6 +227,7 @@ export default function Settings() {
               <option value={4096}>4096 · 标准</option>
               <option value={8192}>8192 · 长</option>
               <option value={16384}>16384 · 超长</option>
+              <option value={32768}>32768 · 极长（需模型支持）</option>
             </select>
           </div>
         </div>

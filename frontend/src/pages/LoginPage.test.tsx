@@ -11,6 +11,7 @@ const MOCK_USER: AuthUser = {
   id: "user1",
   email: "test@example.com",
   username: "testuser",
+  is_admin: false,
   created_at: "2026-01-01T00:00:00Z",
 };
 

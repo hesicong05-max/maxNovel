@@ -3,9 +3,9 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app.core.auth import User, get_admin_user, get_current_user
+from app.core.auth import User, get_admin_user
 from app.core.llm_client import llm_client
 from app.core.settings_store import load_settings, save_settings
 
@@ -13,11 +13,19 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
 class LLMSettingsRequest(BaseModel):
-    api_key: str = ""
-    base_url: str = "https://qianfan.baidubce.com/v2"
-    model: str = "ernie-4.5-turbo-128k"
-    temperature: float = 0.8
-    max_tokens: int = 4096
+    api_key: str = Field(default="", max_length=1000)
+    base_url: str = Field(
+        default="https://qianfan.baidubce.com/v2",
+        min_length=8,
+        max_length=2000,
+    )
+    model: str = Field(
+        default="ernie-4.5-turbo-128k",
+        min_length=1,
+        max_length=200,
+    )
+    temperature: float = Field(default=0.8, ge=0, le=2)
+    max_tokens: int = Field(default=4096, ge=512, le=32768)
 
 
 class LLMSettingsResponse(BaseModel):
@@ -83,9 +91,9 @@ PROVIDER_PRESETS = [
 
 @router.get("/llm", response_model=LLMSettingsResponse)
 async def get_llm_settings(
-    current_user: Annotated[User, Depends(get_current_user)],
+    admin_user: Annotated[User, Depends(get_admin_user)],
 ):
-    """Get current LLM settings (API key is masked). Requires authentication."""
+    """Get current LLM settings (API key is masked). Requires admin privileges."""
     s = load_settings()
     api_key = s.get("api_key", "")
     # Mask the key: show first 8 and last 4 chars
@@ -119,13 +127,15 @@ async def update_llm_settings(
     if "*" in api_key and api_key != "":
         api_key = current.get("api_key", "")
 
-    saved = save_settings({
-        "api_key": api_key,
-        "base_url": req.base_url,
-        "model": req.model,
-        "temperature": req.temperature,
-        "max_tokens": req.max_tokens,
-    })
+    saved = save_settings(
+        {
+            "api_key": api_key,
+            "base_url": req.base_url,
+            "model": req.model,
+            "temperature": req.temperature,
+            "max_tokens": req.max_tokens,
+        }
+    )
 
     masked_key = ""
     if saved["api_key"]:

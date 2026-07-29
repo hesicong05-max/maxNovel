@@ -1,22 +1,30 @@
 """Chapter generation and management API."""
 
 import json
+import logging
 from typing import Annotated, Any, AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings as app_settings
 from app.core.auth import User, get_current_user, get_project_for_owner
-from app.core.llm_client import llm_client
+from app.core.llm_client import LLMResponseTruncatedError, llm_client
 from app.core.memory_store import memory_store
 from app.core.pacing_planner import pacing_planner
 from app.core.rate_limiter import limiter
 from app.core.worldview_parser import worldview_parser
-from app.database import get_db, async_session
-from app.models.project import Chapter, Outline, Project, ProjectStatus, StoryMemory, Worldview
+from app.database import async_session, get_db
+from app.models.project import (
+    Chapter,
+    Outline,
+    Project,
+    ProjectStatus,
+    StoryMemory,
+    Worldview,
+)
 from app.prompts.templates import build_chapter_prompt, build_summary_prompt
 from app.schemas.models import (
     ChapterUpdate,
@@ -26,15 +34,61 @@ from app.schemas.models import (
 )
 
 router = APIRouter(prefix="/api/chapters", tags=["chapters"])
+logger = logging.getLogger(__name__)
 
 # Word count validation constants
 MIN_WORD_COUNT = 500
 MAX_WORD_COUNT = 10000
 
+# Prevent overlapping single/batch writers from corrupting the same project's
+# chapter and memory state within one application process. Database uniqueness
+# constraints provide the final guard across multiple processes.
+_active_generation_projects: set[str] = set()
+
+
+def _fallback_summary(content: str, max_chars: int = 400) -> str:
+    """Build a compact deterministic summary when no LLM summary is available."""
+    normalized = " ".join(content.split())
+    return normalized[:max_chars]
+
+
+def _chapter_output_token_budget(
+    target_word_count: int,
+    configured_max_tokens: Any,
+) -> int:
+    """Calculate a bounded output budget that respects the configured maximum."""
+    try:
+        configured_max = int(configured_max_tokens)
+    except (TypeError, ValueError):
+        configured_max = 4096
+    configured_max = min(max(configured_max, 2048), 32768)
+    desired_tokens = max(target_word_count * 2 + 500, 2048)
+    return min(desired_tokens, configured_max)
+
+
+async def _refresh_project_completion_status(
+    db: AsyncSession,
+    project: Project,
+) -> None:
+    """Mark the project complete only when every planned chapter is usable."""
+    result = await db.execute(
+        select(func.count(Chapter.id)).where(
+            Chapter.project_id == project.id,
+            Chapter.status.in_(("generated", "edited")),
+        )
+    )
+    completed_chapters = result.scalar_one()
+    project.status = (
+        ProjectStatus.COMPLETED
+        if completed_chapters >= project.total_chapters
+        else ProjectStatus.WRITING
+    )
+
 
 # ============================================================================
 # Word Count Configuration API
 # ============================================================================
+
 
 @router.get("/{project_id}/word-counts")
 async def get_word_counts(
@@ -46,7 +100,9 @@ async def get_word_counts(
     project = await get_project_for_owner(project_id, current_user, db)
 
     # Load outline to get chapter entries with target_word_count
-    ol_result = await db.execute(select(Outline).where(Outline.project_id == project_id))
+    ol_result = await db.execute(
+        select(Outline).where(Outline.project_id == project_id)
+    )
     outline = ol_result.scalar_one_or_none()
 
     outline_chapters = (outline.chapters if outline else []) or []
@@ -75,12 +131,14 @@ async def get_word_counts(
 
         effective_wc = target_wc if target_wc else auto_wc
 
-        chapters_info.append({
-            "chapter_num": i,
-            "target_word_count": target_wc,
-            "effective_word_count": effective_wc,
-            "title": entry.get("title", f"第{i}章"),
-        })
+        chapters_info.append(
+            {
+                "chapter_num": i,
+                "target_word_count": target_wc,
+                "effective_word_count": effective_wc,
+                "title": entry.get("title", f"第{i}章"),
+            }
+        )
 
     return WordCountConfigResponse(
         total_word_count=total_word_count,
@@ -115,7 +173,11 @@ async def update_word_counts(
             )
 
     # Validate per-chapter overrides
-    overrides = {c.chapter_num: c.target_word_count for c in data.chapters if c.target_word_count is not None}
+    overrides = {
+        c.chapter_num: c.target_word_count
+        for c in data.chapters
+        if c.target_word_count is not None
+    }
     for ch_num, wc in overrides.items():
         if wc < MIN_WORD_COUNT:
             raise HTTPException(
@@ -134,7 +196,9 @@ async def update_word_counts(
             )
 
     # Load outline
-    ol_result = await db.execute(select(Outline).where(Outline.project_id == project_id))
+    ol_result = await db.execute(
+        select(Outline).where(Outline.project_id == project_id)
+    )
     outline = ol_result.scalar_one_or_none()
     if not outline:
         raise HTTPException(status_code=400, detail="大纲不存在，请先生成大纲")
@@ -153,7 +217,9 @@ async def update_word_counts(
     # Remove existing metadata entry
     chapters_data = [c for c in chapters_data if c.get("chapter_num") != -1]
     # Add new metadata entry
-    chapters_data.insert(0, {"chapter_num": -1, "total_word_count": data.total_word_count})
+    chapters_data.insert(
+        0, {"chapter_num": -1, "total_word_count": data.total_word_count}
+    )
 
     outline.chapters = chapters_data
     await db.commit()
@@ -166,6 +232,7 @@ async def update_word_counts(
 # Chapter CRUD API
 # ============================================================================
 
+
 @router.get("/{project_id}")
 async def list_chapters(
     project_id: str,
@@ -175,7 +242,9 @@ async def list_chapters(
     await get_project_for_owner(project_id, current_user, db)
 
     result = await db.execute(
-        select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.chapter_num)
+        select(Chapter)
+        .where(Chapter.project_id == project_id)
+        .order_by(Chapter.chapter_num)
     )
     chapters = result.scalars().all()
     return [
@@ -201,7 +270,9 @@ async def get_progress(
     project = await get_project_for_owner(project_id, current_user, db)
 
     # Query worldview directly
-    wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
+    wv_result = await db.execute(
+        select(Worldview).where(Worldview.project_id == project_id)
+    )
     worldview = wv_result.scalar_one_or_none()
 
     if not worldview:
@@ -219,7 +290,9 @@ async def get_progress(
     elements = worldview_parser.normalize_elements(worldview.parsed_elements)
 
     # Query memory directly
-    mem_result = await db.execute(select(StoryMemory).where(StoryMemory.project_id == project_id))
+    mem_result = await db.execute(
+        select(StoryMemory).where(StoryMemory.project_id == project_id)
+    )
     memory = mem_result.scalar_one_or_none()
 
     revealed = set(memory.revealed_elements) if memory else set()
@@ -227,19 +300,27 @@ async def get_progress(
 
     # Count chapters
     ch_result = await db.execute(
-        select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.chapter_num)
+        select(Chapter)
+        .where(Chapter.project_id == project_id)
+        .order_by(Chapter.chapter_num)
     )
     chapters = ch_result.scalars().all()
     chapter_count = len(chapters)
-    current_chapter = chapter_count + 1 if project.status == ProjectStatus.WRITING else chapter_count
+    current_chapter = (
+        chapter_count + 1 if project.status == ProjectStatus.WRITING else chapter_count
+    )
 
     # Determine phase from outline's LLM-generated reveal_plan
-    ol_result = await db.execute(select(Outline).where(Outline.project_id == project_id))
+    ol_result = await db.execute(
+        select(Outline).where(Outline.project_id == project_id)
+    )
     outline = ol_result.scalar_one_or_none()
     phase = ""
     if outline and outline.reveal_plan:
         for entry in outline.reveal_plan:
-            if isinstance(entry, dict) and entry.get("chapter") == (current_chapter or 1):
+            if isinstance(entry, dict) and entry.get("chapter") == (
+                current_chapter or 1
+            ):
                 phase = entry.get("phase", "")
                 break
     # Fallback to pacing_planner if no LLM-generated plan
@@ -247,7 +328,11 @@ async def get_progress(
         phase = pacing_planner._phase_for(current_chapter or 1, project.total_chapters)
         phase = pacing_planner.get_phase_label(phase)
 
-    pending_fs = [f for f in (memory.foreshadows or []) if f["status"] != "resolved"] if memory else []
+    pending_fs = (
+        [f for f in (memory.foreshadows or []) if f["status"] != "resolved"]
+        if memory
+        else []
+    )
 
     return ProgressResponse(
         total_elements=total,
@@ -302,7 +387,7 @@ async def update_chapter(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Edit a generated chapter."""
-    await get_project_for_owner(project_id, current_user, db)
+    project = await get_project_for_owner(project_id, current_user, db)
 
     result = await db.execute(
         select(Chapter).where(
@@ -319,7 +404,16 @@ async def update_chapter(
     if data.content is not None:
         chapter.content = data.content
         chapter.word_count = len(data.content)
+        chapter.summary = _fallback_summary(data.content)
+
+        # Keep the continuity memory aligned with the edited source of truth.
+        memory = await memory_store.get_or_create(db, project_id)
+        await memory_store.add_chapter_summary(db, memory, chapter_num, chapter.summary)
+        await memory_store.add_timeline_event(
+            db, memory, chapter_num, "章节生成", chapter.summary
+        )
     chapter.status = "edited"
+    await _refresh_project_completion_status(db, project)
 
     await db.commit()
     await db.refresh(chapter)
@@ -337,6 +431,7 @@ async def update_chapter(
 # ============================================================================
 # Chapter Generation API (Single + Batch)
 # ============================================================================
+
 
 @router.post("/{project_id}/{chapter_num}/generate")
 @limiter.limit(app_settings.RATE_LIMIT_LLM)
@@ -378,7 +473,9 @@ async def generate_all_chapters(
     await get_project_for_owner(project_id, current_user, db)
 
     return StreamingResponse(
-        _stream_batch_generate(project_id, current_user.id, skip_existing=skip_existing),
+        _stream_batch_generate(
+            project_id, current_user.id, skip_existing=skip_existing
+        ),
         media_type="text/event-stream",
     )
 
@@ -388,19 +485,29 @@ async def _stream_single_chapter(project_id: str, chapter_num: int, user_id: str
 
     Re-verifies project ownership in the new session to prevent TOCTOU.
     """
-    async with async_session() as db:
-        # Re-verify ownership in the new session
-        result = await db.execute(select(Project).where(Project.id == project_id))
-        project = result.scalar_one_or_none()
-        if not project:
-            yield _sse({"type": "error", "error": "项目不存在"})
-            return
-        if project.owner_id is not None and project.owner_id != user_id:
-            yield _sse({"type": "error", "error": "无权操作此项目"})
-            return
+    if project_id in _active_generation_projects:
+        yield _sse(
+            {"type": "error", "error": "该项目已有生成任务正在运行，请等待完成后重试"}
+        )
+        return
 
-        async for event in _generate_chapter_core(db, project_id, chapter_num):
-            yield event
+    _active_generation_projects.add(project_id)
+    try:
+        async with async_session() as db:
+            # Re-verify ownership in the new session
+            result = await db.execute(select(Project).where(Project.id == project_id))
+            project = result.scalar_one_or_none()
+            if not project:
+                yield _sse({"type": "error", "error": "项目不存在"})
+                return
+            if project.owner_id is None or project.owner_id != user_id:
+                yield _sse({"type": "error", "error": "无权操作此项目"})
+                return
+
+            async for event in _generate_chapter_core(db, project_id, chapter_num):
+                yield event
+    finally:
+        _active_generation_projects.discard(project_id)
 
 
 async def _stream_batch_generate(
@@ -412,105 +519,131 @@ async def _stream_batch_generate(
 
     Re-verifies project ownership in the new session to prevent TOCTOU.
     """
-    async with async_session() as db:
-        # Load project and re-verify ownership
-        result = await db.execute(select(Project).where(Project.id == project_id))
-        project = result.scalar_one_or_none()
-        if not project:
-            yield _sse({"type": "error", "error": "项目不存在"})
-            return
-        if project.owner_id is not None and project.owner_id != user_id:
-            yield _sse({"type": "error", "error": "无权操作此项目"})
-            return
-
-        # Load outline
-        ol_result = await db.execute(select(Outline).where(Outline.project_id == project_id))
-        outline = ol_result.scalar_one_or_none()
-        if not outline:
-            yield _sse({"type": "error", "error": "大纲不存在，请先生成并确认大纲"})
-            return
-
-        # Load existing chapters to know which to skip
-        ch_result = await db.execute(
-            select(Chapter).where(Chapter.project_id == project_id)
+    if project_id in _active_generation_projects:
+        yield _sse(
+            {"type": "error", "error": "该项目已有生成任务正在运行，请等待完成后重试"}
         )
-        existing_chapters = {c.chapter_num: c for c in ch_result.scalars().all()}
+        return
 
-        # Determine which chapters to generate
-        chapters_to_generate = []
-        for i in range(1, project.total_chapters + 1):
-            ch = existing_chapters.get(i)
-            if skip_existing and ch and ch.status in ("generated", "edited"):
-                continue
-            chapters_to_generate.append(i)
+    _active_generation_projects.add(project_id)
+    try:
+        async with async_session() as db:
+            # Load project and re-verify ownership
+            result = await db.execute(select(Project).where(Project.id == project_id))
+            project = result.scalar_one_or_none()
+            if not project:
+                yield _sse({"type": "error", "error": "项目不存在"})
+                return
+            if project.owner_id is None or project.owner_id != user_id:
+                yield _sse({"type": "error", "error": "无权操作此项目"})
+                return
 
-        total_to_generate = len(chapters_to_generate)
-        if total_to_generate == 0:
-            yield _sse({"type": "batch_complete", "total_generated": 0, "message": "所有章节已生成"})
-            return
+            # Load outline
+            ol_result = await db.execute(
+                select(Outline).where(Outline.project_id == project_id)
+            )
+            outline = ol_result.scalar_one_or_none()
+            if not outline:
+                yield _sse({"type": "error", "error": "大纲不存在，请先生成并确认大纲"})
+                return
 
-        # Send batch start
-        yield _sse({
-            "type": "batch_start",
-            "total_chapters": project.total_chapters,
-            "chapters_to_generate": chapters_to_generate,
-            "total_to_generate": total_to_generate,
-        })
+            # Load existing chapters to know which to skip
+            ch_result = await db.execute(
+                select(Chapter).where(Chapter.project_id == project_id)
+            )
+            existing_chapters = {c.chapter_num: c for c in ch_result.scalars().all()}
 
-        # Update project status
-        project.status = ProjectStatus.WRITING
-        await db.commit()
+            # Determine which chapters to generate
+            chapters_to_generate = []
+            for i in range(1, project.total_chapters + 1):
+                ch = existing_chapters.get(i)
+                if skip_existing and ch and ch.status in ("generated", "edited"):
+                    continue
+                chapters_to_generate.append(i)
 
-        generated_count = 0
-        total_words = 0
-        failed_chapters = []
-
-        for idx, chapter_num in enumerate(chapters_to_generate):
-            progress = idx + 1
-            yield _sse({
-                "type": "batch_progress",
-                "current": progress,
-                "total": total_to_generate,
-                "chapter_num": chapter_num,
-            })
-
-            # Generate the chapter
-            chapter_success = False
-            async for event in _generate_chapter_core(
-                db, project_id, chapter_num, batch_mode=True
-            ):
-                # Parse the event to track success
-                try:
-                    event_data = json.loads(event.replace("data: ", "").strip())
-                    if event_data.get("type") == "complete":
-                        chapter_success = True
-                except (json.JSONDecodeError, ValueError):
-                    pass
-                yield event
-
-            if chapter_success:
-                generated_count += 1
-                # Accumulate word count from the generated chapter
-                ch_result = await db.execute(
-                    select(Chapter).where(
-                        Chapter.project_id == project_id,
-                        Chapter.chapter_num == chapter_num,
-                    )
+            total_to_generate = len(chapters_to_generate)
+            if total_to_generate == 0:
+                yield _sse(
+                    {
+                        "type": "batch_complete",
+                        "total_generated": 0,
+                        "message": "所有章节已生成",
+                    }
                 )
-                ch = ch_result.scalar_one_or_none()
-                if ch:
-                    total_words += ch.word_count or 0
-            else:
-                failed_chapters.append(chapter_num)
+                return
 
-        # Send batch complete
-        yield _sse({
-            "type": "batch_complete",
-            "total_generated": generated_count,
-            "total_words": total_words,
-            "failed_chapters": failed_chapters,
-            "total_chapters": project.total_chapters,
-        })
+            # Send batch start
+            yield _sse(
+                {
+                    "type": "batch_start",
+                    "total_chapters": project.total_chapters,
+                    "chapters_to_generate": chapters_to_generate,
+                    "total_to_generate": total_to_generate,
+                }
+            )
+
+            # Do not downgrade a completed project merely because a regeneration
+            # attempt starts; successful saves recompute the final status.
+            if project.status != ProjectStatus.COMPLETED:
+                project.status = ProjectStatus.WRITING
+            await db.commit()
+
+            generated_count = 0
+            total_words = 0
+            failed_chapters = []
+
+            for idx, chapter_num in enumerate(chapters_to_generate):
+                progress = idx + 1
+                yield _sse(
+                    {
+                        "type": "batch_progress",
+                        "current": progress,
+                        "total": total_to_generate,
+                        "chapter_num": chapter_num,
+                    }
+                )
+
+                # Generate the chapter
+                chapter_success = False
+                async for event in _generate_chapter_core(
+                    db, project_id, chapter_num, batch_mode=True
+                ):
+                    # Parse the event to track success
+                    try:
+                        event_data = json.loads(event.replace("data: ", "").strip())
+                        if event_data.get("type") == "complete":
+                            chapter_success = True
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                    yield event
+
+                if chapter_success:
+                    generated_count += 1
+                    # Accumulate word count from the generated chapter
+                    ch_result = await db.execute(
+                        select(Chapter).where(
+                            Chapter.project_id == project_id,
+                            Chapter.chapter_num == chapter_num,
+                        )
+                    )
+                    ch = ch_result.scalar_one_or_none()
+                    if ch:
+                        total_words += ch.word_count or 0
+                else:
+                    failed_chapters.append(chapter_num)
+
+            # Send batch complete
+            yield _sse(
+                {
+                    "type": "batch_complete",
+                    "total_generated": generated_count,
+                    "total_words": total_words,
+                    "failed_chapters": failed_chapters,
+                    "total_chapters": project.total_chapters,
+                }
+            )
+    finally:
+        _active_generation_projects.discard(project_id)
 
 
 async def _generate_chapter_core(
@@ -532,18 +665,27 @@ async def _generate_chapter_core(
 
     # Validate chapter number range (safety net for batch generation)
     if chapter_num < 1 or chapter_num > project.total_chapters:
-        yield _sse({"type": "error", "error": f"章节号 {chapter_num} 超出范围（1-{project.total_chapters}）"})
+        yield _sse(
+            {
+                "type": "error",
+                "error": f"章节号 {chapter_num} 超出范围（1-{project.total_chapters}）",
+            }
+        )
         return
 
     # Load outline
-    ol_result = await db.execute(select(Outline).where(Outline.project_id == project_id))
+    ol_result = await db.execute(
+        select(Outline).where(Outline.project_id == project_id)
+    )
     outline = ol_result.scalar_one_or_none()
     if not outline:
         yield _sse({"type": "error", "error": "大纲不存在，请先生成并确认大纲"})
         return
 
     # Load worldview
-    wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
+    wv_result = await db.execute(
+        select(Worldview).where(Worldview.project_id == project_id)
+    )
     worldview = wv_result.scalar_one_or_none()
     if not worldview:
         yield _sse({"type": "error", "error": "世界观不存在"})
@@ -552,7 +694,7 @@ async def _generate_chapter_core(
     # Find the chapter entry in outline
     chapter_entry = None
     total_word_count_target = None
-    for ch in (outline.chapters or []):
+    for ch in outline.chapters or []:
         if ch.get("chapter_num") == -1:
             total_word_count_target = ch.get("total_word_count")
         elif ch.get("chapter_num") == chapter_num:
@@ -593,7 +735,7 @@ async def _generate_chapter_core(
 
     # Round 2: also check outline.reveal_plan for this chapter
     # (reveal_plan.elements contains names, same as chapter.reveal_elements)
-    for entry in (outline.reveal_plan or []):
+    for entry in outline.reveal_plan or []:
         if not isinstance(entry, dict):
             continue
         if entry.get("chapter") != chapter_num:
@@ -601,8 +743,7 @@ async def _generate_chapter_core(
         for ename in entry.get("elements", []):
             # Skip if already found in Round 1 (check by both name and ID)
             already_added = any(
-                e["name"] == ename or e["id"] == ename
-                for e in elements_to_reveal
+                e["name"] == ename or e["id"] == ename for e in elements_to_reveal
             )
             if already_added:
                 continue
@@ -617,14 +758,17 @@ async def _generate_chapter_core(
     memory = await memory_store.get_or_create(db, project_id)
     context = await memory_store.get_context_for_chapter(memory, chapter_num)
 
-    # Update project status
-    project.status = ProjectStatus.WRITING
+    # Persist newly-created memory before the long-running stream. Keep a
+    # completed project completed while a regeneration attempt is in flight;
+    # a failed retry must not downgrade already-valid data.
+    if project.status != ProjectStatus.COMPLETED:
+        project.status = ProjectStatus.WRITING
     await db.commit()
 
     # Determine phase from outline's LLM-generated reveal_plan
     phase = ""
     phase_guidance = ""
-    for entry in (outline.reveal_plan or []):
+    for entry in outline.reveal_plan or []:
         if isinstance(entry, dict) and entry.get("chapter") == chapter_num:
             phase = entry.get("phase", "")
             phase_guidance = entry.get("summary", "")
@@ -635,15 +779,17 @@ async def _generate_chapter_core(
     phase_label = phase if phase else "推进"
 
     # Send metadata
-    yield _sse({
-        "type": "metadata",
-        "chapter_num": chapter_num,
-        "title": chapter_entry.get("title", f"第{chapter_num}章"),
-        "elements_to_reveal": [e["name"] for e in elements_to_reveal],
-        "phase": phase,
-        "phase_label": phase_label,
-        "target_word_count": effective_wc,
-    })
+    yield _sse(
+        {
+            "type": "metadata",
+            "chapter_num": chapter_num,
+            "title": chapter_entry.get("title", f"第{chapter_num}章"),
+            "elements_to_reveal": [e["name"] for e in elements_to_reveal],
+            "phase": phase,
+            "phase_label": phase_label,
+            "target_word_count": effective_wc,
+        }
+    )
 
     # Build prompt
     messages = build_chapter_prompt(
@@ -665,15 +811,16 @@ async def _generate_chapter_core(
 
     # Stream content — use user-configured temperature from settings
     from app.core.settings_store import load_settings as load_llm_settings
+
     llm_s = load_llm_settings()
     stream_temperature = llm_s.get("temperature", 0.8)
 
-    # Calculate max_tokens based on target word count.
-    # Chinese text: ~1-2 tokens per character, use 2x for safety + buffer.
-    # Cap at 8192 (common API limit for output tokens).
-    user_max_tokens = llm_s.get("max_tokens", 4096)
-    calculated_max = effective_wc * 2 + 500
-    stream_max_tokens = min(max(calculated_max, user_max_tokens, 2048), 8192)
+    # Calculate the desired output budget from the target length, while
+    # respecting the administrator's configured maximum.
+    stream_max_tokens = _chapter_output_token_budget(
+        effective_wc,
+        llm_s.get("max_tokens", 4096),
+    )
 
     full_content = ""
     try:
@@ -683,19 +830,62 @@ async def _generate_chapter_core(
             full_content += chunk
             yield _sse({"type": "content", "text": chunk, "chapter_num": chapter_num})
     except Exception as e:
-        if full_content:
-            yield _sse({"type": "error", "error": f"第{chapter_num}章生成中断: {str(e)}，已保存部分内容", "chapter_num": chapter_num})
+        logger.exception(
+            "Chapter generation failed for project=%s chapter=%d: %s",
+            project_id,
+            chapter_num,
+            e,
+        )
+        if isinstance(e, LLMResponseTruncatedError):
+            yield _sse(
+                {
+                    "type": "error",
+                    "error": (
+                        f"第{chapter_num}章达到最大输出长度，未保存不完整内容；"
+                        "请提高最大输出 token 或降低本章目标字数后重试"
+                    ),
+                    "chapter_num": chapter_num,
+                }
+            )
+        elif full_content:
+            yield _sse(
+                {
+                    "type": "error",
+                    "error": f"第{chapter_num}章生成中断，未保存不完整内容，请重试",
+                    "chapter_num": chapter_num,
+                }
+            )
         else:
-            yield _sse({"type": "error", "error": f"第{chapter_num}章生成失败: {str(e)}", "chapter_num": chapter_num})
-            return
+            yield _sse(
+                {
+                    "type": "error",
+                    "error": f"第{chapter_num}章生成失败，请稍后重试",
+                    "chapter_num": chapter_num,
+                }
+            )
+        return
+
+    if not full_content.strip():
+        yield _sse(
+            {
+                "type": "error",
+                "error": f"第{chapter_num}章未生成有效内容，未保存，请重试",
+                "chapter_num": chapter_num,
+            }
+        )
+        return
 
     # Generate summary for memory (non-fatal if this fails)
     summary = ""
     try:
         summary_messages = build_summary_prompt(full_content, chapter_num)
-        summary = await llm_client.chat(summary_messages, temperature=0.3, max_tokens=200)
+        summary = await llm_client.chat(
+            summary_messages, temperature=0.3, max_tokens=200
+        )
     except Exception:
-        summary = full_content[:200] if full_content else "（摘要生成失败）"
+        summary = (
+            _fallback_summary(full_content) if full_content else "（摘要生成失败）"
+        )
 
     # Save chapter to database
     result = await db.execute(
@@ -726,24 +916,41 @@ async def _generate_chapter_core(
         db.add(chapter)
 
     # Update memory
-    await memory_store.mark_revealed(db, memory, [e["id"] for e in elements_to_reveal], chapter_num)
+    await memory_store.mark_revealed(
+        db, memory, [e["id"] for e in elements_to_reveal], chapter_num
+    )
     await memory_store.add_chapter_summary(db, memory, chapter_num, summary)
     await memory_store.add_timeline_event(db, memory, chapter_num, "章节生成", summary)
+    await _refresh_project_completion_status(db, project)
 
     try:
         await db.commit()
     except Exception as e:
         await db.rollback()
-        yield _sse({"type": "error", "error": f"第{chapter_num}章保存失败: {str(e)}", "chapter_num": chapter_num})
+        logger.exception(
+            "Chapter save failed for project=%s chapter=%d: %s",
+            project_id,
+            chapter_num,
+            e,
+        )
+        yield _sse(
+            {
+                "type": "error",
+                "error": f"第{chapter_num}章保存失败，请稍后重试",
+                "chapter_num": chapter_num,
+            }
+        )
         return
 
     # Send completion
-    yield _sse({
-        "type": "complete",
-        "chapter_num": chapter_num,
-        "word_count": len(full_content),
-        "summary": summary,
-    })
+    yield _sse(
+        {
+            "type": "complete",
+            "chapter_num": chapter_num,
+            "word_count": len(full_content),
+            "summary": summary,
+        }
+    )
 
 
 def _sse(data: dict[str, Any]) -> str:

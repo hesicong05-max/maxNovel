@@ -1,6 +1,7 @@
 """Outline generation and management API."""
 
 import json
+import logging
 import re
 from typing import Annotated, Any, AsyncGenerator
 
@@ -10,17 +11,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import User, get_current_user, get_project_for_owner
-from app.core.llm_client import llm_client
+from app.core.llm_client import LLMResponseTruncatedError, llm_client
 from app.core.memory_store import memory_store
-from app.core.project_files import save_outline_file, load_worldview_file
+from app.core.project_files import load_worldview_file, save_outline_file
 from app.core.settings_store import load_settings
 from app.core.worldview_parser import worldview_parser
-from app.database import get_db, async_session
+from app.database import async_session, get_db
 from app.models.project import Outline, Project, ProjectStatus, Worldview
 from app.prompts.templates import build_outline_prompt
 from app.schemas.models import OutlineCreate
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +32,9 @@ router = APIRouter(prefix="/api/outline", tags=["outline"])
 OUTLINE_MAX_TOKENS = 8192
 
 
-def _load_worldview_elements(worldview: Worldview, project_id: str) -> list[dict[str, Any]]:
+def _load_worldview_elements(
+    worldview: Worldview, project_id: str
+) -> list[dict[str, Any]]:
     """Load worldview elements with fallback to file if DB parsed_elements is empty.
 
     Priority:
@@ -50,7 +51,8 @@ def _load_worldview_elements(worldview: Worldview, project_id: str) -> list[dict
         if elements:
             logger.info(
                 "Elements loaded from DB parsed_elements: %d elements for project %s",
-                len(elements), project_id,
+                len(elements),
+                project_id,
             )
             return elements
 
@@ -70,7 +72,9 @@ def _load_worldview_elements(worldview: Worldview, project_id: str) -> list[dict
             if elements:
                 logger.warning(
                     "DB parsed_elements was empty — re-parsed from DB structured fields: "
-                    "%d elements for project %s", len(elements), project_id,
+                    "%d elements for project %s",
+                    len(elements),
+                    project_id,
                 )
                 return elements
 
@@ -93,25 +97,30 @@ def _load_worldview_elements(worldview: Worldview, project_id: str) -> list[dict
                     logger.warning(
                         "DB parsed_elements AND DB structured fields were empty — "
                         "loaded from worldview.json file: %d elements for project %s",
-                        len(elements), project_id,
+                        len(elements),
+                        project_id,
                     )
                     return elements
 
         logger.error(
             "All worldview element sources are empty for project %s! "
             "DB parsed_elements=%s, DB structured total=%d, file exists=%s",
-            project_id, type(worldview.parsed_elements).__name__,
-            total_in_db, wv_file is not None,
+            project_id,
+            type(worldview.parsed_elements).__name__,
+            total_in_db,
+            wv_file is not None,
         )
         return []
     except Exception as e:
         logger.error(
             "Failed to parse worldview elements for project %s: %s",
-            project_id, str(e), exc_info=True,
+            project_id,
+            str(e),
+            exc_info=True,
         )
         raise HTTPException(
             status_code=500,
-            detail=f"世界观数据解析失败: {str(e)}。请检查世界观内容格式，或尝试重新保存世界观。"
+            detail="世界观数据解析失败，请检查内容格式或重新保存世界观。",
         )
 
 
@@ -126,7 +135,9 @@ async def generate_outline(
         project = await get_project_for_owner(project_id, current_user, db)
 
         # Query worldview directly (avoid lazy loading)
-        wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
+        wv_result = await db.execute(
+            select(Worldview).where(Worldview.project_id == project_id)
+        )
         worldview = wv_result.scalar_one_or_none()
         if not worldview:
             raise HTTPException(status_code=400, detail="请先上传世界观")
@@ -137,12 +148,13 @@ async def generate_outline(
         if not elements:
             raise HTTPException(
                 status_code=400,
-                detail="世界观要素为空，无法生成大纲。请确保已正确填写世界观内容并保存。"
+                detail="世界观要素为空，无法生成大纲。请确保已正确填写世界观内容并保存。",
             )
         else:
             logger.info(
                 "Worldview loaded for project %s: %d elements, characters=%d, conflicts=%d, power_system=%d",
-                project_id, len(elements),
+                project_id,
+                len(elements),
                 len(worldview.characters or []),
                 len(worldview.conflicts or []),
                 len(worldview.power_system or []),
@@ -184,11 +196,13 @@ async def generate_outline(
     except Exception as e:
         logger.error(
             "Outline setup failed for project %s: %s",
-            project_id, str(e), exc_info=True,
+            project_id,
+            str(e),
+            exc_info=True,
         )
         raise HTTPException(
             status_code=500,
-            detail=f"大纲生成初始化失败: {str(e)}",
+            detail="大纲生成初始化失败，请稍后重试",
         )
 
     try:
@@ -197,26 +211,52 @@ async def generate_outline(
         )
         logger.info(
             "Outline LLM response for project %s: %d chars, %d elements, %d chapters",
-            project_id, len(raw_response), len(elements), project.total_chapters,
+            project_id,
+            len(raw_response),
+            len(elements),
+            project.total_chapters,
+        )
+    except LLMResponseTruncatedError as e:
+        logger.warning("Outline LLM output truncated for project %s: %s", project_id, e)
+        raise HTTPException(
+            status_code=502,
+            detail="大纲达到最大输出长度且内容不完整，请提高最大输出 token 或减少章节数后重试",
         )
     except Exception as e:
         logger.error("Outline LLM call failed for project %s: %s", project_id, str(e))
         raise HTTPException(
             status_code=502,
-            detail=f"大纲生成失败，LLM 服务异常: {str(e)}",
+            detail="大纲生成失败，LLM 服务暂时异常，请稍后重试",
         )
 
     # Parse and normalize LLM response (including LLM-generated reveal_plan)
-    chapters_data, warning = _parse_outline_response(raw_response, project.total_chapters)
+    chapters_data, warning = _parse_outline_response(
+        raw_response, project.total_chapters
+    )
+    if warning:
+        logger.warning(
+            "Rejecting incomplete outline for project %s: %s",
+            project_id,
+            warning,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="LLM 返回的大纲不完整或格式无效，旧大纲已保留，请重试",
+        )
     reveal_plan = chapters_data.get("reveal_plan", [])
     logger.info(
         "Outline parsed for project %s: story_arc=%d chars, %d chapters, %d reveal_plan entries, warning=%s",
-        project_id, len(chapters_data.get("story_arc", "")),
-        len(chapters_data.get("chapters", [])), len(reveal_plan), warning or "none",
+        project_id,
+        len(chapters_data.get("story_arc", "")),
+        len(chapters_data.get("chapters", [])),
+        len(reveal_plan),
+        warning or "none",
     )
 
     # Delete existing outline if any (query directly)
-    ol_result = await db.execute(select(Outline).where(Outline.project_id == project_id))
+    ol_result = await db.execute(
+        select(Outline).where(Outline.project_id == project_id)
+    )
     existing_ol = ol_result.scalar_one_or_none()
     if existing_ol:
         await db.delete(existing_ol)
@@ -246,7 +286,9 @@ async def generate_outline(
         "project_id": project_id,
         "story_arc": outline.story_arc,
         "chapters": outline.chapters if isinstance(outline.chapters, list) else [],
-        "reveal_plan": outline.reveal_plan if isinstance(outline.reveal_plan, list) else [],
+        "reveal_plan": outline.reveal_plan
+        if isinstance(outline.reveal_plan, list)
+        else [],
     }
     if warning:
         result["warning"] = warning
@@ -274,7 +316,9 @@ async def diagnose_outline(
     project = await get_project_for_owner(project_id, current_user, db)
 
     # Check worldview from DB
-    wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
+    wv_result = await db.execute(
+        select(Worldview).where(Worldview.project_id == project_id)
+    )
     worldview = wv_result.scalar_one_or_none()
 
     if not worldview:
@@ -300,7 +344,9 @@ async def diagnose_outline(
     )
 
     # Check if outline exists
-    ol_result = await db.execute(select(Outline).where(Outline.project_id == project_id))
+    ol_result = await db.execute(
+        select(Outline).where(Outline.project_id == project_id)
+    )
     existing_outline = ol_result.scalar_one_or_none()
 
     # DB structured fields summary
@@ -327,7 +373,9 @@ async def diagnose_outline(
             "history": len(wv_file.get("history", [])),
             "conflicts": len(wv_file.get("conflicts", [])),
             "special_settings": len(wv_file.get("special_settings", [])),
-            "parsed_elements_in_file": len(wv_file.get("parsed_elements", [])) if isinstance(wv_file.get("parsed_elements"), list) else "not-list",
+            "parsed_elements_in_file": len(wv_file.get("parsed_elements", []))
+            if isinstance(wv_file.get("parsed_elements"), list)
+            else "not-list",
         }
     else:
         file_summary = {"exists": False}
@@ -348,19 +396,24 @@ async def diagnose_outline(
             "db_structured_total": sum(db_structured.values()),
             "parsed_elements_count": len(elements),
             "parsed_elements_type": type(worldview.parsed_elements).__name__,
-            "characters_preview": [c.get("name", "?") for c in (worldview.characters or [])[:5]],
-            "conflicts_preview": [c.get("name", "?") for c in (worldview.conflicts or [])[:5]],
+            "characters_preview": [
+                c.get("name", "?") for c in (worldview.characters or [])[:5]
+            ],
+            "conflicts_preview": [
+                c.get("name", "?") for c in (worldview.conflicts or [])[:5]
+            ],
         },
         "worldview_file": file_summary,
         "llm": {
             "api_key_configured": bool(settings.get("api_key")),
-            "api_key_prefix": (settings.get("api_key", "") or "")[:8] + "..." if settings.get("api_key") else "(empty — MOCK MODE will be used!)",
             "base_url": settings.get("base_url", ""),
             "model": settings.get("model", ""),
             "using_mock": using_mock,
             "temperature": settings.get("temperature", 0.7),
             "max_tokens": settings.get("max_tokens", 4096),
-            "warning": "⚠️ API Key 未配置！大纲将使用 mock 模式生成，内容与世界观无关。" if using_mock else None,
+            "warning": "⚠️ API Key 未配置！大纲将使用 mock 模式生成，内容与世界观无关。"
+            if using_mock
+            else None,
         },
         "prompt": {
             "system_prompt_length": len(messages[0]["content"]),
@@ -374,10 +427,18 @@ async def diagnose_outline(
         ],
         "existing_outline": {
             "has_outline": existing_outline is not None,
-            "story_arc_length": len(existing_outline.story_arc) if existing_outline else 0,
-            "story_arc_preview": (existing_outline.story_arc[:300] + "...") if existing_outline and len(existing_outline.story_arc) > 300 else (existing_outline.story_arc if existing_outline else ""),
-            "chapters_count": len(existing_outline.chapters) if existing_outline and isinstance(existing_outline.chapters, list) else 0,
-        } if existing_outline else None,
+            "story_arc_length": len(existing_outline.story_arc)
+            if existing_outline
+            else 0,
+            "story_arc_preview": (existing_outline.story_arc[:300] + "...")
+            if existing_outline and len(existing_outline.story_arc) > 300
+            else (existing_outline.story_arc if existing_outline else ""),
+            "chapters_count": len(existing_outline.chapters)
+            if existing_outline and isinstance(existing_outline.chapters, list)
+            else 0,
+        }
+        if existing_outline
+        else None,
     }
 
 
@@ -399,7 +460,9 @@ async def generate_outline_stream(
     try:
         project = await get_project_for_owner(project_id, current_user, db)
 
-        wv_result = await db.execute(select(Worldview).where(Worldview.project_id == project_id))
+        wv_result = await db.execute(
+            select(Worldview).where(Worldview.project_id == project_id)
+        )
         worldview = wv_result.scalar_one_or_none()
         if not worldview:
             raise HTTPException(status_code=400, detail="请先上传世界观")
@@ -410,12 +473,13 @@ async def generate_outline_stream(
         if not elements:
             raise HTTPException(
                 status_code=400,
-                detail="世界观要素为空，无法生成大纲。请确保已正确填写世界观内容并保存。"
+                detail="世界观要素为空，无法生成大纲。请确保已正确填写世界观内容并保存。",
             )
         else:
             logger.info(
                 "Worldview loaded for project %s (stream): %d elements, characters=%d, conflicts=%d",
-                project_id, len(elements),
+                project_id,
+                len(elements),
                 len(worldview.characters or []),
                 len(worldview.conflicts or []),
             )
@@ -458,16 +522,18 @@ async def generate_outline_stream(
     except Exception as e:
         logger.error(
             "Outline stream setup failed for project %s: %s",
-            project_id, str(e), exc_info=True,
+            project_id,
+            str(e),
+            exc_info=True,
         )
         raise HTTPException(
             status_code=500,
-            detail=f"大纲生成初始化失败: {str(e)}",
+            detail="大纲生成初始化失败，请稍后重试",
         )
 
     async def event_stream() -> AsyncGenerator[str, None]:
         # Send start event
-        yield f'data: {json.dumps({"type": "start", "message": "正在生成大纲，请耐心等待...", "total_chapters": total_chapters_val}, ensure_ascii=False)}\n\n'
+        yield f"data: {json.dumps({'type': 'start', 'message': '正在生成大纲，请耐心等待...', 'total_chapters': total_chapters_val}, ensure_ascii=False)}\n\n"
 
         full_response = ""
         chunk_count = 0
@@ -481,20 +547,47 @@ async def generate_outline_stream(
 
                 # Send chunk every 5 chunks to avoid flooding
                 if chunk_count % 5 == 0:
-                    yield f'data: {json.dumps({"type": "progress", "chunks": chunk_count, "chars": len(full_response)}, ensure_ascii=False)}\n\n'
+                    yield f"data: {json.dumps({'type': 'progress', 'chunks': chunk_count, 'chars': len(full_response)}, ensure_ascii=False)}\n\n"
 
             logger.info(
                 "Outline stream complete for project %s: %d chunks, %d chars",
-                project_id_val, chunk_count, len(full_response),
+                project_id_val,
+                chunk_count,
+                len(full_response),
             )
 
             # Parse the complete response (including LLM-generated reveal_plan)
-            chapters_data, warning = _parse_outline_response(full_response, total_chapters_val)
+            chapters_data, warning = _parse_outline_response(
+                full_response, total_chapters_val
+            )
+            if warning:
+                logger.warning(
+                    "Rejecting incomplete outline stream for project %s: %s",
+                    project_id_val,
+                    warning,
+                )
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {
+                            "type": "error",
+                            "message": (
+                                "LLM 返回的大纲不完整或格式无效，旧大纲已保留，请重试"
+                            ),
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                )
+                return
             reveal_plan_val = chapters_data.get("reveal_plan", [])
             logger.info(
                 "Outline parsed for project %s: story_arc=%d chars, %d chapters, %d reveal_plan entries, warning=%s",
-                project_id_val, len(chapters_data.get("story_arc", "")),
-                len(chapters_data.get("chapters", [])), len(reveal_plan_val), warning or "none",
+                project_id_val,
+                len(chapters_data.get("story_arc", "")),
+                len(chapters_data.get("chapters", [])),
+                len(reveal_plan_val),
+                warning or "none",
             )
 
             # Save to DB in a fresh session
@@ -536,8 +629,12 @@ async def generate_outline_stream(
                     "id": outline.id,
                     "project_id": project_id_val,
                     "story_arc": outline.story_arc,
-                    "chapters": outline.chapters if isinstance(outline.chapters, list) else [],
-                    "reveal_plan": outline.reveal_plan if isinstance(outline.reveal_plan, list) else [],
+                    "chapters": outline.chapters
+                    if isinstance(outline.chapters, list)
+                    else [],
+                    "reveal_plan": outline.reveal_plan
+                    if isinstance(outline.reveal_plan, list)
+                    else [],
                 }
 
                 event_data = {"type": "complete", "outline": result}
@@ -550,11 +647,43 @@ async def generate_outline_stream(
                 if alignment_warning and not warning:
                     event_data["warning"] = alignment_warning
 
-                yield f'data: {json.dumps(event_data, ensure_ascii=False)}\n\n'
+                yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
 
+        except LLMResponseTruncatedError as e:
+            logger.warning(
+                "Outline stream output truncated for project %s: %s",
+                project_id_val,
+                e,
+            )
+            yield (
+                "data: "
+                + json.dumps(
+                    {
+                        "type": "error",
+                        "message": (
+                            "大纲达到最大输出长度且内容不完整，"
+                            "请提高最大输出 token 或减少章节数后重试"
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
         except Exception as e:
-            logger.error("Outline stream failed for project %s: %s", project_id_val, str(e))
-            yield f'data: {json.dumps({"type": "error", "message": f"大纲生成失败: {str(e)}"}, ensure_ascii=False)}\n\n'
+            logger.error(
+                "Outline stream failed for project %s: %s", project_id_val, str(e)
+            )
+            yield (
+                "data: "
+                + json.dumps(
+                    {
+                        "type": "error",
+                        "message": "大纲生成失败，LLM 服务暂时异常，请稍后重试",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
 
     return StreamingResponse(
         event_stream(),
@@ -585,7 +714,9 @@ async def get_outline(
         "project_id": project_id,
         "story_arc": outline.story_arc,
         "chapters": outline.chapters if isinstance(outline.chapters, list) else [],
-        "reveal_plan": outline.reveal_plan if isinstance(outline.reveal_plan, list) else [],
+        "reveal_plan": outline.reveal_plan
+        if isinstance(outline.reveal_plan, list)
+        else [],
         "created_at": outline.created_at.isoformat() if outline.created_at else None,
         "updated_at": outline.updated_at.isoformat() if outline.updated_at else None,
     }
@@ -600,6 +731,16 @@ async def update_outline(
 ):
     """Update outline (user-edited)."""
     project = await get_project_for_owner(project_id, current_user, db)
+
+    chapter_numbers = [chapter.chapter_num for chapter in data.chapters]
+    expected_numbers = set(range(1, project.total_chapters + 1))
+    if len(chapter_numbers) != len(set(chapter_numbers)):
+        raise HTTPException(status_code=422, detail="大纲中存在重复章节号")
+    if set(chapter_numbers) != expected_numbers:
+        raise HTTPException(
+            status_code=422,
+            detail=f"大纲必须完整包含第1至第{project.total_chapters}章",
+        )
 
     result = await db.execute(select(Outline).where(Outline.project_id == project_id))
     outline = result.scalar_one_or_none()
@@ -624,7 +765,9 @@ async def update_outline(
         "project_id": project_id,
         "story_arc": outline.story_arc,
         "chapters": outline.chapters if isinstance(outline.chapters, list) else [],
-        "reveal_plan": outline.reveal_plan if isinstance(outline.reveal_plan, list) else [],
+        "reveal_plan": outline.reveal_plan
+        if isinstance(outline.reveal_plan, list)
+        else [],
     }
 
 
@@ -638,7 +781,9 @@ async def confirm_outline(
     project = await get_project_for_owner(project_id, current_user, db)
 
     # Check outline exists (query directly)
-    ol_result = await db.execute(select(Outline).where(Outline.project_id == project_id).limit(1))
+    ol_result = await db.execute(
+        select(Outline).where(Outline.project_id == project_id).limit(1)
+    )
     if not ol_result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="请先生成大纲")
 
@@ -661,8 +806,7 @@ def _verify_worldview_alignment(
 
     # Collect all element names (2+ chars to avoid false matches)
     element_names = [
-        e["name"] for e in elements
-        if e.get("name") and len(e["name"]) >= 2
+        e["name"] for e in elements if e.get("name") and len(e["name"]) >= 2
     ]
     if not element_names:
         return None
@@ -685,7 +829,9 @@ def _verify_worldview_alignment(
     logger.info(
         "Worldview alignment check: %d/%d element names found in outline (ratio=%.0f%%). "
         "Found: %s. Missing: %s",
-        len(found_names), len(element_names), match_ratio * 100,
+        len(found_names),
+        len(element_names),
+        match_ratio * 100,
         found_names[:5],
         [n for n in element_names if n not in found_names][:5],
     )
@@ -706,7 +852,9 @@ def _verify_worldview_alignment(
     return None
 
 
-def _parse_outline_response(raw: str, total_chapters: int) -> tuple[dict[str, Any], str | None]:
+def _parse_outline_response(
+    raw: str, total_chapters: int
+) -> tuple[dict[str, Any], str | None]:
     """Parse LLM response into structured outline data.
 
     Returns:
@@ -731,17 +879,29 @@ def _parse_outline_response(raw: str, total_chapters: int) -> tuple[dict[str, An
                 # Extract LLM-generated reveal_plan, or derive from chapters
                 raw_reveal_plan = data.get("reveal_plan", [])
                 if isinstance(raw_reveal_plan, list) and raw_reveal_plan:
-                    normalized["reveal_plan"] = _normalize_reveal_plan(raw_reveal_plan, total_chapters)
+                    normalized["reveal_plan"] = _normalize_reveal_plan(
+                        raw_reveal_plan, total_chapters
+                    )
                 else:
-                    normalized["reveal_plan"] = _derive_reveal_plan_from_chapters(normalized["chapters"])
-                    logger.info("LLM did not include reveal_plan — derived from chapters' reveal_elements")
+                    normalized["reveal_plan"] = _derive_reveal_plan_from_chapters(
+                        normalized["chapters"]
+                    )
+                    logger.info(
+                        "LLM did not include reveal_plan — derived from chapters' reveal_elements"
+                    )
 
                 # Check if we got fewer chapters than expected from the LLM
                 raw_chapters = data.get("chapters", [])
-                llm_chapter_count = len(raw_chapters) if isinstance(raw_chapters, list) else 0
+                llm_chapter_count = (
+                    len(raw_chapters) if isinstance(raw_chapters, list) else 0
+                )
                 if llm_chapter_count < total_chapters:
                     warning = f"LLM 返回了 {llm_chapter_count} 章（预期 {total_chapters} 章），已自动补齐剩余章节"
-                    logger.warning("Outline has fewer chapters than expected: %d/%d", llm_chapter_count, total_chapters)
+                    logger.warning(
+                        "Outline has fewer chapters than expected: %d/%d",
+                        llm_chapter_count,
+                        total_chapters,
+                    )
                     return normalized, warning
                 return normalized, None
         except (json.JSONDecodeError, TypeError) as e:
@@ -750,14 +910,16 @@ def _parse_outline_response(raw: str, total_chapters: int) -> tuple[dict[str, An
     # Fallback: create a minimal outline
     raw_preview = raw[:200].replace("\n", " ").replace("\r", "") if raw else "(empty)"
     warning = f"无法解析 LLM 返回的 JSON，已生成占位大纲。请重试或手动编辑。响应前200字: {raw_preview}"
-    logger.warning("Using fallback outline. Raw response (first 500 chars): %s", raw[:500])
+    logger.warning(
+        "Using fallback outline. Raw response (first 500 chars): %s", raw[:500]
+    )
 
     return {
         "story_arc": "故事大纲生成中，请手动编辑完善",
         "chapters": [
             {
                 "chapter_num": i + 1,
-                "title": f"第{i+1}章",
+                "title": f"第{i + 1}章",
                 "summary": "待填充",
                 "key_events": [],
                 "reveal_elements": [],
@@ -854,7 +1016,9 @@ def _repair_truncated_json(text: str) -> str | None:
     depth_bracket = 0
     in_string = False
     escape = False
-    candidates: list[tuple[int, int, int]] = []  # (position, brace_depth, bracket_depth)
+    candidates: list[
+        tuple[int, int, int]
+    ] = []  # (position, brace_depth, bracket_depth)
 
     for i, c in enumerate(text):
         if escape:
@@ -961,7 +1125,9 @@ def _normalize_chapter(ch: Any, expected_num: int) -> dict[str, Any]:
     }
 
 
-def _normalize_outline_data(data: dict[str, Any], total_chapters: int) -> dict[str, Any]:
+def _normalize_outline_data(
+    data: dict[str, Any], total_chapters: int
+) -> dict[str, Any]:
     """Normalize the full outline data from LLM output.
 
     Ensures:
@@ -1000,13 +1166,15 @@ def _normalize_outline_data(data: dict[str, Any], total_chapters: int) -> dict[s
             result_chapters.append(ch)
         else:
             # Pad with default
-            result_chapters.append({
-                "chapter_num": i,
-                "title": f"第{i}章",
-                "summary": "待填充",
-                "key_events": [],
-                "reveal_elements": [],
-            })
+            result_chapters.append(
+                {
+                    "chapter_num": i,
+                    "title": f"第{i}章",
+                    "summary": "待填充",
+                    "key_events": [],
+                    "reveal_elements": [],
+                }
+            )
 
     return {
         "story_arc": story_arc,
@@ -1046,17 +1214,21 @@ def _normalize_reveal_plan(
         if i in by_chapter:
             result.append(by_chapter[i])
         else:
-            result.append({
-                "chapter": i,
-                "phase": "推进",
-                "elements": [],
-                "summary": "",
-            })
+            result.append(
+                {
+                    "chapter": i,
+                    "phase": "推进",
+                    "elements": [],
+                    "summary": "",
+                }
+            )
 
     return result
 
 
-def _derive_reveal_plan_from_chapters(chapters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _derive_reveal_plan_from_chapters(
+    chapters: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Derive a minimal reveal_plan from chapters' reveal_elements.
 
     Used when the LLM doesn't include a reveal_plan in its response,
@@ -1073,11 +1245,13 @@ def _derive_reveal_plan_from_chapters(chapters: list[dict[str, Any]]) -> list[di
         if ch_num <= 0:
             continue
         reveal_elements = _to_list(ch.get("reveal_elements"))
-        plan.append({
-            "chapter": ch_num,
-            "phase": ch.get("phase", "") or "推进",
-            "elements": reveal_elements,
-            "summary": _to_str(ch.get("summary")),
-        })
+        plan.append(
+            {
+                "chapter": ch_num,
+                "phase": ch.get("phase", "") or "推进",
+                "elements": reveal_elements,
+                "summary": _to_str(ch.get("summary")),
+            }
+        )
 
     return sorted(plan, key=lambda e: e["chapter"])

@@ -1,29 +1,31 @@
 """Unit tests for auth module — password hashing, JWT, project ownership."""
 
-import pytest
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
+import bcrypt
 import jwt as pyjwt
+import pytest
 from fastapi import HTTPException
 
+from app.config import settings
 from app.core.auth import (
-    hash_password,
-    verify_password,
     create_access_token,
     decode_access_token,
     get_project_for_owner,
+    hash_password,
+    password_needs_rehash,
+    verify_password,
 )
-from app.config import settings
-
 
 # ─── Password hashing tests ──────────────────────────────────
+
 
 class TestPasswordHashing:
     def test_hash_password_returns_bcrypt_hash(self):
         hashed = hash_password("mypassword")
         assert hashed != "mypassword"
-        assert hashed.startswith("$2")  # bcrypt hash prefix
+        assert hashed.startswith("bcrypt-sha256$$2")
 
     def test_hash_password_different_each_time(self):
         """Same password should produce different hashes (random salt)."""
@@ -50,18 +52,29 @@ class TestPasswordHashing:
         assert verify_password(pwd, hashed) is True
 
     def test_hash_long_password(self):
-        """Long passwords should be handled (bcrypt truncates at 72 bytes)."""
+        """Long passwords should use every byte, not bcrypt's first 72 bytes."""
         pwd = "a" * 100
         hashed = hash_password(pwd)
         assert verify_password(pwd, hashed) is True
+        assert verify_password("a" * 99 + "b", hashed) is False
+
+    def test_legacy_bcrypt_hash_still_verifies_and_needs_rehash(self):
+        password = "legacy-password"
+        legacy_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        assert verify_password(password, legacy_hash) is True
+        assert password_needs_rehash(legacy_hash) is True
+        assert password_needs_rehash(hash_password(password)) is False
 
 
 # ─── JWT token tests ─────────────────────────────────────────
 
+
 class TestJWTToken:
     def test_create_token_contains_required_claims(self):
         token = create_access_token("user123", "testuser")
-        payload = pyjwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+        payload = pyjwt.decode(
+            token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM]
+        )
         assert payload["sub"] == "user123"
         assert payload["username"] == "testuser"
         assert "iat" in payload
@@ -108,6 +121,7 @@ class TestJWTToken:
         """Expired token should raise 401."""
         # Create an already-expired token
         from datetime import datetime, timezone
+
         now = datetime.now(timezone.utc)
         payload = {
             "sub": "user1",
@@ -116,7 +130,9 @@ class TestJWTToken:
             "jti": "test-jti",
             "exp": now - timedelta(days=1),  # expired yesterday
         }
-        expired_token = pyjwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+        expired_token = pyjwt.encode(
+            payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM
+        )
         with pytest.raises(HTTPException) as exc_info:
             decode_access_token(expired_token)
         assert exc_info.value.status_code == 401
@@ -124,6 +140,7 @@ class TestJWTToken:
 
 
 # ─── Project ownership tests ─────────────────────────────────
+
 
 class TestProjectOwnership:
     @pytest.mark.asyncio
@@ -199,6 +216,7 @@ class TestProjectOwnership:
 
 
 # ─── Integration: hash → verify → token round-trip ──────────
+
 
 class TestAuthRoundTrip:
     def test_full_auth_flow(self):

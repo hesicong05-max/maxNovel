@@ -1,5 +1,6 @@
 """Authentication utilities — password hashing, JWT token creation/verification."""
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -17,27 +18,48 @@ from app.models.user import User
 
 security = HTTPBearer(auto_error=False)
 
+_PASSWORD_SCHEME_PREFIX = "bcrypt-sha256$"
+
+
+def _password_digest(password: str) -> bytes:
+    """Pre-hash a password so bcrypt receives a fixed-size, full-password digest."""
+    return hashlib.sha256(password.encode("utf-8")).digest()
+
 
 def hash_password(password: str) -> str:
-    """Hash a password with bcrypt.
-
-    bcrypt has a 72-byte limit on passwords. We truncate to 72 bytes
-    to handle longer passwords gracefully.
-    """
-    pwd_bytes = password.encode("utf-8")[:72]
+    """Hash a password with SHA-256 pre-hashing and bcrypt."""
     salt = bcrypt.gensalt()
-    return bcrypt.hashpw(pwd_bytes, salt).decode("utf-8")
+    hashed = bcrypt.hashpw(_password_digest(password), salt).decode("utf-8")
+    return f"{_PASSWORD_SCHEME_PREFIX}{hashed}"
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash."""
-    pwd_bytes = plain_password.encode("utf-8")[:72]
-    return bcrypt.checkpw(pwd_bytes, hashed_password.encode("utf-8"))
+    """Verify current hashes and legacy bcrypt hashes created before migration."""
+    try:
+        if hashed_password.startswith(_PASSWORD_SCHEME_PREFIX):
+            bcrypt_hash = hashed_password.removeprefix(_PASSWORD_SCHEME_PREFIX)
+            return bcrypt.checkpw(
+                _password_digest(plain_password),
+                bcrypt_hash.encode("utf-8"),
+            )
+
+        # Backward compatibility for legacy rows. Successful logins are upgraded
+        # by the auth API to the non-truncating scheme.
+        legacy_bytes = plain_password.encode("utf-8")[:72]
+        return bcrypt.checkpw(legacy_bytes, hashed_password.encode("utf-8"))
+    except (TypeError, ValueError):
+        return False
+
+
+def password_needs_rehash(hashed_password: str) -> bool:
+    """Return True for legacy bcrypt hashes that should be upgraded on login."""
+    return not hashed_password.startswith(_PASSWORD_SCHEME_PREFIX)
 
 
 def create_access_token(user_id: str, username: str) -> str:
     """Create a JWT access token with iat/jti claims."""
     import uuid as _uuid
+
     now = datetime.now(timezone.utc)
     expire = now + timedelta(days=settings.JWT_EXPIRE_DAYS)
     payload = {
@@ -53,12 +75,18 @@ def create_access_token(user_id: str, username: str) -> str:
 def decode_access_token(token: str) -> dict:
     """Decode and verify a JWT token. Returns payload or raises."""
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+        payload = jwt.decode(
+            token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM]
+        )
         return payload
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token 已过期，请重新登录")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token 已过期，请重新登录"
+        )
     except jwt.InvalidTokenError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="无效的 Token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="无效的 Token"
+        )
 
 
 async def get_current_user(
@@ -78,13 +106,17 @@ async def get_current_user(
     user_id = payload.get("sub")
 
     if not user_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token 中缺少用户信息")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token 中缺少用户信息"
+        )
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
 
     if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在"
+        )
 
     return user
 
@@ -122,7 +154,9 @@ async def get_admin_user(
     Raises 403 if the user is not an admin.
     """
     if not user.is_admin:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要管理员权限")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="需要管理员权限"
+        )
     return user
 
 

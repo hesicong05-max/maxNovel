@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -63,12 +63,14 @@ class SpecialSettingSchema(BaseModel):
 
 class WorldviewImportRequest(BaseModel):
     """Request body for importing worldview from a document."""
-    document_text: str
+
+    document_text: str = Field(min_length=10, max_length=200_000)
     genre: str = "玄幻"
 
 
 class WorldviewImportResponse(BaseModel):
     """Response after LLM extracts worldview from a document."""
+
     characters: list[CharacterSchema] = Field(default_factory=list)
     geography: list[GeographySchema] = Field(default_factory=list)
     factions: list[FactionSchema] = Field(default_factory=list)
@@ -89,7 +91,7 @@ class WorldviewCreate(BaseModel):
     history: list[HistorySchema] = Field(default_factory=list)
     conflicts: list[ConflictSchema] = Field(default_factory=list)
     special_settings: list[SpecialSettingSchema] = Field(default_factory=list)
-    raw_text: str | None = None
+    raw_text: str | None = Field(default=None, max_length=200_000)
     source: str = "manual"  # manual / imported / hybrid
 
 
@@ -103,11 +105,11 @@ class WorldviewResponse(WorldviewCreate):
 
 
 class ProjectCreate(BaseModel):
-    title: str
+    title: str = Field(min_length=1, max_length=200)
     genre: NovelGenre = NovelGenre.XUANHUAN
-    total_chapters: int = 30
-    chapter_word_count: int = 3000
-    style_intensity: str = "standard"
+    total_chapters: int = Field(default=30, ge=1, le=50)
+    chapter_word_count: int = Field(default=3000, ge=500, le=10000)
+    style_intensity: Literal["mild", "standard", "intense"] = "standard"
 
 
 class ProjectResponse(BaseModel):
@@ -128,17 +130,17 @@ class ProjectResponse(BaseModel):
 
 
 class OutlineChapterEntry(BaseModel):
-    chapter_num: int
-    title: str = ""
-    summary: str = ""
-    key_events: list[str] = Field(default_factory=list)
-    reveal_elements: list[str] = Field(default_factory=list)
-    target_word_count: int | None = None
+    chapter_num: int = Field(ge=1, le=50)
+    title: str = Field(default="", max_length=200)
+    summary: str = Field(default="", max_length=10_000)
+    key_events: list[str] = Field(default_factory=list, max_length=50)
+    reveal_elements: list[str] = Field(default_factory=list, max_length=200)
+    target_word_count: int | None = Field(default=None, ge=500, le=10_000)
 
 
 class OutlineCreate(BaseModel):
-    story_arc: str = ""
-    chapters: list[OutlineChapterEntry] = Field(default_factory=list)
+    story_arc: str = Field(default="", max_length=100_000)
+    chapters: list[OutlineChapterEntry] = Field(default_factory=list, max_length=50)
 
 
 class OutlineResponse(BaseModel):
@@ -170,27 +172,32 @@ class ChapterResponse(BaseModel):
 
 
 class ChapterUpdate(BaseModel):
-    title: str | None = None
-    content: str | None = None
+    title: str | None = Field(default=None, max_length=200)
+    content: str | None = Field(default=None, max_length=200_000)
 
 
 class ChapterWordCountEntry(BaseModel):
     """Per-chapter word count override."""
+
     chapter_num: int
     target_word_count: int | None = None  # None = use auto-distributed value
 
 
 class WordCountConfigRequest(BaseModel):
     """Request body for saving word count configuration."""
+
     total_word_count: int | None = None  # If set, auto-distribute across chapters
-    chapters: list[ChapterWordCountEntry] = Field(default_factory=list)
+    chapters: list[ChapterWordCountEntry] = Field(default_factory=list, max_length=50)
 
 
 class WordCountConfigResponse(BaseModel):
     """Response with effective word count per chapter."""
+
     total_word_count: int | None = None
     project_default: int  # project.chapter_word_count
-    chapters: list[dict[str, Any]] = Field(default_factory=list)  # [{chapter_num, target_word_count, effective_word_count}]
+    chapters: list[dict[str, Any]] = Field(
+        default_factory=list
+    )  # [{chapter_num, target_word_count, effective_word_count}]
 
 
 class ProgressResponse(BaseModel):
@@ -209,33 +216,42 @@ class ProgressResponse(BaseModel):
 
 class CommunityNovelCreate(BaseModel):
     """Upload a novel to the community."""
-    title: str
-    author_name: str = "匿名作者"
-    genre: str = "玄幻"
-    project_id: str | None = None
-    synopsis: str = ""
-    story_outline: str = ""
-    chapter_notes: str = ""
+
+    title: str = Field(min_length=1, max_length=200)
+    author_name: str = Field(default="匿名作者", min_length=1, max_length=100)
+    genre: str = Field(default="玄幻", min_length=1, max_length=50)
+    project_id: str | None = Field(default=None, max_length=32)
+    synopsis: str = Field(default="", max_length=20_000)
+    story_outline: str = Field(default="", max_length=100_000)
+    chapter_notes: str = Field(default="", max_length=100_000)
     allow_cocreation: bool = False
-    tags: list[str] = Field(default_factory=list)
-    total_chapters: int = 0
-    total_words: int = 0
+    tags: list[Annotated[str, Field(min_length=1, max_length=50)]] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+    total_chapters: int = Field(default=0, ge=0, le=50)
+    total_words: int = Field(default=0, ge=0, le=10_000_000)
 
 
 class CommunityNovelUpdate(BaseModel):
     """Edit an existing community novel."""
-    title: str | None = None
-    author_name: str | None = None
-    genre: str | None = None
-    synopsis: str | None = None
-    story_outline: str | None = None
-    chapter_notes: str | None = None
+
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    author_name: str | None = Field(default=None, min_length=1, max_length=100)
+    genre: str | None = Field(default=None, min_length=1, max_length=50)
+    synopsis: str | None = Field(default=None, max_length=20_000)
+    story_outline: str | None = Field(default=None, max_length=100_000)
+    chapter_notes: str | None = Field(default=None, max_length=100_000)
     allow_cocreation: bool | None = None
-    tags: list[str] | None = None
+    tags: list[Annotated[str, Field(min_length=1, max_length=50)]] | None = Field(
+        default=None,
+        max_length=20,
+    )
 
 
 class CommunityNovelResponse(BaseModel):
     """Novel card data for community listing."""
+
     id: str
     title: str
     author_name: str
@@ -258,6 +274,7 @@ class CommunityNovelResponse(BaseModel):
 
 class CommunityNovelBrief(BaseModel):
     """Lightweight novel data for card display in infinite scroll."""
+
     id: str
     title: str
     author_name: str

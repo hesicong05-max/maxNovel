@@ -1,14 +1,21 @@
 """Unit tests for community API helpers — view dedup, IP hashing."""
 
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
+from fastapi import HTTPException
 
-from app.api.community import _ip_hash, _should_count_view, _view_cache, _VIEW_DEDUP_TTL
-
+from app.api.community import (
+    _VIEW_DEDUP_TTL,
+    _check_novel_ownership,
+    _ip_hash,
+    _should_count_view,
+    _view_cache,
+)
 
 # ─── IP hash tests ────────────────────────────────────────────
+
 
 class TestIPHash:
     def test_returns_hex_string(self):
@@ -51,6 +58,7 @@ class TestIPHash:
 
 # ─── View dedup tests ────────────────────────────────────────
 
+
 class TestShouldCountView:
     def setup_method(self):
         """Clear cache before each test."""
@@ -91,3 +99,12 @@ class TestShouldCountView:
         assert _should_count_view("new_hash", "new_novel") is True
         # Cache should have been cleared (only 1 entry now)
         assert len(_view_cache) == 1
+
+
+class TestNovelOwnership:
+    def test_ownerless_legacy_novel_is_denied(self):
+        novel = MagicMock(owner_id=None)
+        user = MagicMock(id="user-1")
+        with pytest.raises(HTTPException) as exc_info:
+            _check_novel_ownership(novel, user)
+        assert exc_info.value.status_code == 403

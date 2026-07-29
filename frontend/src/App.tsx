@@ -17,6 +17,12 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  if (!user?.is_admin) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 function Sidebar() {
   const { user, logout } = useAuth();
   return (
@@ -46,12 +52,14 @@ function Sidebar() {
               社区
             </NavLink>
           </li>
-          <li>
-            <NavLink to="/settings">
-              <span className="sidebar-nav-icon">⚙</span>
-              API 设置
-            </NavLink>
-          </li>
+          {user?.is_admin && (
+            <li>
+              <NavLink to="/settings">
+                <span className="sidebar-nav-icon">⚙</span>
+                API 设置
+              </NavLink>
+            </li>
+          )}
         </ul>
       </nav>
       <div className="sidebar-footer">
@@ -86,7 +94,14 @@ function AppRoutes() {
                   <Route path="/" element={<ProjectList />} />
                   <Route path="/new" element={<NewProject />} />
                   <Route path="/project/:id" element={<ProjectDetail />} />
-                  <Route path="/settings" element={<Settings />} />
+                  <Route
+                    path="/settings"
+                    element={
+                      <AdminRoute>
+                        <Settings />
+                      </AdminRoute>
+                    }
+                  />
                   <Route path="/community" element={<Community />} />
                   <Route path="/community/novel/:id" element={<CommunityNovelDetail />} />
                   <Route path="/community/edit/:id" element={<CommunityEdit />} />

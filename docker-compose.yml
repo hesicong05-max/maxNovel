@@ -35,8 +35,10 @@ services:
       args:
         - GIT_COMMIT=${GIT_COMMIT:-unknown}
     container_name: novel-backend
-    ports:
-      - "8000:8000"
+    # Internal-only: all public traffic must pass through the frontend proxy,
+    # which sanitizes forwarding headers before they reach Uvicorn.
+    expose:
+      - "8000"
     volumes:
       - backend-data:/app/data
     env_file:

@@ -937,7 +937,7 @@ class TestOutlineAPI:
 
     @pytest.mark.usefixtures("clean_db")
     async def test_outline_mock_llm_garbage_response(self, client, auth_headers):
-        """When LLM returns non-JSON, outline should use fallback."""
+        """Non-JSON output must not be saved as a fake successful outline."""
         pid = await _create_project_with_worldview(client, auth_headers, total_chapters=3)
         with patch("app.core.llm_client.load_settings") as mock_load:
             mock_load.return_value = {
@@ -947,15 +947,14 @@ class TestOutlineAPI:
             with patch("app.api.outline.llm_client") as mock_llm:
                 mock_llm.chat = AsyncMock(return_value="This is not JSON at all!")
                 resp = await client.post(f"/api/outline/{pid}/generate", headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert len(data["chapters"]) == 3
-        # Fallback chapters should have defaults
-        assert all(c["key_events"] == [] for c in data["chapters"])
+        assert resp.status_code == 502
+        assert "不完整或格式无效" in resp.json()["detail"]
+        get_resp = await client.get(f"/api/outline/{pid}", headers=auth_headers)
+        assert get_resp.status_code == 404
 
     @pytest.mark.usefixtures("clean_db")
     async def test_outline_mock_llm_fewer_chapters_padded(self, client, auth_headers):
-        """LLM returns 1 chapter but project expects 5 — should pad to 5."""
+        """An incomplete chapter list must be rejected instead of padded and saved."""
         pid = await _create_project_with_worldview(client, auth_headers, total_chapters=5)
         mock_response = '```json\n{"story_arc": "弧线", "chapters": [{"chapter_num": 1, "title": "唯一章节", "summary": "S", "key_events": [], "reveal_elements": []}]}\n```'
         with patch("app.core.llm_client.load_settings") as mock_load:
@@ -966,11 +965,8 @@ class TestOutlineAPI:
             with patch("app.api.outline.llm_client") as mock_llm:
                 mock_llm.chat = AsyncMock(return_value=mock_response)
                 resp = await client.post(f"/api/outline/{pid}/generate", headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert len(data["chapters"]) == 5
-        assert data["chapters"][0]["title"] == "唯一章节"
-        assert data["chapters"][1]["title"] == "第2章"  # padded default
+        assert resp.status_code == 502
+        assert "不完整或格式无效" in resp.json()["detail"]
 
     @pytest.mark.usefixtures("clean_db")
     async def test_outline_mock_llm_more_chapters_truncated(self, client, auth_headers):

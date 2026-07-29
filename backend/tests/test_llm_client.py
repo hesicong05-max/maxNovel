@@ -1,16 +1,22 @@
 """Unit tests for llm_client — mock responses, retry logic, connection management."""
 
-import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from app.core.llm_client import LLMClient, _mock_response, _mock_worldview_extraction, _mock_outline, _mock_chapter
-
+from app.core.llm_client import (
+    LLMClient,
+    LLMResponseTruncatedError,
+    _mock_chapter,
+    _mock_outline,
+    _mock_response,
+    _mock_worldview_extraction,
+)
 
 # ─── Mock response tests ────────────────────────────────────
+
 
 class TestMockResponse:
     def test_worldview_extraction_mock(self):
@@ -102,25 +108,44 @@ class TestMockResponse:
 
 # ─── LLMClient configuration tests ───────────────────────────
 
+
 class TestLLMClientConfig:
     def test_is_configured_false_without_key(self):
         """Without API key, is_configured should be False."""
         client = LLMClient()
         with patch("app.core.llm_client.load_settings") as mock_load:
-            mock_load.return_value = {"api_key": "", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+            mock_load.return_value = {
+                "api_key": "",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
             assert client.is_configured is False
 
     def test_is_configured_true_with_key(self):
         """With API key, is_configured should be True."""
         client = LLMClient()
         with patch("app.core.llm_client.load_settings") as mock_load:
-            mock_load.return_value = {"api_key": "sk-test-key", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+            mock_load.return_value = {
+                "api_key": "sk-test-key",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
             assert client.is_configured is True
 
     def test_headers_contain_auth(self):
         client = LLMClient()
         with patch("app.core.llm_client.load_settings") as mock_load:
-            mock_load.return_value = {"api_key": "sk-test-key", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+            mock_load.return_value = {
+                "api_key": "sk-test-key",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
             headers = client._headers()
             assert headers["Authorization"] == "Bearer sk-test-key"
             assert headers["Content-Type"] == "application/json"
@@ -129,8 +154,11 @@ class TestLLMClientConfig:
         client = LLMClient()
         with patch("app.core.llm_client.load_settings") as mock_load:
             mock_load.return_value = {
-                "api_key": "sk-test", "base_url": "https://custom.api.com/v1",
-                "model": "gpt-4-turbo", "temperature": 0.5, "max_tokens": 2048,
+                "api_key": "sk-test",
+                "base_url": "https://custom.api.com/v1",
+                "model": "gpt-4-turbo",
+                "temperature": 0.5,
+                "max_tokens": 2048,
             }
             client._reload()
             assert client.api_key == "sk-test"
@@ -142,17 +170,26 @@ class TestLLMClientConfig:
 
 # ─── Chat (non-streaming) tests ──────────────────────────────
 
+
 class TestLLMClientChat:
     @pytest.mark.asyncio
     async def test_chat_returns_mock_without_key(self):
         """Without API key, chat returns mock response."""
         client = LLMClient()
         with patch("app.core.llm_client.load_settings") as mock_load:
-            mock_load.return_value = {"api_key": "", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
-            result = await client.chat([
-                {"role": "system", "content": "请生成章节"},
-                {"role": "user", "content": "第一章"},
-            ])
+            mock_load.return_value = {
+                "api_key": "",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
+            result = await client.chat(
+                [
+                    {"role": "system", "content": "请生成章节"},
+                    {"role": "user", "content": "第一章"},
+                ]
+            )
             assert isinstance(result, str)
             assert len(result) > 0
 
@@ -161,7 +198,13 @@ class TestLLMClientChat:
         """With API key and mocked HTTP, chat returns response content."""
         client = LLMClient()
         with patch("app.core.llm_client.load_settings") as mock_load:
-            mock_load.return_value = {"api_key": "sk-test", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
 
             mock_resp = MagicMock()
             mock_resp.status_code = 200
@@ -178,12 +221,49 @@ class TestLLMClientChat:
             assert result == "Hello from LLM"
 
     @pytest.mark.asyncio
+    async def test_chat_rejects_truncated_response(self):
+        client = LLMClient()
+        with patch("app.core.llm_client.load_settings") as mock_load:
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {
+                "choices": [
+                    {
+                        "finish_reason": "length",
+                        "message": {"content": "incomplete"},
+                    }
+                ]
+            }
+            mock_http_client = AsyncMock()
+            mock_http_client.post = AsyncMock(return_value=mock_resp)
+            mock_http_client.is_closed = False
+            client._client = mock_http_client
+
+            with pytest.raises(LLMResponseTruncatedError):
+                await client.chat([{"role": "user", "content": "Hi"}])
+
+    @pytest.mark.asyncio
     async def test_chat_retries_on_429(self):
         """Chat should retry on HTTP 429 and eventually succeed."""
         client = LLMClient()
-        with patch("app.core.llm_client.load_settings") as mock_load, \
-             patch("asyncio.sleep", new_callable=AsyncMock):
-            mock_load.return_value = {"api_key": "sk-test", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+        with (
+            patch("app.core.llm_client.load_settings") as mock_load,
+            patch("asyncio.sleep", new_callable=AsyncMock),
+        ):
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
 
             retry_resp = MagicMock()
             retry_resp.status_code = 429
@@ -209,7 +289,13 @@ class TestLLMClientChat:
         """Chat should raise RuntimeError on HTTP 400 (non-retryable)."""
         client = LLMClient()
         with patch("app.core.llm_client.load_settings") as mock_load:
-            mock_load.return_value = {"api_key": "sk-test", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
 
             error_resp = MagicMock()
             error_resp.status_code = 400
@@ -228,13 +314,23 @@ class TestLLMClientChat:
     async def test_chat_exhausts_retries_on_500(self):
         """Chat should raise after max retries on persistent 500."""
         client = LLMClient()
-        with patch("app.core.llm_client.load_settings") as mock_load, \
-             patch("asyncio.sleep", new_callable=AsyncMock):
-            mock_load.return_value = {"api_key": "sk-test", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+        with (
+            patch("app.core.llm_client.load_settings") as mock_load,
+            patch("asyncio.sleep", new_callable=AsyncMock),
+        ):
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
 
             error_resp = MagicMock()
             error_resp.status_code = 500
-            error_resp.json.return_value = {"error": {"message": "Internal server error"}}
+            error_resp.json.return_value = {
+                "error": {"message": "Internal server error"}
+            }
             error_resp.text = '{"error": {"message": "Internal server error"}}'
 
             mock_http_client = AsyncMock()
@@ -251,9 +347,17 @@ class TestLLMClientChat:
     async def test_chat_retries_on_timeout(self):
         """Chat should retry on TimeoutException."""
         client = LLMClient()
-        with patch("app.core.llm_client.load_settings") as mock_load, \
-             patch("asyncio.sleep", new_callable=AsyncMock):
-            mock_load.return_value = {"api_key": "sk-test", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+        with (
+            patch("app.core.llm_client.load_settings") as mock_load,
+            patch("asyncio.sleep", new_callable=AsyncMock),
+        ):
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
 
             success_resp = MagicMock()
             success_resp.status_code = 200
@@ -262,10 +366,12 @@ class TestLLMClientChat:
             }
 
             mock_http_client = AsyncMock()
-            mock_http_client.post = AsyncMock(side_effect=[
-                httpx.TimeoutException("timeout"),
-                success_resp,
-            ])
+            mock_http_client.post = AsyncMock(
+                side_effect=[
+                    httpx.TimeoutException("timeout"),
+                    success_resp,
+                ]
+            )
             mock_http_client.is_closed = False
 
             client._client = mock_http_client
@@ -276,9 +382,17 @@ class TestLLMClientChat:
     async def test_chat_retries_on_connect_error(self):
         """Chat should retry on ConnectError."""
         client = LLMClient()
-        with patch("app.core.llm_client.load_settings") as mock_load, \
-             patch("asyncio.sleep", new_callable=AsyncMock):
-            mock_load.return_value = {"api_key": "sk-test", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+        with (
+            patch("app.core.llm_client.load_settings") as mock_load,
+            patch("asyncio.sleep", new_callable=AsyncMock),
+        ):
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
 
             success_resp = MagicMock()
             success_resp.status_code = 200
@@ -287,10 +401,12 @@ class TestLLMClientChat:
             }
 
             mock_http_client = AsyncMock()
-            mock_http_client.post = AsyncMock(side_effect=[
-                httpx.ConnectError("connection refused"),
-                success_resp,
-            ])
+            mock_http_client.post = AsyncMock(
+                side_effect=[
+                    httpx.ConnectError("connection refused"),
+                    success_resp,
+                ]
+            )
             mock_http_client.is_closed = False
 
             client._client = mock_http_client
@@ -300,15 +416,24 @@ class TestLLMClientChat:
 
 # ─── Chat stream tests ──────────────────────────────────────
 
+
 class TestLLMClientChatStream:
     @pytest.mark.asyncio
     async def test_chat_stream_returns_mock_without_key(self):
         """Without API key, chat_stream yields mock chunks."""
         client = LLMClient()
         with patch("app.core.llm_client.load_settings") as mock_load:
-            mock_load.return_value = {"api_key": "", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+            mock_load.return_value = {
+                "api_key": "",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
             chunks = []
-            async for chunk in client.chat_stream([{"role": "user", "content": "生成章节"}]):
+            async for chunk in client.chat_stream(
+                [{"role": "user", "content": "生成章节"}]
+            ):
                 chunks.append(chunk)
             assert len(chunks) > 0
             full = "".join(chunks)
@@ -319,12 +444,18 @@ class TestLLMClientChatStream:
         """chat_stream should parse SSE data lines and yield content."""
         client = LLMClient()
         with patch("app.core.llm_client.load_settings") as mock_load:
-            mock_load.return_value = {"api_key": "sk-test", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
 
             sse_lines = [
                 'data: {"choices": [{"delta": {"content": "Hello"}}]}',
                 'data: {"choices": [{"delta": {"content": " World"}}]}',
-                'data: [DONE]',
+                "data: [DONE]",
             ]
 
             # Create a mock async context manager for stream
@@ -349,9 +480,49 @@ class TestLLMClientChatStream:
                 chunks.append(chunk)
             assert chunks == ["Hello", " World"]
 
+    @pytest.mark.asyncio
+    async def test_chat_stream_rejects_truncated_response(self):
+        client = LLMClient()
+        with patch("app.core.llm_client.load_settings") as mock_load:
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
+            sse_lines = [
+                'data: {"choices": [{"delta": {"content": "partial"}}]}',
+                'data: {"choices": [{"delta": {}, "finish_reason": "length"}]}',
+                "data: [DONE]",
+            ]
+            mock_stream_cm = AsyncMock()
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.aiter_lines = MagicMock(return_value=AsyncIterableMock(sse_lines))
+
+            async def _stream(*args, **kwargs):
+                return mock_resp
+
+            mock_stream_cm.__aenter__ = _stream
+            mock_stream_cm.__aexit__ = AsyncMock(return_value=None)
+            mock_http_client = AsyncMock()
+            mock_http_client.stream = MagicMock(return_value=mock_stream_cm)
+            mock_http_client.is_closed = False
+            client._client = mock_http_client
+
+            chunks = []
+            with pytest.raises(LLMResponseTruncatedError):
+                async for chunk in client.chat_stream(
+                    [{"role": "user", "content": "Hi"}]
+                ):
+                    chunks.append(chunk)
+            assert chunks == ["partial"]
+
 
 class AsyncIterableMock:
     """Helper to mock async line iteration."""
+
     def __init__(self, lines):
         self._lines = lines
         self._index = 0
@@ -369,6 +540,7 @@ class AsyncIterableMock:
 
 # ─── Connection management tests ─────────────────────────────
 
+
 class TestLLMClientConnection:
     @pytest.mark.asyncio
     async def test_get_client_creates_persistent_client(self):
@@ -385,7 +557,7 @@ class TestLLMClientConnection:
     @pytest.mark.asyncio
     async def test_close_clears_client(self):
         client = LLMClient()
-        c = await client._get_client()
+        await client._get_client()
         await client.close()
         assert client._client is None
 
@@ -410,12 +582,19 @@ class TestLLMClientConnection:
 
 # ─── test_connection tests ────────────────────────────────────
 
+
 class TestLLMClientTestConnection:
     @pytest.mark.asyncio
     async def test_test_connection_without_key(self):
         client = LLMClient()
         with patch("app.core.llm_client.load_settings") as mock_load:
-            mock_load.return_value = {"api_key": "", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+            mock_load.return_value = {
+                "api_key": "",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
             result = await client.test_connection()
             assert result["success"] is False
             assert "API Key" in result["error"]
@@ -424,7 +603,13 @@ class TestLLMClientTestConnection:
     async def test_test_connection_success(self):
         client = LLMClient()
         with patch("app.core.llm_client.load_settings") as mock_load:
-            mock_load.return_value = {"api_key": "sk-test", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
 
             mock_resp = MagicMock()
             mock_resp.status_code = 200
@@ -446,7 +631,13 @@ class TestLLMClientTestConnection:
     async def test_test_connection_http_error(self):
         client = LLMClient()
         with patch("app.core.llm_client.load_settings") as mock_load:
-            mock_load.return_value = {"api_key": "sk-test", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
 
             mock_resp = MagicMock()
             mock_resp.status_code = 401
@@ -466,7 +657,13 @@ class TestLLMClientTestConnection:
     async def test_test_connection_connect_error(self):
         client = LLMClient()
         with patch("app.core.llm_client.load_settings") as mock_load:
-            mock_load.return_value = {"api_key": "sk-test", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
 
             mock_http_client = AsyncMock()
             mock_http_client.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
@@ -481,10 +678,18 @@ class TestLLMClientTestConnection:
     async def test_test_connection_timeout(self):
         client = LLMClient()
         with patch("app.core.llm_client.load_settings") as mock_load:
-            mock_load.return_value = {"api_key": "sk-test", "base_url": "https://api.openai.com/v1", "model": "gpt-4o", "temperature": 0.8, "max_tokens": 4096}
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
 
             mock_http_client = AsyncMock()
-            mock_http_client.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
+            mock_http_client.post = AsyncMock(
+                side_effect=httpx.TimeoutException("timeout")
+            )
             mock_http_client.is_closed = False
 
             client._client = mock_http_client

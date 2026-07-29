@@ -321,6 +321,7 @@ export interface AuthUser {
   id: string;
   email: string;
   username: string;
+  is_admin: boolean;
   created_at: string;
 }
 

@@ -7,7 +7,13 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import create_access_token, get_current_user, hash_password, verify_password
+from app.core.auth import (
+    create_access_token,
+    get_current_user,
+    hash_password,
+    password_needs_rehash,
+    verify_password,
+)
 from app.core.rate_limiter import limiter
 from app.database import get_db
 from app.models.user import User
@@ -26,13 +32,14 @@ class RegisterRequest(BaseModel):
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=1, max_length=100)
 
 
 class UserResponse(BaseModel):
     id: str
     email: str
     username: str
+    is_admin: bool
     created_at: datetime
 
 
@@ -43,7 +50,9 @@ class AuthResponse(BaseModel):
 
 @router.post("/register", response_model=AuthResponse)
 @limiter.limit("5/minute")
-async def register(request: Request, req: RegisterRequest, db: AsyncSession = Depends(get_db)):
+async def register(
+    request: Request, req: RegisterRequest, db: AsyncSession = Depends(get_db)
+):
     """Register a new user account.
 
     Returns a generic error for duplicate email/username to prevent enumeration.
@@ -81,6 +90,7 @@ async def register(request: Request, req: RegisterRequest, db: AsyncSession = De
             id=user.id,
             email=user.email,
             username=user.username,
+            is_admin=user.is_admin,
             created_at=user.created_at,
         ),
     )
@@ -88,7 +98,9 @@ async def register(request: Request, req: RegisterRequest, db: AsyncSession = De
 
 @router.post("/login", response_model=AuthResponse)
 @limiter.limit("10/minute")
-async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(
+    request: Request, req: LoginRequest, db: AsyncSession = Depends(get_db)
+):
     """Login with email and password.
 
     Uses constant-time comparison to prevent user enumeration via timing attacks.
@@ -101,7 +113,14 @@ async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(
     password_ok = verify_password(req.password, hashed)
 
     if not user or not password_ok:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="邮箱或密码错误")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="邮箱或密码错误"
+        )
+
+    # Transparently migrate legacy bcrypt hashes after a successful login.
+    if password_needs_rehash(user.hashed_password):
+        user.hashed_password = hash_password(req.password)
+        await db.commit()
 
     token = create_access_token(user.id, user.username)
     return AuthResponse(
@@ -110,6 +129,7 @@ async def login(request: Request, req: LoginRequest, db: AsyncSession = Depends(
             id=user.id,
             email=user.email,
             username=user.username,
+            is_admin=user.is_admin,
             created_at=user.created_at,
         ),
     )
@@ -122,5 +142,6 @@ async def get_me(current_user: User = Depends(get_current_user)):
         id=current_user.id,
         email=current_user.email,
         username=current_user.username,
+        is_admin=current_user.is_admin,
         created_at=current_user.created_at,
     )

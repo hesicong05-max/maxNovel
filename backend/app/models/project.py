@@ -1,8 +1,18 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum as PyEnum
 
-from sqlalchemy import JSON, Column, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Column,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -32,7 +42,7 @@ class ProjectStatus(str, PyEnum):
 
 
 def _utcnow() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class Project(Base):
@@ -52,35 +62,60 @@ class Project(Base):
     )
     total_chapters = Column(Integer, default=30)
     chapter_word_count = Column(Integer, default=3000)
-    style_intensity = Column(String(20), default="standard")  # mild / standard / intense
-    owner_id = Column(String(32), ForeignKey("users.id"), nullable=True)  # nullable for backward compat
+    style_intensity = Column(
+        String(20), default="standard"
+    )  # mild / standard / intense
+    owner_id = Column(
+        String(32), ForeignKey("users.id"), nullable=True
+    )  # nullable for backward compat
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     owner = relationship("User", back_populates="projects")
-    worldview = relationship("Worldview", back_populates="project", uselist=False, cascade="all, delete-orphan")
-    outline = relationship("Outline", back_populates="project", uselist=False, cascade="all, delete-orphan")
-    chapters = relationship("Chapter", back_populates="project", cascade="all, delete-orphan")
-    memory = relationship("StoryMemory", back_populates="project", uselist=False, cascade="all, delete-orphan")
+    worldview = relationship(
+        "Worldview",
+        back_populates="project",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    outline = relationship(
+        "Outline", back_populates="project", uselist=False, cascade="all, delete-orphan"
+    )
+    chapters = relationship(
+        "Chapter", back_populates="project", cascade="all, delete-orphan"
+    )
+    memory = relationship(
+        "StoryMemory",
+        back_populates="project",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
 
 class Worldview(Base):
     __tablename__ = "worldviews"
+    __table_args__ = (UniqueConstraint("project_id", name="uq_worldview_project"),)
 
     id = Column(String(32), primary_key=True, default=gen_id)
     project_id = Column(String(32), ForeignKey("projects.id"), nullable=False)
     # Structured worldview data stored as JSON
-    characters = Column(JSON, default=list)       # [{name, personality, background, motivation, ability, relations}]
-    geography = Column(JSON, default=list)         # [{name, description, significance}]
-    factions = Column(JSON, default=list)         # [{name, stance, power_level, relations}]
-    power_system = Column(JSON, default=list)     # [{name, levels, rules, limitations}]
-    history = Column(JSON, default=list)          # [{event, time, description, impact}]
-    conflicts = Column(JSON, default=list)         # [{name, type, parties, stakes, resolution_hint}]
+    characters = Column(
+        JSON, default=list
+    )  # [{name, personality, background, motivation, ability, relations}]
+    geography = Column(JSON, default=list)  # [{name, description, significance}]
+    factions = Column(JSON, default=list)  # [{name, stance, power_level, relations}]
+    power_system = Column(JSON, default=list)  # [{name, levels, rules, limitations}]
+    history = Column(JSON, default=list)  # [{event, time, description, impact}]
+    conflicts = Column(
+        JSON, default=list
+    )  # [{name, type, parties, stakes, resolution_hint}]
     special_settings = Column(JSON, default=list)  # [{name, description, rules}]
-    raw_text = Column(Text, nullable=True)         # Original uploaded text (if any)
+    raw_text = Column(Text, nullable=True)  # Original uploaded text (if any)
     source = Column(String(20), default="manual")  # manual / imported / hybrid
     # Parsed elements with priority tags
-    parsed_elements = Column(JSON, default=list)    # [{id, category, name, priority, revealed, reveal_chapter}]
+    parsed_elements = Column(
+        JSON, default=list
+    )  # [{id, category, name, priority, revealed, reveal_chapter}]
     created_at = Column(DateTime, default=_utcnow)
 
     project = relationship("Project", back_populates="worldview")
@@ -88,13 +123,18 @@ class Worldview(Base):
 
 class Outline(Base):
     __tablename__ = "outlines"
+    __table_args__ = (UniqueConstraint("project_id", name="uq_outline_project"),)
 
     id = Column(String(32), primary_key=True, default=gen_id)
     project_id = Column(String(32), ForeignKey("projects.id"), nullable=False)
     # The reveal plan: which elements get revealed in which chapter
-    reveal_plan = Column(JSON, default=list)  # [{chapter, phase, elements: [element_id...], summary}]
+    reveal_plan = Column(
+        JSON, default=list
+    )  # [{chapter, phase, elements: [element_id...], summary}]
     # Chapter-level outline entries
-    chapters = Column(JSON, default=list)     # [{chapter_num, title, summary, key_events, reveal_elements}]
+    chapters = Column(
+        JSON, default=list
+    )  # [{chapter_num, title, summary, key_events, reveal_elements}]
     # Story arc description
     story_arc = Column(Text, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
@@ -116,8 +156,12 @@ class Chapter(Base):
     content = Column(Text, default="")
     word_count = Column(Integer, default=0)
     summary = Column(Text, default="")  # Auto-generated summary for memory
-    status = Column(String(20), default="pending")  # pending / generating / generated / edited
-    revealed_elements = Column(JSON, default=list)  # Element IDs revealed in this chapter
+    status = Column(
+        String(20), default="pending"
+    )  # pending / generating / generated / edited
+    revealed_elements = Column(
+        JSON, default=list
+    )  # Element IDs revealed in this chapter
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
@@ -126,20 +170,26 @@ class Chapter(Base):
 
 class StoryMemory(Base):
     """Persistent memory store for cross-chapter consistency."""
+
     __tablename__ = "story_memories"
+    __table_args__ = (UniqueConstraint("project_id", name="uq_story_memory_project"),)
 
     id = Column(String(32), primary_key=True, default=gen_id)
     project_id = Column(String(32), ForeignKey("projects.id"), nullable=False)
     # Track which worldview elements have been revealed
-    revealed_elements = Column(JSON, default=list)    # [element_id...]
+    revealed_elements = Column(JSON, default=list)  # [element_id...]
     # Current state of each character (location, status, relationships)
-    character_states = Column(JSON, default=dict)     # {char_name: {location, status, mood, ...}}
+    character_states = Column(
+        JSON, default=dict
+    )  # {char_name: {location, status, mood, ...}}
     # Foreshadowing queue: planted but not yet resolved
-    foreshadows = Column(JSON, default=list)          # [{id, description, planted_chapter, status, resolve_by}]
+    foreshadows = Column(
+        JSON, default=list
+    )  # [{id, description, planted_chapter, status, resolve_by}]
     # Timeline of events
-    timeline = Column(JSON, default=list)             # [{chapter, event, description}]
+    timeline = Column(JSON, default=list)  # [{chapter, event, description}]
     # Running chapter summaries (for long-context management)
-    chapter_summaries = Column(JSON, default=list)    # [{chapter_num, summary}]
+    chapter_summaries = Column(JSON, default=list)  # [{chapter_num, summary}]
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
