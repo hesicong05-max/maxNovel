@@ -1,39 +1,35 @@
-# 满分小说 — 项目概览
+# 章节生成模块全面审查与修复
 
-## 项目状态
+## 审查范围
+完整链路：API(chapters.py) → Prompt(templates.py) → LLM(llm_client.py) → Memory(memory_store.py) → 前端(ChapterWriter.tsx)
 
-| 维度 | 第一轮 | 第二轮 | 第三轮 | 状态 |
-|------|--------|--------|--------|------|
-| 功能完整性 | 70 | 72 | 75 | 🟡 核心功能完整 |
-| 代码质量 | 55 | 68 | 72 | 🟡 结构良好，有并发隐患 |
-| 测试覆盖 | 5 | 72 | 73 | 🟡 128 测试，CI 未激活 |
-| 性能与稳定性 | 30 | 38 | 48 | 🟡 限流中间件已注册 |
-| 安全性 | 15 | 45 | 58 | 🟡 认证完善，HTTPS 缺失 |
-| 部署准备 | 10 | 50 | 58 | 🟡 Docker/CI 就绪，迁移已修复 |
-| **综合** | **31** | **62** | **64** | **🟡 接近灰度** |
+## 发现的问题与修复
 
-## 三轮修复累计成果
+### P0（严重）
+| # | 问题 | 修复 |
+|---|------|------|
+| 1 | **max_tokens 截断**：`_generate_chapter_core` 调用 `chat_stream` 时未传 `max_tokens`，使用默认 4096 导致 3000 字中文章节在 ~2000 字处截断 | 根据目标字数动态计算：`min(max(effective_wc * 2 + 500, user_max_tokens, 2048), 8192)` |
+| 2 | **章节缺失世界观上下文**：`build_chapter_prompt` 只传入 `elements_to_reveal`（本章要素），LLM 看不到全局故事方向和合法名称列表，容易编造与世界观不符的内容 | 新增 `story_arc` + `all_element_names` 参数；system prompt 加入"世界观即一切"原则 + 所有合法要素名称列表 |
 
-### 第一轮（commit c1ca96c → 0b7941e）
-Git 版本控制、安全加固、Docker 容器化、单元测试 85 项、集成测试 42 项、JWT 认证、API 访问控制、Alembic 迁移、Sentry 监控
+### P1（重要）
+| # | 问题 | 修复 |
+|---|------|------|
+| 3 | **chapter_num 无范围校验**：用户可能请求 chapter 0 或 999 | `generate_chapter` 端点校验 1~total_chapters；`_generate_chapter_core` 安全网校验 |
+| 4 | **批量成功检测脆弱**：用字符串匹配 `"type": "complete"` 检测，可能因 JSON 格式变化而失效 | 改为 JSON 解析 |
 
-### 第二轮（commit 45f3b8d）
-JWT_SECRET 启动校验、配置加载修复、前端认证头修复、401 全局回调、Docker 非 root（后端）、HEALTHCHECK、CI 创建、认证端点限流、时序攻击防护、CSP 收紧
+### P2（改进）
+| # | 问题 | 修复 |
+|---|------|------|
+| 5 | **_mock_chapter 硬编码**：返回固定的"林远"等内容，与用户世界观无关 | 从 prompt 提取世界观要素名称生成 mock 内容 |
+| 6 | **Markdown 格式**：部分 LLM 会输出 # 标题、**加粗** 等 Markdown 格式 | prompt 新增"直接输出纯文本正文，不要使用 Markdown 格式" |
 
-### 第三轮（commit 040b833）
-初始迁移重写建表、LLM 设置管理员授权、SlowAPIMiddleware 注册、前端 Docker 非 root、CI 环境变量、HTTPS/TLS 配置模板、LOG_LEVEL 修复、psycopg2 添加、文件上传 OOM 修复、多阶段 Docker 构建、依赖版本锁定、部署 checklist + 回滚方案
+## 修改文件
+- `backend/app/prompts/templates.py` — `build_chapter_prompt` 新增 2 参数 + 世界观约束
+- `backend/app/api/chapters.py` — max_tokens 计算 + 校验 + JSON 解析
+- `backend/app/core/llm_client.py` — `_mock_chapter` 改进
+- `backend/tests/test_llm_client.py` — 更新测试
 
-## 当前验证状态
-- ✅ 128 项测试全部通过
-- ✅ tsc --noEmit 零错误
-- ✅ Alembic 无待迁移
-- ✅ 4 个中间件注册
-- ✅ Git 已推送到 GitHub
-
-## 后续待推进项
-- CI 文件推送（需 Token workflow scope）
-- HTTPS 证书配置（Let's Encrypt）
-- PostgreSQL 生产数据库
-- 前端自动化测试
-- 性能压测
-- 内容审核功能
+## 验证
+- 448 项后端测试全部通过（+1 新增）
+- tsc --noEmit 零错误
+- 已推送 GitHub commit `0313fb8`
