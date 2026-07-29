@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { AuthProvider } from "@/components/AuthContext";
 import * as apiModule from "@/services/api";
 import LoginPage from "./LoginPage";
@@ -20,9 +21,11 @@ const MOCK_AUTH_RESPONSE: AuthResponse = {
 
 function renderLoginPage() {
   return render(
-    <AuthProvider>
-      <LoginPage />
-    </AuthProvider>
+    <MemoryRouter>
+      <AuthProvider>
+        <LoginPage />
+      </AuthProvider>
+    </MemoryRouter>
   );
 }
 

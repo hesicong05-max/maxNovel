@@ -180,7 +180,7 @@ class TestProjectOwnership:
 
     @pytest.mark.asyncio
     async def test_get_project_for_owner_null_owner_id(self):
-        """Projects with owner_id=NULL (legacy) should be accessible to all."""
+        """Ownerless legacy projects must not be exposed to arbitrary users."""
         mock_project = MagicMock()
         mock_project.id = "proj1"
         mock_project.owner_id = None  # Legacy project
@@ -193,8 +193,9 @@ class TestProjectOwnership:
         mock_user = MagicMock()
         mock_user.id = "anyuser"
 
-        result = await get_project_for_owner("proj1", mock_user, mock_db)
-        assert result is mock_project
+        with pytest.raises(HTTPException) as exc_info:
+            await get_project_for_owner("proj1", mock_user, mock_db)
+        assert exc_info.value.status_code == 403
 
 
 # ─── Integration: hash → verify → token round-trip ──────────

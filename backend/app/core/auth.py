@@ -135,13 +135,17 @@ async def get_project_for_owner(
 
     Raises:
         404 if project not found.
-        403 if user is not the owner (and owner_id is not NULL).
-    Projects with owner_id=NULL (legacy data) are accessible to all authenticated users.
+        403 if user is not the owner.
+
+    Legacy projects without an owner are intentionally denied. Allowing every
+    authenticated user to access them would expose private project data across
+    accounts. Such rows must be assigned to an owner through an administrative
+    migration before they become accessible.
     """
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
-    if project.owner_id is not None and project.owner_id != user.id:
+    if project.owner_id is None or project.owner_id != user.id:
         raise HTTPException(status_code=403, detail="无权操作此项目")
     return project
