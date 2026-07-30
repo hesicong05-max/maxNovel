@@ -16,7 +16,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import event
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.database import Base, get_db
 from app.main import app
@@ -24,7 +27,27 @@ from app.main import app
 
 # ─── Test database (shared across all test modules) ──────────
 
-test_engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "sqlite+aiosqlite:///:memory:",
+)
+TEST_DATABASE_BACKEND = make_url(TEST_DATABASE_URL).get_backend_name()
+test_engine_options = (
+    {"poolclass": NullPool}
+    if TEST_DATABASE_BACKEND != "sqlite"
+    else {}
+)
+test_engine = create_async_engine(TEST_DATABASE_URL, **test_engine_options)
+
+
+if TEST_DATABASE_BACKEND == "sqlite":
+    @event.listens_for(test_engine.sync_engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+
 TestSessionLocal = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -52,7 +75,7 @@ _chapters_mod.async_session = TestSessionLocal
 async def setup_database():
     """Create tables once for the entire test session."""
     # Import all models to ensure they are registered
-    from app.models import project, community, user  # noqa: F401
+    from app.models import community, lore, project, user  # noqa: F401
 
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

@@ -1,13 +1,13 @@
-# 满分小说 — 世界观续写 AI Agent
+# 满分小说 — AI 小说创作平台
 
-一款基于 AI 的小说世界观续写 Web 应用。用户上传世界观架构 + 选择网文类型，AI Agent 按渐进式策略生成网文章节内容。
+一款面向长篇创作的 AI 小说平台。现有版本支持世界观、大纲和章节生成；项目正按里程碑逐步补齐结构化设定库、章节绑定、伏笔、时间线、版本和一致性闭环。
 
 ## 核心功能
 
 - **世界观管理**：手动创建 / 文档导入(AI提取) / 混合模式，支持 7 类要素模板
 - **AI 生成引擎**：大纲生成 + 渐进式揭示（三阶段：引入/展开/深入）+ 7 种网文类型风格
 - **章节写作**：SSE 流式生成、字数配置、一键批量生成、章节编辑
-- **社区功能**：小说上传/编辑/删除、标签系统、无限滚动、点赞、共创开关
+- **现有社区原型**：小说上传、编辑、标签、点赞和共创开关；核心 Beta 前不扩张社区能力
 - **用户系统**：JWT 认证、注册/登录、路由守卫、API 访问控制
 - **导出**：TXT / Markdown 格式
 
@@ -25,14 +25,24 @@
 
 ### 开发环境
 
-```bash
-# 后端
-cd backend
-ENV_FILE=.env.dev python run.py  # 端口 8000
+要求 Python 3.13（最低 3.11）和 Node.js 22。
 
-# 前端
+```bash
+# 后端依赖与本地配置
+python3.13 -m venv backend/.venv
+source backend/.venv/bin/activate
+python -m pip install -r backend/requirements.txt
+cp backend/.env.example backend/.env.dev
+# 编辑 backend/.env.dev：设置 DEBUG=true；LLM_API_KEY 可留空
+
+cd backend
+ENV_FILE=.env.dev python -m alembic upgrade head
+ENV_FILE=.env.dev python run.py  # http://localhost:8000
+
+# 另开终端启动前端
 cd frontend
-npx vite  # 端口 5173，代理 /api 到 8000
+npm ci
+npm run dev  # http://localhost:5173，代理 /api 到 8000
 ```
 
 ### Docker 部署
@@ -40,18 +50,17 @@ npx vite  # 端口 5173，代理 /api 到 8000
 #### 前置准备
 
 ```bash
-# 1. 复制环境配置文件（env 文件不在 Git 中，需手动创建）
+# 1. Compose 插值变量：根目录 .env（不提交）
+cp .env.example .env
+
+# 2. 后端生产变量：backend/.env.prod（不提交）
 cp backend/.env.example backend/.env.prod
 
-# 2. 编辑 .env.prod，设置以下必填项：
-#    - JWT_SECRET：生成方式 → python -c "import secrets; print(secrets.token_urlsafe(64))"
-#    - DATABASE_URL：PostgreSQL 连接字符串
-#    - CORS_ORIGINS：你的域名
+# 3. 编辑根目录 .env：设置 DB_USER、DB_PASSWORD、JWT_SECRET
+#    编辑 backend/.env.prod：设置 DEBUG=false、CORS_ORIGINS 和可选 LLM 配置
+#    DATABASE_URL 由 docker-compose.yml 根据数据库变量生成
 
-# 3. 设置环境变量
-export JWT_SECRET="your-generated-secret"
-
-# 4. 准备 TLS 证书（生产必填）
+# 4. 如由本仓库 nginx 终止 TLS，再准备证书
 mkdir -p tls
 # 将你的证书文件放入 tls/ 目录：
 #   tls/fullchain.pem  — 证书链
@@ -65,18 +74,16 @@ docker compose run --rm backend alembic upgrade head
 docker compose up -d
 ```
 
-访问 https://your-domain.com
+访问 `http://localhost:8080`，或通过已配置 TLS 的反向代理访问生产域名。
 
 #### 生产部署 Checklist
 
-- [ ] `backend/.env.prod` 已创建并配置
-- [ ] `JWT_SECRET` 已设置（强随机字符串）
-- [ ] `DATABASE_URL` 已配置为 PostgreSQL
+- [ ] 根目录 `.env` 已从 `.env.example` 创建
+- [ ] `backend/.env.prod` 已从 `backend/.env.example` 创建
+- [ ] 根目录 `.env` 的 `DB_USER`、`DB_PASSWORD`、`JWT_SECRET` 已设置
 - [ ] `CORS_ORIGINS` 已设置为你的域名
-- [ ] TLS 证书已放入 `tls/` 目录
 - [ ] `docker compose run --rm backend alembic upgrade head` 已执行
 - [ ] `SENTRY_DSN` 已配置（可选但推荐）
-- [ ] `JWT_SECRET` 环境变量已设置
 
 ### 环境变量
 
@@ -95,18 +102,33 @@ docker compose up -d
 
 ### 环境文件
 
-- `.env.dev` — 开发环境（DEBUG=true）
-- `.env.prod` — 生产环境（DEBUG=false，需设置 JWT_SECRET）
-- `.env.example` — 完整配置模板
+- 根目录 `.env.example`：Docker Compose 插值变量模板；复制为根目录 `.env`
+- `backend/.env.example`：后端完整模板；开发复制为 `backend/.env.dev`，生产复制为 `backend/.env.prod`
+- `frontend/.env.example`：仅在前后端分开部署时配置前端构建变量
+- 根目录 `.env.prod`：历史兼容模板，不会被 Docker Compose 自动读取；新部署不要把密钥写入该受版本控制文件
 
-> **注意**：`.env.dev` 和 `.env.prod` 不在 Git 版本控制中。部署前需从 `.env.example` 复制并配置。
+> 不要把密钥写入任何 `*.example` 或受版本控制的文件。Docker Compose 默认只自动读取根目录 `.env`。
 
-## 测试
+## 全量验证
+
+安装上述后端和前端依赖后，在仓库根目录只需运行：
 
 ```bash
-cd backend
-ENV_FILE=.env.dev python -m pytest tests/ -v
+PYTHON_BIN=backend/.venv/bin/python ./scripts/verify.sh
 ```
+
+该命令依次运行 `backend/tests` 全目录、高严重度 Bandit 安全门禁、前端类型检查、单元测试和生产构建。CI 使用相同的测试范围与安全阈值。
+
+### 设定库只读 API
+
+`DEV-003A` 提供旧世界观到统一设定模型的无副作用预览：
+
+- `GET /api/projects/{project_id}/lore/elements`
+- `GET /api/projects/{project_id}/lore/elements/{element_id}`
+- `GET /api/projects/{project_id}/lore/elements/{element_id}/sources`
+- `GET /api/projects/{project_id}/lore/elements/{element_id}/versions`
+
+这些接口需要登录和项目所有权，只读取现有世界观，不会写入新表、切换事实源或修改项目 JSON 文件。
 
 ## 数据库迁移
 
@@ -260,15 +282,15 @@ docker compose logs -f frontend
 | 变量 | 说明 | 默认值 | 必填 |
 |------|------|--------|------|
 | `JWT_SECRET` | JWT 签名密钥 | 无 | 生产必填 |
-| `DATABASE_URL` | 数据库连接 | sqlite+aiosqlite:///./data/novel_agent.db | 生产推荐 PostgreSQL |
+| `DATABASE_URL` | 数据库连接 | sqlite+aiosqlite:///./data/novel_agent.db | Compose 自动生成；其他生产部署必填 |
 | `CORS_ORIGINS` | 允许的跨域来源 | localhost | 生产必填 |
 | `DEBUG` | 调试模式 | false | — |
 | `ENV_FILE` | 指定 .env 文件 | .env | — |
 | `HOST` | 监听地址 | 0.0.0.0 | — |
 | `PORT` | 监听端口 | 8000 | — |
 | `LLM_API_KEY` | LLM API Key | 空 | 否（可 UI 配置） |
-| `LLM_BASE_URL` | LLM 端点 | https://api.openai.com/v1 | — |
-| `LLM_MODEL` | 模型名称 | gpt-4o | — |
+| `LLM_BASE_URL` | LLM 端点 | https://api.deepseek.com/v1 | — |
+| `LLM_MODEL` | 模型名称 | deepseek-chat | — |
 | `LLM_MAX_TOKENS` | 最大 token 数 | 4096 | — |
 | `LLM_TEMPERATURE` | 生成温度 | 0.8 | — |
 | `MAX_UPLOAD_SIZE` | 上传限制 | 10485760 (10MB) | — |

@@ -22,3 +22,4 @@ psycopg2-binary==2.9.10
 # Dev / test dependencies
 pytest==9.1.1
 pytest-asyncio==1.4.0
+bandit==1.8.6

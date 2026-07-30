@@ -234,7 +234,7 @@ class TestProjectsAPI:
         assert data["total_chapters"] == 20
 
     @pytest.mark.usefixtures("clean_db")
-    async def test_delete_project(self, client, auth_headers):
+    async def test_delete_project(self, client, auth_headers, tmp_path, monkeypatch):
         create_resp = await client.post(
             "/api/projects",
             json={
@@ -247,11 +247,106 @@ class TestProjectsAPI:
             headers=auth_headers,
         )
         pid = create_resp.json()["id"]
+        projects_dir = tmp_path / "projects"
+        staging_dir = tmp_path / "project-delete-staging"
+        project_dir = projects_dir / pid
+        project_dir.mkdir(parents=True)
+        (project_dir / "worldview.json").write_text(
+            '{"title": "删除测试"}', encoding="utf-8"
+        )
+        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", projects_dir)
+        monkeypatch.setattr(
+            "app.core.project_files.PROJECT_DELETE_STAGING_DIR", staging_dir
+        )
+
         resp = await client.delete(f"/api/projects/{pid}", headers=auth_headers)
         assert resp.status_code == 200
+        assert resp.json()["message"] == "项目已删除"
         # Verify deleted
         resp = await client.get(f"/api/projects/{pid}", headers=auth_headers)
         assert resp.status_code == 404
+        assert not project_dir.exists()
+        assert staging_dir.exists()
+        assert list(staging_dir.iterdir()) == []
+
+        # A repeated request has a clear, safe outcome and creates no extra archive.
+        resp = await client.delete(f"/api/projects/{pid}", headers=auth_headers)
+        assert resp.status_code == 404
+        assert list(staging_dir.iterdir()) == []
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_delete_commit_failure_restores_project_files(
+        self, client, auth_headers, tmp_path, monkeypatch
+    ):
+        create_resp = await client.post(
+            "/api/projects",
+            json={
+                "title": "提交失败测试",
+                "genre": "玄幻",
+                "total_chapters": 10,
+                "chapter_word_count": 1000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
+        pid = create_resp.json()["id"]
+        projects_dir = tmp_path / "projects"
+        staging_dir = tmp_path / "project-delete-staging"
+        project_dir = projects_dir / pid
+        project_dir.mkdir(parents=True)
+        (project_dir / "outline.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", projects_dir)
+        monkeypatch.setattr(
+            "app.core.project_files.PROJECT_DELETE_STAGING_DIR", staging_dir
+        )
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        original_commit = AsyncSession.commit
+
+        async def fail_commit(_session):
+            raise RuntimeError("simulated database commit failure")
+
+        monkeypatch.setattr(AsyncSession, "commit", fail_commit)
+        resp = await client.delete(f"/api/projects/{pid}", headers=auth_headers)
+        monkeypatch.setattr(AsyncSession, "commit", original_commit)
+
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "删除未完成，项目仍保留，请重试"
+        assert (project_dir / "outline.json").exists()
+        assert list(staging_dir.iterdir()) == []
+        resp = await client.get(f"/api/projects/{pid}", headers=auth_headers)
+        assert resp.status_code == 200
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_delete_archive_failure_keeps_project(
+        self, client, auth_headers, monkeypatch
+    ):
+        create_resp = await client.post(
+            "/api/projects",
+            json={
+                "title": "归档失败测试",
+                "genre": "玄幻",
+                "total_chapters": 10,
+                "chapter_word_count": 1000,
+                "style_intensity": "standard",
+            },
+            headers=auth_headers,
+        )
+        pid = create_resp.json()["id"]
+
+        def fail_archive(_project_id):
+            from app.core.project_files import ProjectFileArchiveError
+
+            raise ProjectFileArchiveError("simulated archive failure")
+
+        monkeypatch.setattr("app.api.projects.archive_project_files", fail_archive)
+        resp = await client.delete(f"/api/projects/{pid}", headers=auth_headers)
+
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "删除未完成，项目仍保留，请重试"
+        resp = await client.get(f"/api/projects/{pid}", headers=auth_headers)
+        assert resp.status_code == 200
 
     @pytest.mark.usefixtures("clean_db")
     async def test_delete_nonexistent_404(self, client, auth_headers):

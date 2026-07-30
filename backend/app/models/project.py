@@ -68,6 +68,8 @@ class Project(Base):
     owner_id = Column(
         String(32), ForeignKey("users.id"), nullable=True
     )  # nullable for backward compat
+    lore_storage_mode = Column(String(20), nullable=False, default="legacy")
+    lore_migration_version = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 

@@ -13,3 +13,12 @@ from app.models.community import (  # noqa: F401
     CommunityTag,
     novel_tag_association,
 )
+from app.models.lore import (  # noqa: F401
+    ElementSource,
+    ElementVersion,
+    LegacyElementMap,
+    ProjectLoreMigration,
+    SettingElement,
+    SettingType,
+    SettingTypeRevision,
+)
