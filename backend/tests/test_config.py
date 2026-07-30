@@ -16,6 +16,7 @@ class TestSettingsDefaults:
     def test_default_database_url(self):
         s = Settings(DEBUG=True)
         assert "sqlite" in s.DATABASE_URL
+        assert s.JSON_PREFLIGHT_HMAC_KEY == ""
 
     def test_default_llm_settings(self):
         s = Settings(DEBUG=True)
