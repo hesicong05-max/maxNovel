@@ -1,5 +1,17 @@
 # 最高管理者协作记录
 
+## 2026-07-30 16:19 CST
+
+- 任务编号：`DEV-003A-CI`、`BUG-002`
+- 发起人：最高管理者、核心开发者
+- 接收人：项目负责人
+- 当前状态：`DEV-003A-CI CHANGES_REQUESTED`、`BUG-002 BACKLOG`
+- 内容：第二次 PostgreSQL CI 已消除事件循环错误，模型约束和部分 API 测试通过；剩余列表为空的根因是初始 Alembic 将 worldview 等 ORM `JSON` 列建立为 PostgreSQL `Text`，驱动读回字符串。SQLite 的文本亲和行为此前掩盖了差异。
+- 修复方案：`DEV-003A` 兼容层只对历史字符串执行受控 `json.loads`，仅接受预期数组，异常结构继续进入 validation error；不修改旧迁移、不转换真实数据。核心开发 Agent 建议并批准该最小方案。
+- 验证结果：专项 28/28、后端全量 505/505 通过。
+- 风险登记：`BUG-002` 负责未来新增可回滚迁移，统一 worldview、outline、chapter 和 story memory 的 Text/JSON 物理类型；属于真实数据转换，必须另行批准。
+- 下一步行动：提交并推送兼容修复，跟踪第三次 CI。
+
 ## 2026-07-30 16:09 CST
 
 - 任务编号：`DEV-003A-CI`

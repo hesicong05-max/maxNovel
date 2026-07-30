@@ -1,5 +1,16 @@
 # 核心开发者协作记录
 
+## 2026-07-30 16:19 CST
+
+- 任务编号：`DEV-003A-CI`、`BUG-002`
+- 当前状态：`DEV-003A-CI CHANGES_REQUESTED`、`BUG-002 BACKLOG`
+- 第二次 CI：NullPool 修复后跨 loop 错误消失，PostgreSQL 模型测试和部分 API 测试通过；依赖 worldview 内容的列表均返回 0。
+- 根因：初始迁移将运行时 ORM `JSON` 列物理创建为 `Text`；asyncpg 按 Text 返回字符串，SQLAlchemy 的 PostgreSQL JSON 原生结果路径不再二次反序列化。
+- 本阶段修复：兼容投影同时接受 SQLite 的列表和 PostgreSQL 历史 Text JSON 字符串；校验失败仍报告 invalid collection。
+- 验证结果：专项 28/28、后端全量 505/505 通过。
+- 后续建议：`BUG-002` 在任何数据类型迁移前统计非法 JSON、制定备份和回滚；不得修改初始迁移，不得未经项目负责人批准转换真实数据。
+- 下一步行动：推送兼容修复并重跑 CI。
+
 ## 2026-07-30 16:09 CST
 
 - 任务编号：`DEV-003A-CI`

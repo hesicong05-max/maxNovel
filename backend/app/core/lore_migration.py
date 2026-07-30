@@ -114,17 +114,33 @@ def _json_value(value: Any) -> Any:
     return str(value)
 
 
+def _legacy_collection_value(value: Any) -> Any:
+    """Normalize a legacy collection stored as JSON or historical Text."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return value
+        if isinstance(decoded, list):
+            return _json_value(decoded)
+    return _json_value(value)
+
+
 def legacy_worldview_checksum(worldview: Any | None) -> str:
     """Return a stable checksum of the legacy fields that affect lore projection."""
     if worldview is None:
         payload: dict[str, Any] = {}
     else:
         payload = {
-            category: _json_value(getattr(worldview, category, None) or [])
+            category: _legacy_collection_value(
+                getattr(worldview, category, None)
+            )
             for category in LEGACY_CATEGORY_MAP
         }
-        payload["parsed_elements"] = _json_value(
-            getattr(worldview, "parsed_elements", None) or []
+        payload["parsed_elements"] = _legacy_collection_value(
+            getattr(worldview, "parsed_elements", None)
         )
         payload["source"] = getattr(worldview, "source", None) or "manual"
     encoded = json.dumps(
@@ -136,12 +152,14 @@ def legacy_worldview_checksum(worldview: Any | None) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def legacy_structured_payload(worldview: Any | None) -> dict[str, list[Any]]:
+def legacy_structured_payload(worldview: Any | None) -> dict[str, Any]:
     """Return only the seven arrays used for lossless compatibility checks."""
     if worldview is None:
         return {category: [] for category in LEGACY_CATEGORY_MAP}
     return {
-        category: _json_value(getattr(worldview, category, None) or [])
+        category: _legacy_collection_value(
+            getattr(worldview, category, None)
+        )
         for category in LEGACY_CATEGORY_MAP
     }
 
@@ -240,7 +258,9 @@ def project_legacy_worldview(
     if worldview is None:
         return LoreProjection([], checksum, [])
 
-    parsed = getattr(worldview, "parsed_elements", None) or []
+    parsed = _legacy_collection_value(
+        getattr(worldview, "parsed_elements", None)
+    )
     parsed_by_category: dict[str, list[dict[str, Any]]] = {}
     if isinstance(parsed, list):
         for raw in parsed:
@@ -256,7 +276,9 @@ def project_legacy_worldview(
     warnings: list[str] = []
 
     for legacy_category, (type_key, type_display_name) in LEGACY_CATEGORY_MAP.items():
-        values = getattr(worldview, legacy_category, None) or []
+        values = _legacy_collection_value(
+            getattr(worldview, legacy_category, None)
+        )
         if not isinstance(values, list):
             warnings.append(f"{legacy_category}:invalid_collection")
             continue

@@ -1,3 +1,4 @@
+import json
 from copy import deepcopy
 from datetime import datetime
 from types import SimpleNamespace
@@ -103,6 +104,41 @@ def test_checksum_changes_only_when_projected_source_changes():
     assert legacy_worldview_checksum(worldview) == checksum
     worldview.characters[0]["name"] = "林岚·改"
     assert legacy_worldview_checksum(worldview) != checksum
+
+
+def test_projection_decodes_historical_text_json_columns_losslessly():
+    normal = _worldview()
+    text_backed = _worldview(
+        **{
+            category: json.dumps(
+                getattr(normal, category),
+                ensure_ascii=False,
+            )
+            for category in (
+                "characters",
+                "geography",
+                "factions",
+                "power_system",
+                "history",
+                "conflicts",
+                "special_settings",
+            )
+        },
+        parsed_elements=json.dumps(
+            normal.parsed_elements,
+            ensure_ascii=False,
+        ),
+    )
+
+    projection = project_legacy_worldview("project-a", text_backed)
+
+    assert validate_projection(projection)["valid"] is True
+    assert len(projection.elements) == 8
+    assert legacy_worldview_checksum(text_backed) == legacy_worldview_checksum(normal)
+    assert (
+        build_legacy_compatibility_projection(projection)
+        == legacy_structured_payload(normal)
+    )
 
 
 def test_invalid_collection_fails_validation_without_crashing():
