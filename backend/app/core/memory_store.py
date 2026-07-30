@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.maintenance import ensure_project_writes_available
 from app.models.project import StoryMemory
 
 
@@ -25,6 +26,7 @@ class MemoryStore:
         if memory:
             return memory
 
+        ensure_project_writes_available()
         memory = StoryMemory(
             project_id=project_id,
             revealed_elements=[],
@@ -47,6 +49,7 @@ class MemoryStore:
         chapter_num: int,
     ):
         """Mark elements as revealed in a specific chapter. Does NOT commit — caller is responsible."""
+        ensure_project_writes_available()
         revealed = set(memory.revealed_elements or [])
         for eid in element_ids:
             revealed.add(eid)
@@ -60,6 +63,7 @@ class MemoryStore:
         state: dict[str, Any],
     ):
         """Update a character's current state. Does NOT commit — caller is responsible."""
+        ensure_project_writes_available()
         states = dict(memory.character_states or {})
         states[char_name] = state
         memory.character_states = states
@@ -73,6 +77,7 @@ class MemoryStore:
         resolve_by: int | None = None,
     ):
         """Plant a new foreshadow. Does NOT commit — caller is responsible."""
+        ensure_project_writes_available()
         foreshadows = list(memory.foreshadows or [])
         fs_id = f"fs_{len(foreshadows) + 1}_{planted_chapter}"
         foreshadows.append(
@@ -90,6 +95,7 @@ class MemoryStore:
         self, db: AsyncSession, memory: StoryMemory, fs_id: str, chapter_num: int
     ):
         """Mark a foreshadow as resolved. Does NOT commit — caller is responsible."""
+        ensure_project_writes_available()
         foreshadows = list(memory.foreshadows or [])
         for fs in foreshadows:
             if fs["id"] == fs_id:
@@ -107,6 +113,7 @@ class MemoryStore:
         description: str,
     ):
         """Add or replace a chapter event. Does NOT commit — caller is responsible."""
+        ensure_project_writes_available()
         timeline = list(memory.timeline or [])
         timeline = [
             item
@@ -122,6 +129,7 @@ class MemoryStore:
         self, db: AsyncSession, memory: StoryMemory, chapter_num: int, summary: str
     ):
         """Add or update a chapter summary. Does NOT commit — caller is responsible."""
+        ensure_project_writes_available()
         summaries = list(memory.chapter_summaries or [])
         # Replace if already exists
         summaries = [s for s in summaries if s.get("chapter_num") != chapter_num]

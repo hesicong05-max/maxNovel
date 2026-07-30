@@ -12,6 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings as app_settings
 from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.llm_client import LLMResponseTruncatedError, llm_client
+from app.core.maintenance import (
+    PROJECT_WRITE_FROZEN_CODE,
+    ProjectWriteFrozenError,
+    ensure_project_writes_available,
+    project_write_frozen_sse_event,
+    require_project_writes_available,
+)
 from app.core.memory_store import memory_store
 from app.core.pacing_planner import pacing_planner
 from app.core.rate_limiter import limiter
@@ -153,6 +160,7 @@ async def update_word_counts(
     data: WordCountConfigRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    _write_gate: Annotated[None, Depends(require_project_writes_available)],
 ):
     """Save word count configuration."""
     project = await get_project_for_owner(project_id, current_user, db)
@@ -203,6 +211,8 @@ async def update_word_counts(
     if not outline:
         raise HTTPException(status_code=400, detail="大纲不存在，请先生成大纲")
 
+    ensure_project_writes_available()
+
     # Update chapter entries with target_word_count
     chapters_data = list(outline.chapters or [])
     for ch in chapters_data:
@@ -222,6 +232,7 @@ async def update_word_counts(
     )
 
     outline.chapters = chapters_data
+    ensure_project_writes_available()
     await db.commit()
 
     # Return updated config
@@ -385,6 +396,7 @@ async def update_chapter(
     data: ChapterUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    _write_gate: Annotated[None, Depends(require_project_writes_available)],
 ):
     """Edit a generated chapter."""
     project = await get_project_for_owner(project_id, current_user, db)
@@ -398,6 +410,8 @@ async def update_chapter(
     chapter = result.scalar_one_or_none()
     if not chapter:
         raise HTTPException(status_code=404, detail="章节不存在")
+
+    ensure_project_writes_available()
 
     if data.title is not None:
         chapter.title = data.title
@@ -415,6 +429,7 @@ async def update_chapter(
     chapter.status = "edited"
     await _refresh_project_completion_status(db, project)
 
+    ensure_project_writes_available()
     await db.commit()
     await db.refresh(chapter)
 
@@ -441,6 +456,7 @@ async def generate_chapter(
     chapter_num: int,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    _write_gate: Annotated[None, Depends(require_project_writes_available)],
 ):
     """Generate a single chapter with streaming output."""
     # Verify ownership before streaming starts
@@ -466,6 +482,7 @@ async def generate_all_chapters(
     project_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    _write_gate: Annotated[None, Depends(require_project_writes_available)],
     skip_existing: bool = True,
 ):
     """Batch generate all chapters with streaming progress via SSE."""
@@ -485,6 +502,12 @@ async def _stream_single_chapter(project_id: str, chapter_num: int, user_id: str
 
     Re-verifies project ownership in the new session to prevent TOCTOU.
     """
+    try:
+        ensure_project_writes_available()
+    except ProjectWriteFrozenError:
+        yield _sse(project_write_frozen_sse_event())
+        return
+
     if project_id in _active_generation_projects:
         yield _sse(
             {"type": "error", "error": "该项目已有生成任务正在运行，请等待完成后重试"}
@@ -519,6 +542,12 @@ async def _stream_batch_generate(
 
     Re-verifies project ownership in the new session to prevent TOCTOU.
     """
+    try:
+        ensure_project_writes_available()
+    except ProjectWriteFrozenError:
+        yield _sse(project_write_frozen_sse_event())
+        return
+
     if project_id in _active_generation_projects:
         yield _sse(
             {"type": "error", "error": "该项目已有生成任务正在运行，请等待完成后重试"}
@@ -584,6 +613,12 @@ async def _stream_batch_generate(
 
             # Do not downgrade a completed project merely because a regeneration
             # attempt starts; successful saves recompute the final status.
+            try:
+                ensure_project_writes_available()
+            except ProjectWriteFrozenError:
+                await db.rollback()
+                yield _sse(project_write_frozen_sse_event())
+                return
             if project.status != ProjectStatus.COMPLETED:
                 project.status = ProjectStatus.WRITING
             await db.commit()
@@ -609,13 +644,22 @@ async def _stream_batch_generate(
                     db, project_id, chapter_num, batch_mode=True
                 ):
                     # Parse the event to track success
+                    maintenance_frozen = False
                     try:
                         event_data = json.loads(event.replace("data: ", "").strip())
                         if event_data.get("type") == "complete":
                             chapter_success = True
+                        error = event_data.get("error")
+                        maintenance_frozen = (
+                            isinstance(error, dict)
+                            and error.get("code") == PROJECT_WRITE_FROZEN_CODE
+                        )
                     except (json.JSONDecodeError, ValueError):
                         pass
                     yield event
+                    if maintenance_frozen:
+                        await db.rollback()
+                        return
 
                 if chapter_success:
                     generated_count += 1
@@ -656,6 +700,13 @@ async def _generate_chapter_core(
     Core chapter generation logic. Yields SSE events.
     Used by both single-chapter and batch generation.
     """
+    try:
+        ensure_project_writes_available()
+    except ProjectWriteFrozenError:
+        await db.rollback()
+        yield _sse(project_write_frozen_sse_event())
+        return
+
     # Load project
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
@@ -755,12 +806,24 @@ async def _generate_chapter_core(
                     break
 
     # Get story context from memory
-    memory = await memory_store.get_or_create(db, project_id)
+    try:
+        ensure_project_writes_available()
+        memory = await memory_store.get_or_create(db, project_id)
+    except ProjectWriteFrozenError:
+        await db.rollback()
+        yield _sse(project_write_frozen_sse_event())
+        return
     context = await memory_store.get_context_for_chapter(memory, chapter_num)
 
     # Persist newly-created memory before the long-running stream. Keep a
     # completed project completed while a regeneration attempt is in flight;
     # a failed retry must not downgrade already-valid data.
+    try:
+        ensure_project_writes_available()
+    except ProjectWriteFrozenError:
+        await db.rollback()
+        yield _sse(project_write_frozen_sse_event())
+        return
     if project.status != ProjectStatus.COMPLETED:
         project.status = ProjectStatus.WRITING
     await db.commit()
@@ -888,6 +951,12 @@ async def _generate_chapter_core(
         )
 
     # Save chapter to database
+    try:
+        ensure_project_writes_available()
+    except ProjectWriteFrozenError:
+        await db.rollback()
+        yield _sse(project_write_frozen_sse_event())
+        return
     result = await db.execute(
         select(Chapter).where(
             Chapter.project_id == project_id,
@@ -916,15 +985,27 @@ async def _generate_chapter_core(
         db.add(chapter)
 
     # Update memory
-    await memory_store.mark_revealed(
-        db, memory, [e["id"] for e in elements_to_reveal], chapter_num
-    )
-    await memory_store.add_chapter_summary(db, memory, chapter_num, summary)
-    await memory_store.add_timeline_event(db, memory, chapter_num, "章节生成", summary)
+    try:
+        await memory_store.mark_revealed(
+            db, memory, [e["id"] for e in elements_to_reveal], chapter_num
+        )
+        await memory_store.add_chapter_summary(db, memory, chapter_num, summary)
+        await memory_store.add_timeline_event(
+            db, memory, chapter_num, "章节生成", summary
+        )
+    except ProjectWriteFrozenError:
+        await db.rollback()
+        yield _sse(project_write_frozen_sse_event())
+        return
     await _refresh_project_completion_status(db, project)
 
     try:
+        ensure_project_writes_available()
         await db.commit()
+    except ProjectWriteFrozenError:
+        await db.rollback()
+        yield _sse(project_write_frozen_sse_event())
+        return
     except Exception as e:
         await db.rollback()
         logger.exception(

@@ -13,6 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings as app_settings
 from app.core.auth import User, get_current_user, get_project_for_owner
+from app.core.maintenance import (
+    ensure_project_writes_available,
+    require_project_writes_available,
+)
 from app.core.project_files import save_worldview_file
 from app.core.worldview_parser import worldview_parser
 from app.database import get_db
@@ -256,8 +260,10 @@ async def set_worldview(
     data: WorldviewCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    _write_gate: Annotated[None, Depends(require_project_writes_available)],
 ):
     project = await get_project_for_owner(project_id, current_user, db)
+    ensure_project_writes_available()
 
     # Delete existing worldview if any (query directly to avoid lazy loading)
     wv_result = await db.execute(
@@ -288,6 +294,7 @@ async def set_worldview(
     db.add(worldview)
 
     project.status = ProjectStatus.WORLDVIEW_SET
+    ensure_project_writes_available()
     await db.commit()
     await db.refresh(worldview)
 

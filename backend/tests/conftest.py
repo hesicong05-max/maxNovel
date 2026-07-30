@@ -94,6 +94,13 @@ async def client():
 
 
 @pytest.fixture
+async def db_session():
+    """Provide a test-database session for focused store and stream checks."""
+    async with TestSessionLocal() as session:
+        yield session
+
+
+@pytest.fixture
 async def clean_db():
     """Clean all tables and reset rate limiter before each test."""
     from sqlalchemy import text

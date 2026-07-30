@@ -12,6 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.llm_client import LLMResponseTruncatedError, llm_client
+from app.core.maintenance import (
+    ProjectWriteFrozenError,
+    ensure_project_writes_available,
+    project_write_frozen_sse_event,
+    require_project_writes_available,
+)
 from app.core.memory_store import memory_store
 from app.core.project_files import load_worldview_file, save_outline_file
 from app.core.settings_store import load_settings
@@ -129,6 +135,7 @@ async def generate_outline(
     project_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    _write_gate: Annotated[None, Depends(require_project_writes_available)],
 ):
     """Generate a story outline based on worldview and pacing plan (non-streaming fallback)."""
     try:
@@ -253,6 +260,8 @@ async def generate_outline(
         warning or "none",
     )
 
+    ensure_project_writes_available()
+
     # Delete existing outline if any (query directly)
     ol_result = await db.execute(
         select(Outline).where(Outline.project_id == project_id)
@@ -275,6 +284,7 @@ async def generate_outline(
     await memory_store.get_or_create(db, project_id)
 
     project.status = ProjectStatus.OUTLINE_PENDING
+    ensure_project_writes_available()
     await db.commit()
     await db.refresh(outline)
 
@@ -448,6 +458,7 @@ async def generate_outline_stream(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    _write_gate: Annotated[None, Depends(require_project_writes_available)],
 ):
     """Generate outline via SSE streaming — keeps connection alive, avoids proxy timeout.
 
@@ -592,6 +603,12 @@ async def generate_outline_stream(
 
             # Save to DB in a fresh session
             async with async_session() as save_db:
+                try:
+                    ensure_project_writes_available()
+                except ProjectWriteFrozenError:
+                    await save_db.rollback()
+                    raise
+
                 # Delete existing outline
                 ol_result = await save_db.execute(
                     select(Outline).where(Outline.project_id == project_id_val)
@@ -619,7 +636,12 @@ async def generate_outline_stream(
                 if proj:
                     proj.status = ProjectStatus.OUTLINE_PENDING
 
-                await save_db.commit()
+                try:
+                    ensure_project_writes_available()
+                    await save_db.commit()
+                except ProjectWriteFrozenError:
+                    await save_db.rollback()
+                    raise
                 await save_db.refresh(outline)
 
                 # Persist as independent document file (DB + file dual write)
@@ -649,6 +671,12 @@ async def generate_outline_stream(
 
                 yield f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
 
+        except ProjectWriteFrozenError:
+            yield (
+                "data: "
+                + json.dumps(project_write_frozen_sse_event(), ensure_ascii=False)
+                + "\n\n"
+            )
         except LLMResponseTruncatedError as e:
             logger.warning(
                 "Outline stream output truncated for project %s: %s",
@@ -728,6 +756,7 @@ async def update_outline(
     data: OutlineCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    _write_gate: Annotated[None, Depends(require_project_writes_available)],
 ):
     """Update outline (user-edited)."""
     project = await get_project_for_owner(project_id, current_user, db)
@@ -747,6 +776,7 @@ async def update_outline(
     if not outline:
         raise HTTPException(status_code=404, detail="大纲不存在")
 
+    ensure_project_writes_available()
     outline.story_arc = data.story_arc
     outline.chapters = [c.model_dump() for c in data.chapters]
 
@@ -754,6 +784,7 @@ async def update_outline(
     # (no longer re-computing via mechanical pacing_planner)
     outline.reveal_plan = _derive_reveal_plan_from_chapters(outline.chapters)
 
+    ensure_project_writes_available()
     await db.commit()
     await db.refresh(outline)
 
@@ -776,6 +807,7 @@ async def confirm_outline(
     project_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    _write_gate: Annotated[None, Depends(require_project_writes_available)],
 ):
     """Confirm the outline and move to writing phase."""
     project = await get_project_for_owner(project_id, current_user, db)
@@ -787,7 +819,9 @@ async def confirm_outline(
     if not ol_result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="请先生成大纲")
 
+    ensure_project_writes_available()
     project.status = ProjectStatus.OUTLINE_CONFIRMED
+    ensure_project_writes_available()
     await db.commit()
 
     return {"message": "大纲已确认，可以开始逐章生成", "status": project.status.value}

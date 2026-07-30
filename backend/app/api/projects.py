@@ -8,6 +8,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import User, get_current_user, get_project_for_owner
+from app.core.maintenance import (
+    ensure_project_writes_available,
+    require_project_writes_available,
+)
 from app.core.project_files import (
     ProjectFileArchiveError,
     archive_project_files,
@@ -104,8 +108,10 @@ async def delete_project(
     project_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    _write_gate: Annotated[None, Depends(require_project_writes_available)],
 ):
     project = await get_project_for_owner(project_id, current_user, db)
+    ensure_project_writes_available()
 
     try:
         file_archive = archive_project_files(project_id)

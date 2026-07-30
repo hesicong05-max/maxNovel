@@ -26,6 +26,10 @@ from app.api import (
 )
 from app.config import settings as app_settings
 from app.core.logging_config import setup_logging
+from app.core.maintenance import (
+    ProjectWriteFrozenError,
+    project_write_frozen_payload,
+)
 from app.core.rate_limiter import limiter
 from app.core.settings_store import load_settings
 from app.database import init_db
@@ -161,6 +165,26 @@ app.add_middleware(RequestLoggingMiddleware)
 
 
 # ---- Global exception handlers ----
+
+
+@app.exception_handler(ProjectWriteFrozenError)
+async def project_write_frozen_handler(
+    request: Request, exc: ProjectWriteFrozenError
+):
+    """Return one safe, stable maintenance contract for protected writes."""
+    request_id = getattr(request.state, "request_id", "unknown")
+    logging.getLogger(__name__).warning(
+        "[%s] Protected project write frozen on %s %s",
+        request_id,
+        request.method,
+        request.url.path,
+    )
+    payload = project_write_frozen_payload()
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content=payload,
+        headers={"Retry-After": str(payload["retry_after_seconds"])},
+    )
 
 
 @app.exception_handler(Exception)

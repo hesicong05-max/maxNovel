@@ -92,6 +92,9 @@ docker compose up -d
 | `JWT_SECRET` | JWT 签名密钥 | 生产必填 | 无（启动时校验） |
 | `DATABASE_URL` | 数据库连接 | 生产推荐 | sqlite+aiosqlite:///./data/novel_agent.db |
 | `JSON_PREFLIGHT_HMAC_KEY` | 历史资料只读预检的脱敏密钥（至少 32 字节，不复用 JWT） | 仅 PostgreSQL 预检必填 | 空 |
+| `LEGACY_JSON_WRITES_FROZEN` | 历史资料维护期间冻结受影响的项目写入 | 否 | false |
+| `LEGACY_JSON_MAINTENANCE_EVENT_ID` | 可向用户展示的非敏感维护事件编号 | 否 | BUG-002B |
+| `LEGACY_JSON_MAINTENANCE_RETRY_AFTER` | 客户端重试提示秒数（30–3600） | 否 | 60 |
 | `CORS_ORIGINS` | 允许的跨域来源 | 生产必填 | localhost:5173,3000 |
 | `DEBUG` | 调试模式 | 否 | false |
 | `ENV_FILE` | 指定 .env 文件 | 否 | .env |
@@ -168,6 +171,26 @@ ENV_FILE=.env.prod python -m app.commands.json_preflight \
 PostgreSQL 的 `data_shape_status` 可以为 `PASS`，但在维护、锁、容量、备份与
 恢复门禁完成前，`overall_status` 仍为 `REVIEW_REQUIRED`，命令返回 `2`。
 任何结果都不构成真实数据转换批准。
+
+### 历史资料维护写入冻结
+
+`BUG-002B1` 提供默认关闭的部署级写入冻结。启用后，受历史 JSON 字段影响的
+世界观、大纲、章节、故事记忆写入以及项目级联删除统一返回 HTTP `503`、
+`PROJECT_WRITE_FROZEN` 和 `Retry-After`；已经建立的 SSE 在最终保存前再次
+检查，并以同一安全错误对象终止。读取、世界观文件解析/导入预览、认证、社区和
+项目创建/基本信息编辑保持可用。
+
+```dotenv
+LEGACY_JSON_WRITES_FROZEN=true
+LEGACY_JSON_MAINTENANCE_EVENT_ID=BUG-002B
+LEGACY_JSON_MAINTENANCE_RETRY_AFTER=60
+```
+
+维护状态可通过 `GET /api/version/maintenance` 检查。该开关在进程启动时加载，
+不是分布式锁；启用前必须一次性把配置部署到全部实例并排空旧实例与活跃生成流，
+再执行第二次只读预检。滚动部署中只冻结部分实例不能作为迁移门禁。恢复写入时
+同样需要确保全部实例配置一致。此功能只建立维护边界，不会执行迁移、修复或
+真实数据转换。
 
 ### Docker 中执行迁移
 
