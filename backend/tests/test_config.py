@@ -9,7 +9,7 @@ from app.config import Settings
 class TestSettingsDefaults:
     def test_default_app_settings(self):
         s = Settings(DEBUG=True)
-        assert s.APP_NAME == "小说世界观续写 Agent"
+        assert s.APP_NAME == "满分小说 AI 小说创作平台"
         assert s.HOST == "0.0.0.0"
         assert s.PORT == 8000
 

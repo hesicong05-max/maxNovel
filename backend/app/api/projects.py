@@ -1,5 +1,6 @@
 """Project CRUD API."""
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,11 +8,18 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import User, get_current_user, get_project_for_owner
+from app.core.project_files import (
+    ProjectFileArchiveError,
+    archive_project_files,
+    finalize_project_file_delete,
+    restore_project_files,
+)
 from app.database import get_db
 from app.models.project import Chapter, Outline, Project, ProjectStatus, Worldview
 from app.schemas.models import ProjectCreate, ProjectResponse
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
+logger = logging.getLogger(__name__)
 
 
 async def _project_extras(db: AsyncSession, project_id: str) -> dict:
@@ -99,8 +107,52 @@ async def delete_project(
 ):
     project = await get_project_for_owner(project_id, current_user, db)
 
-    await db.delete(project)
-    await db.commit()
+    try:
+        file_archive = archive_project_files(project_id)
+    except ProjectFileArchiveError as exc:
+        await db.rollback()
+        logger.error("Project file archive failed for %s: %s", project_id, exc)
+        raise HTTPException(
+            status_code=500,
+            detail="删除未完成，项目仍保留，请重试",
+        ) from exc
+
+    try:
+        await db.delete(project)
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        if file_archive is not None:
+            try:
+                restore_project_files(file_archive)
+            except ProjectFileArchiveError:
+                logger.critical(
+                    "Project delete and file restore both failed for %s",
+                    project_id,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="删除未完成，项目文件恢复失败，请联系支持",
+                ) from exc
+        raise HTTPException(
+            status_code=500,
+            detail="删除未完成，项目仍保留，请重试",
+        ) from exc
+
+    try:
+        finalize_project_file_delete(file_archive)
+    except ProjectFileArchiveError as exc:
+        logger.critical(
+            "Project database delete committed but staged file cleanup failed for %s",
+            project_id,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="项目记录已删除，但文件清理未完成，请联系支持",
+        ) from exc
+
     return {"message": "项目已删除"}
 
 

@@ -12,7 +12,18 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
-from app.api import auth, chapters, community, export, outline, projects, settings, version, worldview
+from app.api import (
+    auth,
+    chapters,
+    community,
+    export,
+    lore,
+    outline,
+    projects,
+    settings,
+    version,
+    worldview,
+)
 from app.config import settings as app_settings
 from app.core.logging_config import setup_logging
 from app.core.rate_limiter import limiter
@@ -190,6 +201,7 @@ async def value_error_handler(request: Request, exc: ValueError):
 app.include_router(auth.router)
 app.include_router(projects.router)
 app.include_router(worldview.router)
+app.include_router(lore.router)
 app.include_router(outline.router)
 app.include_router(chapters.router)
 app.include_router(export.router)

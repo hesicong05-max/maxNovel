@@ -13,8 +13,12 @@ import pytest
 
 from app.core.project_files import (
     PROJECTS_DIR,
+    ProjectFileArchiveError,
+    archive_project_files,
+    finalize_project_file_delete,
     load_outline_file,
     load_worldview_file,
+    restore_project_files,
     save_outline_file,
     save_worldview_file,
 )
@@ -255,3 +259,79 @@ class TestLoadFiles:
         assert ol is not None
         assert wv["_doc_type"] == "worldview"
         assert ol["_doc_type"] == "outline"
+
+
+class TestProjectFileArchive:
+    """Tests for recoverable project file removal."""
+
+    def test_archive_moves_project_directory(self, tmp_path, monkeypatch):
+        projects_dir = tmp_path / "projects"
+        staging_dir = tmp_path / "project-delete-staging"
+        project_dir = projects_dir / "proj_123"
+        project_dir.mkdir(parents=True)
+        (project_dir / "worldview.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", projects_dir)
+        monkeypatch.setattr(
+            "app.core.project_files.PROJECT_DELETE_STAGING_DIR", staging_dir
+        )
+
+        archive = archive_project_files("proj_123")
+
+        assert archive is not None
+        assert not project_dir.exists()
+        assert archive.archived_path.parent == staging_dir
+        assert (archive.archived_path / "worldview.json").exists()
+
+    def test_archive_can_be_restored(self, tmp_path, monkeypatch):
+        projects_dir = tmp_path / "projects"
+        staging_dir = tmp_path / "project-delete-staging"
+        project_dir = projects_dir / "proj_123"
+        project_dir.mkdir(parents=True)
+        (project_dir / "outline.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", projects_dir)
+        monkeypatch.setattr(
+            "app.core.project_files.PROJECT_DELETE_STAGING_DIR", staging_dir
+        )
+
+        archive = archive_project_files("proj_123")
+        assert archive is not None
+        restore_project_files(archive)
+
+        assert (project_dir / "outline.json").exists()
+        assert not archive.archived_path.exists()
+
+    def test_archive_is_removed_after_successful_delete(self, tmp_path, monkeypatch):
+        projects_dir = tmp_path / "projects"
+        staging_dir = tmp_path / "project-delete-staging"
+        project_dir = projects_dir / "proj_123"
+        project_dir.mkdir(parents=True)
+        (project_dir / "outline.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", projects_dir)
+        monkeypatch.setattr(
+            "app.core.project_files.PROJECT_DELETE_STAGING_DIR", staging_dir
+        )
+
+        archive = archive_project_files("proj_123")
+        assert archive is not None
+        finalize_project_file_delete(archive)
+
+        assert not project_dir.exists()
+        assert not archive.archived_path.exists()
+        assert list(staging_dir.iterdir()) == []
+
+    def test_archive_missing_project_is_noop(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path / "projects")
+        monkeypatch.setattr(
+            "app.core.project_files.PROJECT_DELETE_STAGING_DIR",
+            tmp_path / "project-delete-staging",
+        )
+        assert archive_project_files("proj_missing") is None
+
+    def test_archive_rejects_path_traversal(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path / "projects")
+        monkeypatch.setattr(
+            "app.core.project_files.PROJECT_DELETE_STAGING_DIR",
+            tmp_path / "project-delete-staging",
+        )
+        with pytest.raises(ProjectFileArchiveError):
+            archive_project_files("../outside")

@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # App
-    APP_NAME: str = "小说世界观续写 Agent"
+    APP_NAME: str = "满分小说 AI 小说创作平台"
     DEBUG: bool = False
     HOST: str = "0.0.0.0"
     PORT: int = 8000

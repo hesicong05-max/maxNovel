@@ -71,6 +71,5 @@ server_cleanup.py
 
 # Upload temp
 backend/uploads/
-.github/workflows/ci.yml
 frontend/coverage/
 backend/load_tests/__pycache__/
