@@ -1,5 +1,17 @@
 # 核心开发者协作记录
 
+## 2026-07-30 16:26 CST
+
+- 任务编号：`DEV-003A`
+- 当前状态：`APPROVED`
+- 最终提交：`d162461`
+- Draft PR：`#1`
+- CI：`30526356732`，`backend-test`、`frontend-test`、`postgres-lore`、`docker-build` 全部通过。
+- PostgreSQL 证据：Alembic upgrade → downgrade → upgrade 通过，Lore API/模型测试通过；历史 Text JSON 兼容路径已在真实 PostgreSQL 验证。
+- 本地证据：专项 28/28、后端全量 505/505。
+- 剩余风险：`BUG-002` 物理列类型治理和 `DEV-003B` 项目级复合引用约束均已登记为后续硬门禁。
+- 下一步行动：等待 PR #1 合并批准后进入 `DEV-003B`。
+
 ## 2026-07-30 16:19 CST
 
 - 任务编号：`DEV-003A-CI`、`BUG-002`
@@ -211,3 +223,32 @@
 - 已知警告：测试环境使用开发 JWT 默认值时产生预期安全警告；生产环境仍强制要求独立强密钥。
 - 推荐方案：`DEV-001` 进入最高管理者验收；把暂存目录极端清理失败的补偿与告警纳入 `DEV-012`。
 - 下一步行动：最高管理者给出 `APPROVED` 或 `CHANGES_REQUESTED`。
+## 2026-07-30 16:47 CST
+
+### 基本信息
+
+- 任务编号：`BUG-002`
+- 当前状态：`APPROVED（设计）`
+- 涉及模块：历史 Alembic schema、PostgreSQL JSON 类型、SQLite 兼容、备份与恢复
+- 修改文件或功能：`coordination/bug-002-json-migration-design.md`
+
+### 完成内容
+
+- 盘点 `worldviews`、`outlines`、`chapters`、`story_memories` 的 16 个 ORM JSON /
+  PostgreSQL Text 不一致字段。
+- 明确 PostgreSQL 目标为 JSON、新增 revision、SQLite no-op、非法数据阻断、
+  事务 advisory lock、短锁超时、单事务转换和三阶段回滚边界。
+- 将实施拆为 `BUG-002A/B/C/D`，设计及前三阶段均不自动授权真实转换。
+
+### 验证结果
+
+- 执行的验证：核心开发者逐项复核字段、PostgreSQL 16 SQL、Alembic、锁、事务、
+  备份、恢复及测试矩阵；网站设计者复核维护状态、草稿和可访问性。
+- 测试结果：文档审查均为 `APPROVED`；本次为设计任务，未连接数据库或运行迁移。
+- 是否影响现有功能：否；未修改代码、历史 revision 或真实数据。
+
+### 剩余事项
+
+- 建议后续工作：先申请并实现 `BUG-002A` 只读预检。
+- 潜在风险：真实数据库的数据形态、表大小、锁时长和恢复能力仍未知。
+- 是否需要管理者决策：需要项目负责人批准 `BUG-002A`；真实转换另行批准。
