@@ -1,8 +1,18 @@
 import pytest
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.pool import NullPool
 
 from app.models.lore import SettingType, SettingTypeRevision
 from app.models.project import Project
+
+
+def test_postgres_test_engine_does_not_reuse_connections_across_event_loops():
+    from tests.conftest import TEST_DATABASE_BACKEND, test_engine
+
+    if TEST_DATABASE_BACKEND == "sqlite":
+        assert not isinstance(test_engine.sync_engine.pool, NullPool)
+    else:
+        assert isinstance(test_engine.sync_engine.pool, NullPool)
 
 
 @pytest.mark.usefixtures("clean_db")

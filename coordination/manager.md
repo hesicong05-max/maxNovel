@@ -1,5 +1,17 @@
 # 最高管理者协作记录
 
+## 2026-07-30 16:09 CST
+
+- 任务编号：`DEV-003A-CI`
+- 发起人：最高管理者、核心开发者
+- 接收人：项目负责人
+- 当前状态：`CHANGES_REQUESTED`
+- 内容：提交 `da40605` 已推送至 `codex/m0-m1-lore-foundation`，Draft PR #1 已创建。首次 CI 中前端与后端通过；PostgreSQL 16.4 的 Alembic 升级—降级—升级通过，但 Lore 测试因 session fixture 与 function test 使用不同事件循环、连接池复用 asyncpg 连接而失败。
+- 修复方案：仅对非 SQLite 的 `TEST_DATABASE_URL` 测试引擎使用 `NullPool`，每个事件循环获取新连接；生产数据库连接池和 SQLite 内存测试保持不变。核心开发 Agent 复核为 `APPROVED`。
+- 验证结果：修复后专项 27/27、后端全量 504/504 通过。
+- 安全处理：推送前安全门禁阻止 `.env.prod` 外传；已从未推送提交中排除，并完整保留为本地未暂存修改。
+- 下一步行动：提交并推送测试基础设施修复，跟踪第二次 CI。
+
 ## 2026-07-30 15:53 CST
 
 - 任务编号：`DEV-003A-CI`

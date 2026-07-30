@@ -1,5 +1,15 @@
 # 核心开发者协作记录
 
+## 2026-07-30 16:09 CST
+
+- 任务编号：`DEV-003A-CI`
+- 当前状态：`CHANGES_REQUESTED`
+- 首次 CI：`backend-test`、`frontend-test` 通过；PostgreSQL Alembic 往返通过；`postgres-lore` 在测试初始化阶段出现跨事件循环 asyncpg 连接复用错误，Docker 因依赖门禁未执行。
+- 根因：session-scoped 建表 fixture 与 function-scoped 清理 fixture 使用不同 asyncio loop，而测试 PostgreSQL 的队列连接池复用了前一个 loop 创建的连接。
+- 修复：仅对非 SQLite 测试引擎配置 `NullPool`；增加 PostgreSQL/SQLite 池类型断言。
+- 验证：专项 27/27、SQLite 后端全量 504/504 通过；协作复核 `APPROVED`。
+- 下一步行动：推送修复并要求 PostgreSQL Lore 测试和 Docker 构建全部通过。
+
 ## 2026-07-30 15:53 CST
 
 - 任务编号：`DEV-003A-CI`
