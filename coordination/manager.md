@@ -220,3 +220,5 @@
 - 需要回答的问题：是否批准启动 `BUG-002A`。
 - 最晚答复：任何历史类型迁移代码开始前。
 - 下一步行动：项目负责人批准后，实现脱敏预检命令和 PostgreSQL/SQLite 测试。
+- 发布记录：设计提交 `695d01d` 已推送到
+  `codex/bug-002-json-migration-design`，Draft PR #2 已创建。
