@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/novel_agent.db"
+    JSON_PREFLIGHT_HMAC_KEY: str = ""
 
     # LLM API — default to DeepSeek (OpenAI-compatible endpoint)
     LLM_API_KEY: str = ""

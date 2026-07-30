@@ -86,7 +86,7 @@
 - `DEV-003B`：设定安全写入、版本、来源和关系，`BACKLOG`，依赖 `DEV-003A`；写入前必须增加类型、来源和旧 ID 映射的项目级复合引用约束及错误引用测试
 - `DEV-003C`：合并、项目切换和回滚演练，`BACKLOG`，依赖 `DEV-003B`
 - `BUG-001`：移动端导航与工作区响应式修复，`BACKLOG`，依赖 `DES-001`
-- `BUG-002`：修复历史 Alembic `Text` 与 ORM `JSON` 物理类型不一致，设计 `REVIEW`；已拆分为只读预检 `BUG-002A`、维护冻结 `BUG-002B`、迁移/恢复演练 `BUG-002C` 和真实执行 `BUG-002D`，每阶段独立批准与验收
+- `BUG-002`：修复历史 Alembic `Text` 与 ORM `JSON` 物理类型不一致，设计 `APPROVED`；`BUG-002A` 只读预检 `APPROVED`，`BUG-002B` 维护冻结 `READY`，`BUG-002C` 迁移/恢复演练和 `BUG-002D` 真实执行保持 `BACKLOG`，每阶段独立验收
 
 ### 开发验收重点
 

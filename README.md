@@ -91,6 +91,7 @@ docker compose up -d
 |------|------|------|--------|
 | `JWT_SECRET` | JWT 签名密钥 | 生产必填 | 无（启动时校验） |
 | `DATABASE_URL` | 数据库连接 | 生产推荐 | sqlite+aiosqlite:///./data/novel_agent.db |
+| `JSON_PREFLIGHT_HMAC_KEY` | 历史资料只读预检的脱敏密钥（至少 32 字节，不复用 JWT） | 仅 PostgreSQL 预检必填 | 空 |
 | `CORS_ORIGINS` | 允许的跨域来源 | 生产必填 | localhost:5173,3000 |
 | `DEBUG` | 调试模式 | 否 | false |
 | `ENV_FILE` | 指定 .env 文件 | 否 | .env |
@@ -138,6 +139,35 @@ ENV_FILE=.env.dev alembic upgrade head     # 应用迁移
 ENV_FILE=.env.dev alembic revision --autogenerate -m "description"  # 生成新迁移
 ENV_FILE=.env.dev alembic downgrade -1      # 回滚一个迁移
 ```
+
+### 历史 JSON 存储只读预检
+
+`BUG-002A` 命令只检查历史 PostgreSQL Text/JSON 数据形态，不执行迁移、修复或
+写入。连接地址仅从 `ENV_FILE` 对应配置读取，不接受命令行连接串；报告不会输出
+数据库连接信息、原始记录 ID 或小说内容。
+
+```bash
+cd backend
+
+# 在 backend/.env.prod 中配置独立的 JSON_PREFLIGHT_HMAC_KEY（至少 32 字节）
+ENV_FILE=.env.prod python -m app.commands.json_preflight \
+  --format json \
+  --environment-label 生产只读检查 \
+  --output ./preflight-report.json
+```
+
+输出文件使用 `0600` 权限原子写入，且拒绝覆盖任何已有文件或符号链接。也可使用
+`--format text` 输出适合 80 列终端的纵向摘要。退出码为：
+
+- `0`：SQLite 明确不适用；
+- `2`：PostgreSQL 数据形态通过但后续维护、备份与恢复证据尚未完成，或存在
+  需要人工确认的兼容旧结构；
+- `3`：发现阻断项；
+- `4`：配置、schema、版本或查询错误。
+
+PostgreSQL 的 `data_shape_status` 可以为 `PASS`，但在维护、锁、容量、备份与
+恢复门禁完成前，`overall_status` 仍为 `REVIEW_REQUIRED`，命令返回 `2`。
+任何结果都不构成真实数据转换批准。
 
 ### Docker 中执行迁移
 
