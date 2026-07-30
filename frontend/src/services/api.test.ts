@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import {
+  ApiError,
   getAuthToken,
   setAuthToken,
   clearAuthToken,
+  isProjectWriteFrozenData,
+  isProjectWriteFrozenError,
   setOnUnauthorized,
   api,
 } from "./api";
@@ -221,6 +224,119 @@ describe("API - Auth", () => {
     expect(getAuthToken()).toBeNull();
     // Callback should have been called
     expect(cb).toHaveBeenCalled();
+  });
+});
+
+describe("API - maintenance error contract", () => {
+  beforeEach(() => {
+    setAuthToken("valid-token");
+    vi.restoreAllMocks();
+  });
+
+  it("preserves the flat maintenance contract as a typed ApiError", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          detail: "项目资料正在升级，暂时无法保存，请稍后重试。",
+          code: "PROJECT_WRITE_FROZEN",
+          maintenance_state: "write_frozen",
+          retryable: true,
+          retry_after_seconds: 60,
+          event_id: "BUG-002B",
+        }),
+        {
+          status: 503,
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": "60",
+          },
+        }
+      )
+    );
+
+    let caught: unknown;
+    try {
+      await api.updateChapter("project-1", 1, { content: "未保存正文" });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ApiError);
+    expect(isProjectWriteFrozenError(caught)).toBe(true);
+    const error = caught as ApiError;
+    expect(error.status).toBe(503);
+    expect(error.detail).toBe("项目资料正在升级，暂时无法保存，请稍后重试。");
+    expect(error.maintenanceState).toBe("write_frozen");
+    expect(error.retryable).toBe(true);
+    expect(error.retryAfterSeconds).toBe(60);
+    expect(error.eventId).toBe("BUG-002B");
+  });
+
+  it("keeps legacy detail errors and safely falls back to Retry-After", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "旧错误格式" }), {
+        status: 503,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": "120",
+        },
+      })
+    );
+    await expect(api.getMe()).rejects.toMatchObject({
+      name: "ApiError",
+      detail: "旧错误格式",
+      retryAfterSeconds: 120,
+      retryable: false,
+    });
+  });
+
+  it.each([
+    ["outline", () => api.generateOutlineStream("project-1")],
+    ["chapter", () => api.streamChapter("project-1", 1)],
+    ["batch", () => api.streamBatchGenerate("project-1")],
+  ])("parses %s SSE maintenance error objects without retrying", async (_, factory) => {
+    const maintenance = {
+      detail: "项目资料正在升级，暂时无法保存，请稍后重试。",
+      code: "PROJECT_WRITE_FROZEN",
+      maintenance_state: "write_frozen",
+      retryable: true,
+      retry_after_seconds: 60,
+      event_id: "BUG-002B",
+    };
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        `data: ${JSON.stringify({ type: "error", error: maintenance })}\n\n`,
+        {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        }
+      )
+    );
+
+    const generator = factory();
+    const event = await generator.next();
+    expect(event.done).toBe(false);
+    expect(event.value.type).toBe("error");
+    expect(isProjectWriteFrozenData(event.value.error)).toBe(true);
+    await generator.next();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("turns a non-2xx streaming response into the same typed error", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          detail: "项目资料正在升级，暂时无法保存，请稍后重试。",
+          code: "PROJECT_WRITE_FROZEN",
+        }),
+        {
+          status: 503,
+          headers: { "Content-Type": "application/json" },
+        }
+      )
+    );
+
+    const generator = api.streamChapter("project-1", 1);
+    await expect(generator.next()).rejects.toSatisfy(isProjectWriteFrozenError);
   });
 });
 

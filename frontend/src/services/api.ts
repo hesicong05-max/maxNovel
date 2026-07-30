@@ -1,6 +1,7 @@
 import type {
   AuthResponse,
   AuthUser,
+  ApiErrorData,
   BatchStreamMessage,
   ChapterData,
   ChapterListItem,
@@ -24,6 +25,92 @@ import type {
 } from "@/types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly detail: string;
+  readonly code?: string;
+  readonly maintenanceState?: string;
+  readonly retryable: boolean;
+  readonly retryAfterSeconds?: number;
+  readonly eventId?: string;
+
+  constructor(status: number, data: ApiErrorData) {
+    super(data.detail);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = data.detail;
+    this.code = data.code;
+    this.maintenanceState = data.maintenance_state;
+    this.retryable = data.retryable === true;
+    this.retryAfterSeconds = data.retry_after_seconds;
+    this.eventId = data.event_id;
+  }
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function optionalPositiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
+async function responseApiError(response: Response): Promise<ApiError> {
+  let value: unknown;
+  try {
+    value = await response.json();
+  } catch {
+    value = null;
+  }
+  const payload =
+    value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : {};
+  const retryHeader = Number(response.headers.get("Retry-After"));
+  return new ApiError(response.status, {
+    detail:
+      optionalString(payload.detail) ||
+      (response.statusText
+        ? response.statusText
+        : `HTTP ${response.status}`),
+    code: optionalString(payload.code),
+    maintenance_state: optionalString(payload.maintenance_state),
+    retryable: payload.retryable === true,
+    retry_after_seconds:
+      optionalPositiveNumber(payload.retry_after_seconds) ||
+      (Number.isFinite(retryHeader) && retryHeader > 0
+        ? retryHeader
+        : undefined),
+    event_id: optionalString(payload.event_id),
+  });
+}
+
+async function throwResponseError(response: Response): Promise<never> {
+  throw await responseApiError(response);
+}
+
+export function isProjectWriteFrozenError(
+  error: unknown
+): error is ApiError {
+  return (
+    error instanceof ApiError &&
+    error.status === 503 &&
+    error.code === "PROJECT_WRITE_FROZEN"
+  );
+}
+
+export function isProjectWriteFrozenData(
+  error: unknown
+): error is ApiErrorData {
+  return (
+    !!error &&
+    typeof error === "object" &&
+    (error as Partial<ApiErrorData>).code === "PROJECT_WRITE_FROZEN"
+  );
+}
 
 // === Auth Token Management ===
 
@@ -68,11 +155,10 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   if (resp.status === 401) {
     clearAuthToken();
     onUnauthorized?.();
-    throw new Error("登录已过期，请重新登录");
+    throw new ApiError(401, { detail: "登录已过期，请重新登录" });
   }
   if (!resp.ok) {
-    const error = await resp.json().catch(() => ({ detail: resp.statusText }));
-    throw new Error(error.detail || `HTTP ${resp.status}`);
+    await throwResponseError(resp);
   }
   return resp.json();
 }
@@ -89,7 +175,7 @@ async function fetchWithAuth(url: string, options?: RequestInit): Promise<Respon
   if (resp.status === 401) {
     clearAuthToken();
     onUnauthorized?.();
-    throw new Error("登录已过期，请重新登录");
+    throw new ApiError(401, { detail: "登录已过期，请重新登录" });
   }
   return resp;
 }
@@ -148,8 +234,7 @@ export const api = {
       body: formData,
     });
     if (!resp.ok) {
-      const error = await resp.json().catch(() => ({ detail: resp.statusText }));
-      throw new Error(error.detail || `HTTP ${resp.status}`);
+      await throwResponseError(resp);
     }
     return resp.json() as Promise<{ text: string; filename: string; char_count: number }>;
   },
@@ -169,8 +254,7 @@ export const api = {
     );
 
     if (!resp.ok) {
-      const error = await resp.json().catch(() => ({ detail: resp.statusText }));
-      throw new Error(error.detail || `HTTP ${resp.status}`);
+      await throwResponseError(resp);
     }
 
     const reader = resp.body?.getReader();
@@ -238,8 +322,7 @@ export const api = {
   exportNovel: async (projectId: string, format: "txt" | "markdown"): Promise<Blob> => {
     const resp = await fetchWithAuth(`/export/${projectId}/${format}`);
     if (!resp.ok) {
-      const error = await resp.json().catch(() => ({ detail: resp.statusText }));
-      throw new Error(error.detail || `HTTP ${resp.status}`);
+      await throwResponseError(resp);
     }
     return resp.blob();
   },
@@ -295,7 +378,7 @@ export const api = {
     );
 
     if (!resp.ok) {
-      throw new Error(`HTTP ${resp.status}`);
+      await throwResponseError(resp);
     }
 
     const reader = resp.body?.getReader();
@@ -369,7 +452,7 @@ export const api = {
     );
 
     if (!resp.ok) {
-      throw new Error(`HTTP ${resp.status}`);
+      await throwResponseError(resp);
     }
 
     const reader = resp.body?.getReader();

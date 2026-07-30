@@ -167,6 +167,15 @@ export interface ProgressData {
   character_states: Record<string, unknown>;
 }
 
+export interface ApiErrorData {
+  detail: string;
+  code?: string;
+  maintenance_state?: string;
+  retryable?: boolean;
+  retry_after_seconds?: number;
+  event_id?: string;
+}
+
 export interface StreamMessage {
   type: "metadata" | "content" | "complete" | "error";
   text?: string;
@@ -178,7 +187,7 @@ export interface StreamMessage {
   word_count?: number;
   target_word_count?: number;
   summary?: string;
-  error?: string;
+  error?: string | ApiErrorData;
 }
 
 // === Outline Streaming ===
@@ -191,6 +200,7 @@ export interface OutlineStreamMessage {
   chars?: number;
   outline?: OutlineData;
   warning?: string;
+  error?: string | ApiErrorData;
 }
 
 // === Word Count Configuration ===
@@ -228,7 +238,7 @@ export interface BatchStreamMessage {
   target_word_count?: number;
   word_count?: number;
   summary?: string;
-  error?: string;
+  error?: string | ApiErrorData;
   current?: number;
   total?: number;
   total_chapters?: number;
