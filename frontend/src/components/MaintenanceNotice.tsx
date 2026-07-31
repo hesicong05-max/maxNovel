@@ -7,7 +7,6 @@ interface MaintenanceNoticeProps {
   onCopy: () => void;
   onRetry?: () => void;
   onBack?: () => void;
-  liveMessage?: string;
   focusOnMount?: boolean;
 }
 
@@ -17,7 +16,6 @@ export default function MaintenanceNotice({
   onCopy,
   onRetry,
   onBack,
-  liveMessage,
   focusOnMount = false,
 }: MaintenanceNoticeProps) {
   const noticeRef = useRef<HTMLDivElement>(null);
@@ -74,9 +72,6 @@ export default function MaintenanceNotice({
           </button>
         )}
       </div>
-      <span className="sr-only" aria-live="polite">
-        {liveMessage}
-      </span>
     </div>
   );
 }

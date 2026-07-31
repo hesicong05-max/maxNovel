@@ -702,6 +702,10 @@ input, select, textarea { font-family: inherit; }
 }
 
 /* ═══ 响应式 ═══ */
+@media (max-width: 1024px) {
+  .wv-entry { grid-template-columns: 1fr 1fr; }
+}
+
 @media (max-width: 768px) {
   .sidebar { display: none; }
   .main-content { padding: 1rem; }
@@ -955,6 +959,23 @@ input, select, textarea { font-family: inherit; }
   min-height: 44px;
 }
 
+.worldview-copy-fallback {
+  min-height: 160px;
+  margin-top: 0.625rem;
+  font-family: var(--font-mono);
+}
+
+.worldview-workspace {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.worldview-workspace:disabled {
+  opacity: 0.72;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -980,4 +1001,46 @@ input, select, textarea { font-family: inherit; }
     width: 100%;
     font-size: 16px;
   }
+
+  .form-input,
+  .form-select,
+  .form-textarea {
+    font-size: 16px;
+  }
+
+  .worldview-import-text,
+  .worldview-copy-fallback {
+    font-size: 16px;
+  }
+
+  .btn-sm {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .wv-add-btn {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .btn {
+    min-height: 44px;
+  }
+
+  .btn-back {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+  .cursor-blink { animation: none; }
+  .card-hover:hover { transform: none; }
 }

@@ -8,14 +8,13 @@ interface DraftRecoveryNoticeProps {
   onRestore: () => void;
   onCopy: () => void;
   onDiscard: () => void;
-  liveMessage?: string;
 }
 
 const messages: Record<DraftRecoveryState, string> = {
-  available: "发现一份尚未保存到项目的本地草稿，你可以先载入检查。",
+  available: "发现一份尚未保存到项目的本地草稿，你可以先载入检查。载入只替换当前编辑区，不会立即覆盖项目版本，仍需手动保存。",
   expired:
-    "发现一份超过保留期限的本地草稿。草稿仍可载入或复制，只有确认后才会删除。",
-  conflict: "本地草稿与项目中已保存的内容不同，请载入副本后人工核对。",
+    "发现一份超过保留期限的本地草稿。草稿仍可载入或复制，只有确认后才会删除。载入只替换当前编辑区，仍需手动保存。",
+  conflict: "本地草稿与项目中已保存的内容不同，请载入副本后人工核对。载入只替换当前编辑区，不会立即覆盖项目版本，仍需手动保存。",
 };
 
 export default function DraftRecoveryNotice({
@@ -24,7 +23,6 @@ export default function DraftRecoveryNotice({
   onRestore,
   onCopy,
   onDiscard,
-  liveMessage,
 }: DraftRecoveryNoticeProps) {
   const titleId = useId();
   const savedAtDisplay = (() => {
@@ -46,8 +44,7 @@ export default function DraftRecoveryNotice({
   return (
     <section
       className={`draft-notice draft-notice--recovery draft-notice--${state}`}
-      role="status"
-      aria-live="polite"
+      role="group"
       aria-labelledby={titleId}
     >
       <h3 id={titleId}>发现本地草稿</h3>
@@ -66,7 +63,6 @@ export default function DraftRecoveryNotice({
           丢弃本地草稿
         </button>
       </div>
-      <span className="sr-only">{liveMessage}</span>
     </section>
   );
 }

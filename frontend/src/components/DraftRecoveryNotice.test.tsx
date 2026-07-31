@@ -21,7 +21,7 @@ describe("DraftRecoveryNotice", () => {
       />
     );
 
-    expect(screen.getByRole("status")).toHaveTextContent(text);
+    expect(screen.getByRole("group", { name: "发现本地草稿" })).toHaveTextContent(text);
     expect(screen.getByRole("button", { name: "载入本地副本" })).toBeEnabled();
     for (const button of screen.getAllByRole("button")) {
       expect(button).toHaveClass("btn");
@@ -50,7 +50,7 @@ describe("DraftRecoveryNotice", () => {
     );
 
     const labelledBy = screen
-      .getAllByRole("status")
+      .getAllByRole("group", { name: "发现本地草稿" })
       .map((notice) => notice.getAttribute("aria-labelledby"));
     expect(new Set(labelledBy).size).toBe(2);
   });
