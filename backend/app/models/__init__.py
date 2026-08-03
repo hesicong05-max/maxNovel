@@ -14,7 +14,10 @@ from app.models.community import (  # noqa: F401
     novel_tag_association,
 )
 from app.models.lore import (  # noqa: F401
+    ElementRelation,
+    ElementRelationVersion,
     ElementSource,
+    ElementStateEvent,
     ElementVersion,
     LegacyElementMap,
     ProjectLoreMigration,

@@ -154,10 +154,15 @@ def test_invalid_collection_fails_validation_without_crashing():
 def test_field_definitions_use_stable_keys_for_dynamic_forms():
     definitions = type_field_definitions("character")
     assert [field["key"] for field in definitions] == [
+        "identity",
+        "appearance",
         "personality",
         "background",
-        "motivation",
-        "ability",
+        "abilities",
+        "limitations",
+        "goals",
+        "motivations",
+        "possible_plots",
     ]
     assert type_field_definitions("unknown") == []
 

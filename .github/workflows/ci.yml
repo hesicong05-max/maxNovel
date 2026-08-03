@@ -109,6 +109,7 @@ jobs:
           python -m pytest
           tests/test_lore_api.py
           tests/test_lore_models.py
+          tests/test_lore_writes.py
           tests/test_json_preflight_postgres.py
           tests/test_legacy_json_maintenance.py
           -v --tb=short
