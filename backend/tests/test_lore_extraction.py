@@ -11,10 +11,17 @@ from sqlalchemy import func, select
 from app.core.llm_client import LLMSingleCallError, llm_client
 from app.models.extraction import (
     LoreCandidateFieldEvidence,
+    LoreCandidateRevision,
     LoreExtractionBatch,
     LoreExtractionCandidate,
 )
-from app.models.lore import SettingElement
+from app.models.lore import (
+    ElementSource,
+    ElementStateEvent,
+    ElementVersion,
+    SettingElement,
+)
+from app.models.project import Project
 
 
 SOURCE = "林远性格坚韧，目标是守护故乡。苏瑶性格冷静。天玄宗是正道宗门。"
@@ -101,6 +108,28 @@ async def _create_batch(client, headers, project_id, key="extract-case-001"):
             "source_ref": "upload:worldview-1",
         },
     )
+
+
+async def _make_relational(project_id):
+    from sqlalchemy import update
+    from tests.conftest import TestSessionLocal
+
+    async with TestSessionLocal() as session:
+        await session.execute(
+            update(Project)
+            .where(Project.id == project_id)
+            .values(lore_storage_mode="relational")
+        )
+        await session.commit()
+
+
+async def _first_candidate(client, headers, project_id, batch_id):
+    response = await client.get(
+        f"/api/projects/{project_id}/lore/extractions/{batch_id}/candidates",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    return response.json()["items"][0]
 
 
 @pytest.mark.usefixtures("clean_db")
@@ -564,3 +593,584 @@ async def test_final_commit_failure_rolls_back_and_marks_batch_failed(
         )
         assert candidate_count == 0
         assert evidence_count == 0
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_candidate_edit_preserves_evidence_and_creates_revision(
+    client, auth_headers, monkeypatch
+):
+    project_id = await _create_project(client, auth_headers)
+    monkeypatch.setattr(
+        llm_client,
+        "chat_once",
+        AsyncMock(return_value=_response_json([_valid_candidates()[0]])),
+    )
+    batch = (await _create_batch(client, auth_headers, project_id)).json()
+    candidate = await _first_candidate(
+        client, auth_headers, project_id, batch["id"]
+    )
+    response = await client.patch(
+        f"/api/projects/{project_id}/lore/extractions/{batch['id']}/"
+        f"candidates/{candidate['id']}",
+        headers=auth_headers,
+        json={
+            "expected_version": 1,
+            "type_key": "character",
+            "name": "林远",
+            "summary": "用户确认后的摘要",
+            "payload": {"personality": "勇敢"},
+            "field_states": {"personality": "provided"},
+        },
+    )
+    assert response.status_code == 200, response.text
+    edited = response.json()
+    assert edited["revision"] == 2
+    assert edited["payload"]["personality"] == "勇敢"
+    evidence = next(
+        item for item in edited["evidence"] if item["field_key"] == "personality"
+    )
+    assert evidence["extracted_value"] == "坚韧"
+    assert evidence["current_value"] == "勇敢"
+    assert evidence["value_origin"] == "user_override"
+    assert evidence["excerpt"] == "林远性格坚韧"
+
+    revisions = await client.get(
+        f"/api/projects/{project_id}/lore/extractions/{batch['id']}/"
+        f"candidates/{candidate['id']}/revisions",
+        headers=auth_headers,
+    )
+    assert [item["change_kind"] for item in revisions.json()["items"]] == [
+        "extracted",
+        "edited",
+    ]
+    stale = await client.patch(
+        f"/api/projects/{project_id}/lore/extractions/{batch['id']}/"
+        f"candidates/{candidate['id']}",
+        headers=auth_headers,
+        json={
+            "expected_version": 1,
+            "type_key": "character",
+            "name": "过期覆盖",
+            "payload": {},
+            "field_states": {},
+        },
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "LORE_CANDIDATE_VERSION_CONFLICT"
+    assert stale.json()["detail"]["latest_revision"] == 2
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_accept_requires_relational_mode(client, auth_headers, monkeypatch):
+    project_id = await _create_project(client, auth_headers)
+    monkeypatch.setattr(
+        llm_client,
+        "chat_once",
+        AsyncMock(return_value=_response_json([_valid_candidates()[0]])),
+    )
+    batch = (await _create_batch(client, auth_headers, project_id)).json()
+    candidate = await _first_candidate(
+        client, auth_headers, project_id, batch["id"]
+    )
+    response = await client.post(
+        f"/api/projects/{project_id}/lore/extractions/{batch['id']}/"
+        f"candidates/{candidate['id']}/accept",
+        headers=auth_headers,
+        json={"expected_version": 1},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "LORE_MODE_NOT_RELATIONAL"
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_accept_is_atomic_and_idempotent(client, auth_headers, monkeypatch):
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _create_project(client, auth_headers)
+    await _make_relational(project_id)
+    monkeypatch.setattr(
+        llm_client,
+        "chat_once",
+        AsyncMock(return_value=_response_json([_valid_candidates()[0]])),
+    )
+    batch = (await _create_batch(client, auth_headers, project_id)).json()
+    candidate = await _first_candidate(
+        client, auth_headers, project_id, batch["id"]
+    )
+    endpoint = (
+        f"/api/projects/{project_id}/lore/extractions/{batch['id']}/"
+        f"candidates/{candidate['id']}/accept"
+    )
+    accepted = await client.post(
+        endpoint,
+        headers=auth_headers,
+        json={"expected_version": 1},
+    )
+    assert accepted.status_code == 200, accepted.text
+    data = accepted.json()
+    assert data["action_result"] == "accepted"
+    assert data["replayed"] is False
+    element_id = data["accepted_element_id"]
+    assert element_id
+
+    async def counts():
+        async with TestSessionLocal() as session:
+            return (
+                await session.scalar(select(func.count()).select_from(SettingElement)),
+                await session.scalar(select(func.count()).select_from(ElementVersion)),
+                await session.scalar(select(func.count()).select_from(ElementSource)),
+                await session.scalar(
+                    select(func.count()).select_from(ElementStateEvent)
+                ),
+                await session.scalar(
+                    select(func.count()).select_from(LoreCandidateRevision)
+                ),
+            )
+
+    assert await counts() == (1, 1, 1, 1, 2)
+    async with TestSessionLocal() as session:
+        version = await session.scalar(select(ElementVersion))
+        source = await session.scalar(select(ElementSource))
+        assert version.source_id == source.id
+        assert source.source_kind == "system_extract"
+        assert source.locator["candidate_id"] == candidate["id"]
+
+    replay = await client.post(
+        endpoint,
+        headers=auth_headers,
+        json={"expected_version": 1},
+    )
+    assert replay.status_code == 200
+    assert replay.json()["action_result"] == "already_accepted"
+    assert replay.json()["replayed"] is True
+    assert replay.json()["accepted_element_id"] == element_id
+    assert await counts() == (1, 1, 1, 1, 2)
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_reject_is_preserved_and_idempotent_in_legacy_mode(
+    client, auth_headers, monkeypatch
+):
+    project_id = await _create_project(client, auth_headers)
+    monkeypatch.setattr(
+        llm_client,
+        "chat_once",
+        AsyncMock(return_value=_response_json([_valid_candidates()[0]])),
+    )
+    batch = (await _create_batch(client, auth_headers, project_id)).json()
+    candidate = await _first_candidate(
+        client, auth_headers, project_id, batch["id"]
+    )
+    endpoint = (
+        f"/api/projects/{project_id}/lore/extractions/{batch['id']}/"
+        f"candidates/{candidate['id']}"
+    )
+    rejected = await client.post(
+        endpoint + "/reject",
+        headers=auth_headers,
+        json={"expected_version": 1},
+    )
+    assert rejected.status_code == 200
+    assert rejected.json()["action_result"] == "rejected"
+    replay = await client.post(
+        endpoint + "/reject",
+        headers=auth_headers,
+        json={"expected_version": 1},
+    )
+    assert replay.json()["action_result"] == "already_rejected"
+    accept = await client.post(
+        endpoint + "/accept",
+        headers=auth_headers,
+        json={"expected_version": 2},
+    )
+    assert accept.status_code == 409
+    assert accept.json()["detail"]["code"] == "LORE_CANDIDATE_ALREADY_REJECTED"
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_unresolved_duplicate_blocks_accept_until_explicit_resolution(
+    client, auth_headers, monkeypatch
+):
+    project_id = await _create_project(client, auth_headers)
+    await _make_relational(project_id)
+    duplicate = _valid_candidates()[0]
+    monkeypatch.setattr(
+        llm_client,
+        "chat_once",
+        AsyncMock(return_value=_response_json([_valid_candidates()[0], duplicate])),
+    )
+    batch = (await _create_batch(client, auth_headers, project_id)).json()
+    candidate = await _first_candidate(
+        client, auth_headers, project_id, batch["id"]
+    )
+    suggestion_id = candidate["duplicate_conflict_suggestions"][0]["suggestion_id"]
+    endpoint = (
+        f"/api/projects/{project_id}/lore/extractions/{batch['id']}/"
+        f"candidates/{candidate['id']}/accept"
+    )
+    blocked = await client.post(
+        endpoint,
+        headers=auth_headers,
+        json={"expected_version": 1},
+    )
+    assert blocked.status_code == 422
+    assert (
+        blocked.json()["detail"]["code"]
+        == "LORE_CANDIDATE_SUGGESTIONS_UNRESOLVED"
+    )
+    accepted = await client.post(
+        endpoint,
+        headers=auth_headers,
+        json={
+            "expected_version": 1,
+            "suggestion_resolutions": {suggestion_id: "accept_as_new"},
+        },
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["action_result"] == "accepted"
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_accept_failure_after_formal_rows_rolls_back_entire_transaction(
+    client, auth_headers, monkeypatch
+):
+    from app.api import lore_extraction as extraction_api
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _create_project(client, auth_headers)
+    await _make_relational(project_id)
+    monkeypatch.setattr(
+        llm_client,
+        "chat_once",
+        AsyncMock(return_value=_response_json([_valid_candidates()[0]])),
+    )
+    batch = (await _create_batch(client, auth_headers, project_id)).json()
+    candidate = await _first_candidate(
+        client, auth_headers, project_id, batch["id"]
+    )
+    original_create = extraction_api.create_element
+
+    async def fail_after_formal_rows(**kwargs):
+        await original_create(**kwargs)
+        raise RuntimeError("injected after formal rows")
+
+    monkeypatch.setattr(extraction_api, "create_element", fail_after_formal_rows)
+    response = await client.post(
+        f"/api/projects/{project_id}/lore/extractions/{batch['id']}/"
+        f"candidates/{candidate['id']}/accept",
+        headers=auth_headers,
+        json={"expected_version": 1},
+    )
+    assert response.status_code == 500
+    assert response.json()["detail"]["code"] == "LORE_CANDIDATE_ACCEPT_FAILED"
+    async with TestSessionLocal() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(SettingElement)
+        ) == 0
+        assert await session.scalar(
+            select(func.count()).select_from(ElementVersion)
+        ) == 0
+        stored = await session.scalar(
+            select(LoreExtractionCandidate).where(
+                LoreExtractionCandidate.id == candidate["id"]
+            )
+        )
+        assert stored.status == "pending_review"
+        assert stored.revision == 1
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_maintenance_freeze_after_accept_claim_returns_503_and_rolls_back(
+    client, auth_headers, monkeypatch
+):
+    from app.api import lore_extraction as extraction_api
+    from app.core.maintenance import ProjectWriteFrozenError
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _create_project(client, auth_headers)
+    await _make_relational(project_id)
+    monkeypatch.setattr(
+        llm_client,
+        "chat_once",
+        AsyncMock(return_value=_response_json([_valid_candidates()[0]])),
+    )
+    batch = (await _create_batch(client, auth_headers, project_id)).json()
+    candidate = await _first_candidate(
+        client, auth_headers, project_id, batch["id"]
+    )
+    checks = 0
+
+    def freeze_before_commit():
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise ProjectWriteFrozenError("PROJECT_WRITE_FROZEN")
+
+    monkeypatch.setattr(
+        extraction_api,
+        "ensure_project_writes_available",
+        freeze_before_commit,
+    )
+    response = await client.post(
+        f"/api/projects/{project_id}/lore/extractions/{batch['id']}/"
+        f"candidates/{candidate['id']}/accept",
+        headers=auth_headers,
+        json={"expected_version": 1},
+    )
+    assert response.status_code == 503
+    assert response.json()["code"] == "PROJECT_WRITE_FROZEN"
+    async with TestSessionLocal() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(SettingElement)
+        ) == 0
+        stored = await session.scalar(
+            select(LoreExtractionCandidate).where(
+                LoreExtractionCandidate.id == candidate["id"]
+            )
+        )
+        assert stored.status == "pending_review"
+        assert stored.revision == 1
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_user_override_accept_uses_manual_review_primary_source(
+    client, auth_headers, monkeypatch
+):
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _create_project(client, auth_headers)
+    await _make_relational(project_id)
+    monkeypatch.setattr(
+        llm_client,
+        "chat_once",
+        AsyncMock(return_value=_response_json([_valid_candidates()[0]])),
+    )
+    batch = (await _create_batch(client, auth_headers, project_id)).json()
+    candidate = await _first_candidate(
+        client, auth_headers, project_id, batch["id"]
+    )
+    edited = await client.patch(
+        f"/api/projects/{project_id}/lore/extractions/{batch['id']}/"
+        f"candidates/{candidate['id']}",
+        headers=auth_headers,
+        json={
+            "expected_version": 1,
+            "type_key": "character",
+            "name": "林远",
+            "summary": "用户修订",
+            "payload": {"personality": "勇敢"},
+            "field_states": {"personality": "provided"},
+        },
+    )
+    assert edited.status_code == 200
+    accepted = await client.post(
+        f"/api/projects/{project_id}/lore/extractions/{batch['id']}/"
+        f"candidates/{candidate['id']}/accept",
+        headers=auth_headers,
+        json={"expected_version": 2},
+    )
+    assert accepted.status_code == 200, accepted.text
+    async with TestSessionLocal() as session:
+        element = await session.scalar(select(SettingElement))
+        sources = list(
+            (
+                await session.execute(
+                    select(ElementSource).order_by(ElementSource.source_kind)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        version = await session.scalar(select(ElementVersion))
+        assert element.payload["personality"] == "勇敢"
+        assert {source.source_kind for source in sources} == {
+            "manual_review",
+            "system_extract",
+        }
+        manual = next(s for s in sources if s.source_kind == "manual_review")
+        extracted = next(s for s in sources if s.source_kind == "system_extract")
+        assert manual.is_primary is True
+        assert extracted.is_primary is False
+        assert version.source_id == manual.id
+        assert extracted.excerpt is not None
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_state_confirmation_and_repeated_edits_preserve_manual_origin(
+    client, auth_headers, monkeypatch
+):
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _create_project(client, auth_headers)
+    await _make_relational(project_id)
+    candidate_data = {
+        "type_key": "character",
+        "name": "林远",
+        "fields": [
+            {
+                "field_key": "personality",
+                "value": "坚强",
+                "state": "provided",
+                "excerpt": "林远性格坚韧",
+            }
+        ],
+        "relation_suggestions": [],
+    }
+    monkeypatch.setattr(
+        llm_client,
+        "chat_once",
+        AsyncMock(return_value=_response_json([candidate_data])),
+    )
+    batch = (await _create_batch(client, auth_headers, project_id)).json()
+    candidate = await _first_candidate(
+        client, auth_headers, project_id, batch["id"]
+    )
+    assert candidate["payload"]["personality"] == "坚强"
+    assert candidate["field_states"]["personality"] == "needs_confirmation"
+
+    endpoint = (
+        f"/api/projects/{project_id}/lore/extractions/{batch['id']}/"
+        f"candidates/{candidate['id']}"
+    )
+    confirmed = await client.patch(
+        endpoint,
+        headers=auth_headers,
+        json={
+            "expected_version": 1,
+            "type_key": "character",
+            "name": "林远",
+            "summary": "第一次人工确认",
+            "payload": {"personality": "坚强"},
+            "field_states": {"personality": "provided"},
+        },
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["user_overrides"]["personality"]["state"] == "provided"
+    assert (
+        next(
+            item
+            for item in confirmed.json()["evidence"]
+            if item["field_key"] == "personality"
+        )["value_origin"]
+        == "user_override"
+    )
+
+    edited_again = await client.patch(
+        endpoint,
+        headers=auth_headers,
+        json={
+            "expected_version": 2,
+            "type_key": "character",
+            "name": "林远",
+            "summary": "第二次人工确认",
+            "payload": {"personality": "坚强"},
+            "field_states": {"personality": "provided"},
+        },
+    )
+    assert edited_again.status_code == 200, edited_again.text
+    assert "personality" in edited_again.json()["user_overrides"]
+    assert edited_again.json()["user_overrides"]["summary"]["value"] == "第二次人工确认"
+
+    accepted = await client.post(
+        endpoint + "/accept",
+        headers=auth_headers,
+        json={"expected_version": 3},
+    )
+    assert accepted.status_code == 200, accepted.text
+    async with TestSessionLocal() as session:
+        sources = list((await session.execute(select(ElementSource))).scalars().all())
+        assert len(sources) == 2
+        assert next(source for source in sources if source.is_primary).source_kind == (
+            "manual_review"
+        )
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_needs_confirmation_blocks_accept_without_formal_rows(
+    client, auth_headers, monkeypatch
+):
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _create_project(client, auth_headers)
+    await _make_relational(project_id)
+    candidate_data = {
+        "type_key": "character",
+        "name": "林远",
+        "fields": [
+            {
+                "field_key": "personality",
+                "value": "坚强",
+                "state": "provided",
+                "excerpt": "林远性格坚韧",
+            }
+        ],
+        "relation_suggestions": [],
+    }
+    monkeypatch.setattr(
+        llm_client,
+        "chat_once",
+        AsyncMock(return_value=_response_json([candidate_data])),
+    )
+    batch = (await _create_batch(client, auth_headers, project_id)).json()
+    candidate = await _first_candidate(
+        client, auth_headers, project_id, batch["id"]
+    )
+    response = await client.post(
+        f"/api/projects/{project_id}/lore/extractions/{batch['id']}/"
+        f"candidates/{candidate['id']}/accept",
+        headers=auth_headers,
+        json={"expected_version": 1},
+    )
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]["code"]
+        == "LORE_CANDIDATE_FIELDS_NEED_CONFIRMATION"
+    )
+    async with TestSessionLocal() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(SettingElement)
+        ) == 0
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_postgres_concurrent_accept_is_idempotent(
+    client, auth_headers, monkeypatch
+):
+    from tests.conftest import TEST_DATABASE_BACKEND, TestSessionLocal
+
+    if TEST_DATABASE_BACKEND == "sqlite":
+        pytest.skip("Concurrent candidate actions run in PostgreSQL CI")
+    project_id = await _create_project(client, auth_headers)
+    await _make_relational(project_id)
+    monkeypatch.setattr(
+        llm_client,
+        "chat_once",
+        AsyncMock(return_value=_response_json([_valid_candidates()[0]])),
+    )
+    batch = (await _create_batch(client, auth_headers, project_id)).json()
+    candidate = await _first_candidate(
+        client, auth_headers, project_id, batch["id"]
+    )
+    endpoint = (
+        f"/api/projects/{project_id}/lore/extractions/{batch['id']}/"
+        f"candidates/{candidate['id']}/accept"
+    )
+    first, second = await asyncio.gather(
+        client.post(endpoint, headers=auth_headers, json={"expected_version": 1}),
+        client.post(endpoint, headers=auth_headers, json={"expected_version": 1}),
+    )
+    assert first.status_code == second.status_code == 200
+    assert {first.json()["action_result"], second.json()["action_result"]} == {
+        "accepted",
+        "already_accepted",
+    }
+    assert first.json()["accepted_element_id"] == second.json()[
+        "accepted_element_id"
+    ]
+    async with TestSessionLocal() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(SettingElement)
+        ) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(ElementVersion)
+        ) == 1

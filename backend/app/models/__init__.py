@@ -27,6 +27,7 @@ from app.models.lore import (  # noqa: F401
 )
 from app.models.extraction import (  # noqa: F401
     LoreCandidateFieldEvidence,
+    LoreCandidateRevision,
     LoreExtractionBatch,
     LoreExtractionCandidate,
 )

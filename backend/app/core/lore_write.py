@@ -424,24 +424,30 @@ async def create_element(
     )
     db.add(version)
 
+    primary_source: ElementSource | None = None
     for source in (sources_input or []):
         excerpt = source.get("excerpt")
         confirmation = source.get("confirmation_status", "provided")
         if confirmation not in ("provided", "needs_confirmation"):
             confirmation = "provided"
-        db.add(
-            ElementSource(
-                project_id=project_id,
-                element_id=element.id,
-                source_kind=source.get("kind", "manual"),
-                source_ref=source.get("reference"),
-                locator=source.get("locator", {}) or {},
-                excerpt=excerpt,
-                excerpt_hash=_excerpt_hash(excerpt),
-                confirmation_status=confirmation,
-                is_primary=source.get("is_primary", False),
-            )
+        element_source = ElementSource(
+            project_id=project_id,
+            element_id=element.id,
+            source_kind=source.get("kind", "manual"),
+            source_ref=source.get("reference"),
+            locator=source.get("locator", {}) or {},
+            excerpt=excerpt,
+            excerpt_hash=_excerpt_hash(excerpt),
+            confirmation_status=confirmation,
+            is_primary=source.get("is_primary", False),
         )
+        db.add(element_source)
+        if element_source.is_primary:
+            primary_source = element_source
+
+    if primary_source is not None:
+        await db.flush()
+        version.source_id = primary_source.id
 
     db.add(
         ElementStateEvent(

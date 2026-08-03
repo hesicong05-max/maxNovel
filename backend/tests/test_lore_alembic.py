@@ -29,6 +29,119 @@ def test_lore_migration_upgrade_and_downgrade_are_additive(tmp_path):
     database_url = f"sqlite+aiosqlite:///{database_path}"
 
     _run_alembic(backend_dir, database_url, "upgrade", "head")
+
+
+def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_path):
+    backend_dir = os.path.dirname(os.path.dirname(__file__))
+    database_path = tmp_path / "candidate-review-backfill.db"
+    database_url = f"sqlite+aiosqlite:///{database_path}"
+    _run_alembic(backend_dir, database_url, "upgrade", "c3f5a9d1e002")
+
+    user_id = "1" * 32
+    project_id = "2" * 32
+    batch_id = "3" * 32
+    candidate_id = "4" * 32
+    timestamp = "2026-08-03 16:00:00"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO users (
+                id, email, username, hashed_password, is_admin,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 0, ?, ?)
+            """,
+            (user_id, "legacy@example.com", "legacy-user", "hash", timestamp, timestamp),
+        )
+        connection.execute(
+            """
+            INSERT INTO projects (
+                id, title, genre, status, total_chapters,
+                chapter_word_count, style_intensity, owner_id,
+                lore_storage_mode, lore_migration_version, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 10, 1000, ?, ?, ?, NULL, ?, ?)
+            """,
+            (
+                project_id,
+                "legacy-project",
+                "玄幻",
+                "draft",
+                "standard",
+                user_id,
+                "legacy",
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO lore_extraction_batches (
+                id, project_id, requested_by, idempotency_key, source_kind,
+                source_ref, source_text, source_hash, extractor_version,
+                model_name, status, raw_response, error_code, error_message,
+                retryable, candidate_count, lock_version, llm_started_at,
+                llm_completed_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, NULL, NULL,
+                      NULL, 0, 1, 1, NULL, NULL, ?, ?)
+            """,
+            (
+                batch_id,
+                project_id,
+                user_id,
+                "legacy-batch",
+                "manual_text",
+                "林远性格坚韧",
+                "a" * 64,
+                "v1",
+                "completed",
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO lore_extraction_candidates (
+                id, project_id, batch_id, ordinal, deterministic_key,
+                type_key, name, summary, payload, field_states,
+                relation_suggestions, duplicate_conflict_suggestions,
+                status, revision, accepted_element_id, error_code,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?)
+            """,
+            (
+                candidate_id,
+                project_id,
+                batch_id,
+                "b" * 64,
+                "character",
+                "林远",
+                "旧候选",
+                '{"personality": "坚韧"}',
+                '{"personality": "provided"}',
+                "[]",
+                "[]",
+                "pending_review",
+                timestamp,
+                timestamp,
+            ),
+        )
+
+    _run_alembic(backend_dir, database_url, "upgrade", "head")
+    with sqlite3.connect(database_path) as connection:
+        row = connection.execute(
+            """
+            SELECT revision, type_key, name, summary, payload, field_states,
+                   change_kind, created_by, created_at
+            FROM lore_candidate_revisions
+            WHERE candidate_id = ?
+            """,
+            (candidate_id,),
+        ).fetchone()
+        assert row is not None
+        assert row[:4] == (1, "character", "林远", "旧候选")
+        assert row[4] == '{"personality": "坚韧"}'
+        assert row[5] == '{"personality": "provided"}'
+        assert row[6:8] == ("extracted", user_id)
+        assert row[8] == timestamp
     with sqlite3.connect(database_path) as connection:
         tables = {
             row[0]
@@ -50,6 +163,7 @@ def test_lore_migration_upgrade_and_downgrade_are_additive(tmp_path):
             "lore_extraction_batches",
             "lore_extraction_candidates",
             "lore_candidate_field_evidence",
+            "lore_candidate_revisions",
         }.issubset(tables)
         project_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(projects)")
@@ -88,6 +202,20 @@ def test_lore_migration_upgrade_and_downgrade_are_additive(tmp_path):
             "uq_lore_candidate_field_evidence"
             in table_sql["lore_candidate_field_evidence"]
         )
+        candidate_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(lore_extraction_candidates)"
+            )
+        }
+        assert {"suggestion_resolutions", "user_overrides"}.issubset(
+            candidate_columns
+        )
+        assert (
+            "uq_lore_extraction_candidate_accepted_element"
+            in table_sql["lore_extraction_candidates"]
+        )
+        assert "uq_lore_candidate_revision" in table_sql["lore_candidate_revisions"]
 
     _run_alembic(backend_dir, database_url, "downgrade", "a1d3c7e9f002")
     with sqlite3.connect(database_path) as connection:

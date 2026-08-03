@@ -104,6 +104,11 @@ def source_hash(document_text: str) -> str:
     return hashlib.sha256(document_text.encode("utf-8")).hexdigest()
 
 
+def _suggestion_id(*parts: object) -> str:
+    raw = ":".join(str(part) for part in parts)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
 def build_extraction_messages(document_text: str) -> list[dict[str, str]]:
     schemas = {
         key: [field["key"] for field in TYPE_FIELD_SCHEMAS.get(key, [])]
@@ -304,6 +309,12 @@ async def prepare_candidates(
                 )
                 suggestions.append(
                     {
+                        "suggestion_id": _suggestion_id(
+                            doc_hash,
+                            ordinal,
+                            "element",
+                            element.id,
+                        ),
                         "kind": (
                             "possible_conflict" if differing_fields else "possible_duplicate"
                         ),
@@ -359,6 +370,11 @@ async def prepare_candidates(
                 )
                 candidate.duplicate_conflict_suggestions.append(
                     {
+                        "suggestion_id": _suggestion_id(
+                            candidate.deterministic_key,
+                            "candidate",
+                            prior.deterministic_key,
+                        ),
                         "kind": kind,
                         "target_candidate_key": prior.deterministic_key,
                         "target_candidate_ordinal": prior.ordinal,
@@ -371,6 +387,11 @@ async def prepare_candidates(
                 )
                 prior.duplicate_conflict_suggestions.append(
                     {
+                        "suggestion_id": _suggestion_id(
+                            prior.deterministic_key,
+                            "candidate",
+                            candidate.deterministic_key,
+                        ),
                         "kind": kind,
                         "target_candidate_key": candidate.deterministic_key,
                         "target_candidate_ordinal": candidate.ordinal,

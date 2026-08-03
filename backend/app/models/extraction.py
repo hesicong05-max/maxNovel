@@ -101,6 +101,11 @@ class LoreExtractionCandidate(Base):
             "ordinal",
             name="uq_lore_extraction_candidate_ordinal",
         ),
+        UniqueConstraint(
+            "project_id",
+            "accepted_element_id",
+            name="uq_lore_extraction_candidate_accepted_element",
+        ),
         CheckConstraint(
             "status IN ('pending_review', 'accepted', 'rejected', 'failed')",
             name="ck_lore_extraction_candidate_status",
@@ -130,12 +135,48 @@ class LoreExtractionCandidate(Base):
     field_states = Column(JSON, nullable=False, default=dict)
     relation_suggestions = Column(JSON, nullable=False, default=list)
     duplicate_conflict_suggestions = Column(JSON, nullable=False, default=list)
+    suggestion_resolutions = Column(JSON, nullable=False, default=dict)
+    user_overrides = Column(JSON, nullable=False, default=dict)
     status = Column(String(20), nullable=False, default="pending_review")
     revision = Column(Integer, nullable=False, default=1)
     accepted_element_id = Column(String(32), nullable=True)
     error_code = Column(String(80), nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+
+class LoreCandidateRevision(Base):
+    __tablename__ = "lore_candidate_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "candidate_id",
+            "revision",
+            name="uq_lore_candidate_revision",
+        ),
+    )
+
+    id = Column(String(32), primary_key=True, default=gen_id)
+    candidate_id = Column(
+        String(32),
+        ForeignKey("lore_extraction_candidates.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    revision = Column(Integer, nullable=False)
+    type_key = Column(String(50), nullable=True)
+    name = Column(String(200), nullable=True)
+    summary = Column(Text, nullable=False, default="")
+    payload = Column(JSON, nullable=False, default=dict)
+    field_states = Column(JSON, nullable=False, default=dict)
+    suggestion_resolutions = Column(JSON, nullable=False, default=dict)
+    user_overrides = Column(JSON, nullable=False, default=dict)
+    change_kind = Column(String(30), nullable=False)
+    created_by = Column(
+        String(32),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
 
 
 class LoreCandidateFieldEvidence(Base):
