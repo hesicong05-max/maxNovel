@@ -1115,6 +1115,14 @@ async def test_needs_confirmation_blocks_accept_without_formal_rows(
     candidate = await _first_candidate(
         client, auth_headers, project_id, batch["id"]
     )
+    assert candidate["needs_attention"] is True
+    overview = await client.get(
+        f"/api/projects/{project_id}/lore/overview",
+        headers=auth_headers,
+    )
+    assert overview.status_code == 200
+    assert overview.json()["pending_review"] == 1
+    assert overview.json()["needs_attention"] == 1
     response = await client.post(
         f"/api/projects/{project_id}/lore/extractions/{batch['id']}/"
         f"candidates/{candidate['id']}/accept",
@@ -1174,3 +1182,127 @@ async def test_postgres_concurrent_accept_is_idempotent(
         assert await session.scalar(
             select(func.count()).select_from(ElementVersion)
         ) == 1
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_project_candidate_inbox_filters_pages_and_reports_overview(
+    client, auth_headers, monkeypatch
+):
+    project_id = await _create_project(client, auth_headers)
+    first = _valid_candidates()[0]
+    monkeypatch.setattr(
+        llm_client,
+        "chat_once",
+        AsyncMock(return_value=_response_json([first, first, _valid_candidates()[1]])),
+    )
+    batch = (await _create_batch(client, auth_headers, project_id)).json()
+    inbox_url = f"/api/projects/{project_id}/lore/extractions/candidates"
+    first_page = await client.get(
+        inbox_url,
+        headers=auth_headers,
+        params={"limit": 1},
+    )
+    assert first_page.status_code == 200, first_page.text
+    data = first_page.json()
+    assert data["total"] == 3
+    assert data["has_more"] is True
+    assert data["next_cursor"]
+    assert data["applied_filters"]["status"] == "pending_review"
+    assert data["query_signature"]
+
+    second_page = await client.get(
+        inbox_url,
+        headers=auth_headers,
+        params={"limit": 1, "cursor": data["next_cursor"]},
+    )
+    assert second_page.status_code == 200
+    assert second_page.json()["items"][0]["id"] != data["items"][0]["id"]
+
+    searched = await client.get(
+        inbox_url,
+        headers=auth_headers,
+        params={"q": "苏瑶"},
+    )
+    assert searched.status_code == 200
+    assert searched.json()["total"] == 1
+    assert searched.json()["items"][0]["name"] == "苏瑶"
+
+    attention = await client.get(
+        inbox_url,
+        headers=auth_headers,
+        params={"needs_attention": True},
+    )
+    assert attention.status_code == 200
+    assert attention.json()["total"] >= 1
+    assert all(
+        item["duplicate_conflict_suggestions"]
+        for item in attention.json()["items"]
+    )
+
+    overview = await client.get(
+        f"/api/projects/{project_id}/lore/overview",
+        headers=auth_headers,
+    )
+    assert overview.status_code == 200, overview.text
+    assert overview.json()["formal_total"] == 0
+    assert overview.json()["confirmed_active"] == 0
+    assert overview.json()["pending_review"] == 3
+    assert overview.json()["needs_attention"] == attention.json()["total"]
+    assert overview.json()["capabilities"]["candidate_accept"] is False
+    assert overview.json()["capabilities"]["formal_conflict_tracking"] is False
+
+    other_project = await _create_project(client, auth_headers, title="其他候选项目")
+    mismatched = await client.get(
+        f"/api/projects/{other_project}/lore/extractions/candidates",
+        headers=auth_headers,
+        params={"limit": 1, "cursor": data["next_cursor"]},
+    )
+    assert mismatched.status_code == 400
+
+    batch_filtered = await client.get(
+        inbox_url,
+        headers=auth_headers,
+        params={"batch_id": batch["id"], "type": "character"},
+    )
+    assert batch_filtered.status_code == 200
+    assert batch_filtered.json()["total"] == 3
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_candidate_without_name_is_indexed_as_needing_attention(
+    client, auth_headers, monkeypatch
+):
+    project_id = await _create_project(client, auth_headers)
+    unnamed = {
+        "type_key": "character",
+        "name": None,
+        "fields": [
+            {
+                "field_key": "personality",
+                "value": "坚韧",
+                "state": "provided",
+                "excerpt": "性格坚韧",
+            }
+        ],
+        "relation_suggestions": [],
+    }
+    monkeypatch.setattr(
+        llm_client,
+        "chat_once",
+        AsyncMock(return_value=_response_json([unnamed])),
+    )
+    await _create_batch(client, auth_headers, project_id, key="unnamed-001")
+    inbox = await client.get(
+        f"/api/projects/{project_id}/lore/extractions/candidates",
+        headers=auth_headers,
+        params={"needs_attention": True},
+    )
+    assert inbox.status_code == 200
+    assert inbox.json()["total"] == 1
+    assert inbox.json()["items"][0]["name"] is None
+    assert "name_missing" in inbox.json()["items"][0]["disabled_reasons"]
+    overview = await client.get(
+        f"/api/projects/{project_id}/lore/overview",
+        headers=auth_headers,
+    )
+    assert overview.json()["needs_attention"] == 1

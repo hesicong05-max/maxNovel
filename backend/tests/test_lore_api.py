@@ -103,6 +103,25 @@ async def test_lore_list_is_authenticated_read_only_projection(
     }
     assert all("payload" not in item for item in data["items"])
     assert all(item["confirmation_status"] == "confirmed" for item in data["items"])
+    assert data["facets"]["lifecycle_statuses"] == [
+        {"key": "active", "label": "活动", "count": 3}
+    ]
+    assert data["facets"]["enabled_statuses"] == [
+        {"key": "enabled", "label": "已启用", "count": 3}
+    ]
+    assert data["facets"]["relation_statuses"] == [
+        {"key": "without_relations", "label": "无关联", "count": 3}
+    ]
+    overview = await client.get(
+        f"/api/projects/{project_id}/lore/overview",
+        headers=auth_headers,
+    )
+    assert overview.status_code == 200
+    assert overview.json()["formal_total"] == 3
+    assert overview.json()["confirmed_active"] == 3
+    assert overview.json()["count_definitions"]["formal_total"] == {
+        "entity": "formal_lore"
+    }
 
 
 @pytest.mark.usefixtures("clean_db")

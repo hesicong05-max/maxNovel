@@ -60,6 +60,9 @@ class LoreFacets(BaseModel):
     types: list[LoreFacetCount] = Field(default_factory=list)
     confirmation_statuses: list[LoreFacetCount] = Field(default_factory=list)
     sources: list[LoreFacetCount] = Field(default_factory=list)
+    lifecycle_statuses: list[LoreFacetCount] = Field(default_factory=list)
+    enabled_statuses: list[LoreFacetCount] = Field(default_factory=list)
+    relation_statuses: list[LoreFacetCount] = Field(default_factory=list)
 
 
 class LoreListResponse(BaseModel):
@@ -69,6 +72,25 @@ class LoreListResponse(BaseModel):
     total: int
     facets: LoreFacets
     migration_status: LoreMigrationStatus
+
+
+class LoreRepositoryCapabilities(BaseModel):
+    candidate_review: bool = True
+    candidate_accept: bool
+    formal_conflict_tracking: bool = False
+    search_fields: list[str] = Field(default_factory=lambda: ["name", "summary"])
+
+
+class LoreRepositoryOverview(BaseModel):
+    formal_total: int
+    confirmed_active: int
+    pending_review: int
+    needs_attention: int
+    disabled: int
+    archived: int
+    migration_status: LoreMigrationStatus
+    capabilities: LoreRepositoryCapabilities
+    count_definitions: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class LoreFieldDefinition(BaseModel):

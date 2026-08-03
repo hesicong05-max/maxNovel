@@ -116,7 +116,7 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
                 "林远",
                 "旧候选",
                 '{"personality": "坚韧"}',
-                '{"personality": "provided"}',
+                '{"personality": "needs_confirmation"}',
                 "[]",
                 "[]",
                 "pending_review",
@@ -139,9 +139,18 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
         assert row is not None
         assert row[:4] == (1, "character", "林远", "旧候选")
         assert row[4] == '{"personality": "坚韧"}'
-        assert row[5] == '{"personality": "provided"}'
+        assert row[5] == '{"personality": "needs_confirmation"}'
         assert row[6:8] == ("extracted", user_id)
         assert row[8] == timestamp
+        attention = connection.execute(
+            """
+            SELECT needs_attention
+            FROM lore_extraction_candidates
+            WHERE id = ?
+            """,
+            (candidate_id,),
+        ).fetchone()
+        assert attention == (1,)
     with sqlite3.connect(database_path) as connection:
         tables = {
             row[0]
@@ -208,7 +217,11 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
                 "PRAGMA table_info(lore_extraction_candidates)"
             )
         }
-        assert {"suggestion_resolutions", "user_overrides"}.issubset(
+        assert {
+            "suggestion_resolutions",
+            "user_overrides",
+            "needs_attention",
+        }.issubset(
             candidate_columns
         )
         assert (
@@ -216,6 +229,13 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
             in table_sql["lore_extraction_candidates"]
         )
         assert "uq_lore_candidate_revision" in table_sql["lore_candidate_revisions"]
+        indexes = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            )
+        }
+        assert "ix_lore_candidate_project_attention_updated" in indexes
 
     _run_alembic(backend_dir, database_url, "downgrade", "a1d3c7e9f002")
     with sqlite3.connect(database_path) as connection:

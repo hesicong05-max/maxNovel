@@ -121,6 +121,14 @@ class LoreExtractionCandidate(Base):
             "status",
             "updated_at",
         ),
+        Index(
+            "ix_lore_candidate_project_attention_updated",
+            "project_id",
+            "status",
+            "needs_attention",
+            "updated_at",
+            "id",
+        ),
     )
 
     id = Column(String(32), primary_key=True, default=gen_id)
@@ -137,6 +145,7 @@ class LoreExtractionCandidate(Base):
     duplicate_conflict_suggestions = Column(JSON, nullable=False, default=list)
     suggestion_resolutions = Column(JSON, nullable=False, default=dict)
     user_overrides = Column(JSON, nullable=False, default=dict)
+    needs_attention = Column(Boolean, nullable=False, default=False)
     status = Column(String(20), nullable=False, default="pending_review")
     revision = Column(Integer, nullable=False, default=1)
     accepted_element_id = Column(String(32), nullable=True)

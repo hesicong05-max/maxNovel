@@ -1751,8 +1751,9 @@ async def test_relational_source_facets_match_filtered_scope(client, auth_header
     )
     assert filtered.status_code == 200
     assert filtered.json()["total"] == 1
+    assert filtered.json()["items"][0]["source_summary"] == "手动创建"
     assert filtered.json()["facets"]["sources"] == [
-        {"key": "manual", "label": "manual", "count": 1}
+        {"key": "manual", "label": "手动创建", "count": 1}
     ]
 
 
@@ -1915,6 +1916,96 @@ async def test_relation_api_create_list_and_initial_version(client, auth_headers
     assert versions.status_code == 200
     assert versions.json()["total"] == 1
     assert versions.json()["items"][0]["change_reason"] == "创建关系"
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_repository_relation_filter_facets_and_overview(client, auth_headers):
+    project_id = await _create_project(client, auth_headers)
+    source = await _create_relational_element(
+        client, auth_headers, project_id, name="关联角色",
+    )
+    target = await _create_relational_element(
+        client,
+        auth_headers,
+        project_id,
+        name="关联组织",
+        type_key="faction",
+    )
+    standalone = await _create_relational_element(
+        client, auth_headers, project_id, name="独立地点", type_key="location",
+    )
+    await _create_relation(
+        client,
+        auth_headers,
+        project_id,
+        source["id"],
+        target["id"],
+        relation_key="member_of",
+        forward_label="隶属于",
+        reverse_label="拥有成员",
+    )
+
+    related = await client.get(
+        f"/api/projects/{project_id}/lore/elements",
+        headers=auth_headers,
+        params={"has_relation": True, "limit": 1},
+    )
+    assert related.status_code == 200, related.text
+    related_data = related.json()
+    assert related_data["total"] == 2
+    assert related_data["has_more"] is True
+    assert related_data["next_cursor"]
+    relation_facets = {
+        item["key"]: item
+        for item in related_data["facets"]["relation_statuses"]
+    }
+    assert relation_facets["with_relations"]["label"] == "有关联"
+    assert relation_facets["with_relations"]["count"] == 2
+    assert related_data["facets"]["lifecycle_statuses"][0]["label"] == "活动"
+    assert related_data["facets"]["enabled_statuses"][0]["label"] == "已启用"
+
+    second_page = await client.get(
+        f"/api/projects/{project_id}/lore/elements",
+        headers=auth_headers,
+        params={
+            "has_relation": True,
+            "limit": 1,
+            "cursor": related_data["next_cursor"],
+        },
+    )
+    assert second_page.status_code == 200
+    assert second_page.json()["items"][0]["id"] != related_data["items"][0]["id"]
+    mismatched = await client.get(
+        f"/api/projects/{project_id}/lore/elements",
+        headers=auth_headers,
+        params={
+            "has_relation": False,
+            "limit": 1,
+            "cursor": related_data["next_cursor"],
+        },
+    )
+    assert mismatched.status_code == 400
+
+    unrelated = await client.get(
+        f"/api/projects/{project_id}/lore/elements",
+        headers=auth_headers,
+        params={"has_relation": False},
+    )
+    assert unrelated.status_code == 200
+    assert unrelated.json()["total"] == 1
+    assert unrelated.json()["items"][0]["id"] == standalone["id"]
+
+    overview = await client.get(
+        f"/api/projects/{project_id}/lore/overview",
+        headers=auth_headers,
+    )
+    assert overview.status_code == 200
+    assert overview.json()["formal_total"] == 3
+    assert overview.json()["confirmed_active"] == 3
+    assert overview.json()["pending_review"] == 0
+    assert overview.json()["disabled"] == 0
+    assert overview.json()["archived"] == 0
+    assert overview.json()["capabilities"]["candidate_accept"] is True
 
 
 @pytest.mark.usefixtures("clean_db")

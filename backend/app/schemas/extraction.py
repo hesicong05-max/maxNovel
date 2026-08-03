@@ -80,12 +80,22 @@ class LoreExtractionCandidateResponse(BaseModel):
     revision: int
     accepted_element_id: str | None
     error_code: str | None
+    needs_attention: bool
     evidence: list[LoreCandidateEvidenceResponse]
     can_accept: bool
     disabled_reasons: list[str]
     actions: LoreCandidateActions
     created_at: datetime
     updated_at: datetime
+
+
+class LoreCandidateInboxResponse(BaseModel):
+    items: list[LoreExtractionCandidateResponse]
+    next_cursor: str | None = None
+    has_more: bool
+    total: int
+    applied_filters: dict[str, Any] = Field(default_factory=dict)
+    query_signature: str
 
 
 class LoreExtractionBatchResponse(BaseModel):

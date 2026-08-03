@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime
+import hashlib
+import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select, update
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +19,7 @@ from app.core.lore_extraction import (
     EXTRACTOR_VERSION,
     ExtractionValidationError,
     build_extraction_messages,
+    candidate_needs_attention,
     field_display_label,
     prepare_candidates,
     source_hash,
@@ -27,6 +31,7 @@ from app.core.maintenance import (
     ProjectWriteFrozenError,
     ensure_project_writes_available,
 )
+from app.api.lore import _decode_cursor, _encode_cursor
 from app.database import get_db
 from app.models.extraction import (
     LoreCandidateFieldEvidence,
@@ -38,6 +43,7 @@ from app.models.project import _utcnow
 from app.schemas.extraction import (
     MAX_EXTRACTION_SOURCE_CHARS,
     LoreCandidateEvidenceResponse,
+    LoreCandidateInboxResponse,
     LoreCandidateActionInput,
     LoreCandidateActionResponse,
     LoreCandidateActions,
@@ -55,6 +61,16 @@ router = APIRouter(
     prefix="/api/projects/{project_id}/lore/extractions",
     tags=["lore-extraction"],
 )
+
+
+def _candidate_inbox_signature(filters: dict[str, object]) -> str:
+    payload = json.dumps(
+        filters,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()[:16]
 
 
 async def _load_batch(
@@ -137,6 +153,8 @@ async def _candidate_responses(
             disabled_reasons.append("name_missing")
         if not candidate.type_key:
             disabled_reasons.append("type_missing")
+        elif candidate.type_key not in BUILTIN_TYPE_KEYS:
+            disabled_reasons.append("type_invalid")
         if "needs_confirmation" in (candidate.field_states or {}).values():
             disabled_reasons.append("fields_need_confirmation")
         if candidate.status != "pending_review":
@@ -181,6 +199,7 @@ async def _candidate_responses(
                 revision=candidate.revision,
                 accepted_element_id=candidate.accepted_element_id,
                 error_code=candidate.error_code,
+                needs_attention=candidate.needs_attention,
                 evidence=[
                     LoreCandidateEvidenceResponse(
                         id=item.id,
@@ -626,6 +645,13 @@ async def create_extraction_batch(
                 ),
                 suggestion_resolutions={},
                 user_overrides={},
+                needs_attention=candidate_needs_attention(
+                    name=item.name,
+                    type_key=item.type_key,
+                    field_states=item.field_states,
+                    suggestions=item.duplicate_conflict_suggestions,
+                    resolutions={},
+                ),
                 status="pending_review",
             )
             db.add(candidate)
@@ -696,6 +722,129 @@ async def create_extraction_batch(
                 "候选保存失败，未写入任何候选",
             )
     return await _batch_response(db, batch)
+
+
+@router.get("/candidates", response_model=LoreCandidateInboxResponse)
+async def list_project_extraction_candidates(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    cursor: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 30,
+    q: Annotated[str | None, Query(max_length=200)] = None,
+    candidate_status: Annotated[
+        str | None,
+        Query(alias="status", pattern="^(pending_review|accepted|rejected|failed)$"),
+    ] = "pending_review",
+    type_key: Annotated[
+        str | None,
+        Query(alias="type", max_length=50),
+    ] = None,
+    batch_id: Annotated[str | None, Query(max_length=32)] = None,
+    needs_attention: bool | None = None,
+):
+    project = await get_project_for_owner(project_id, current_user, db)
+    normalized_query = (q or "").strip().casefold()
+    applied_filters: dict[str, object] = {
+        "q": normalized_query,
+        "status": candidate_status or "",
+        "type": type_key or "",
+        "batch_id": batch_id or "",
+        "needs_attention": needs_attention,
+    }
+    query_signature = _candidate_inbox_signature(applied_filters)
+    filters = [LoreExtractionCandidate.project_id == project_id]
+    if candidate_status:
+        filters.append(LoreExtractionCandidate.status == candidate_status)
+    if type_key:
+        filters.append(LoreExtractionCandidate.type_key == type_key)
+    if batch_id:
+        filters.append(LoreExtractionCandidate.batch_id == batch_id)
+    if normalized_query:
+        filters.append(
+            or_(
+                func.lower(LoreExtractionCandidate.name).contains(normalized_query),
+                func.lower(LoreExtractionCandidate.summary).contains(normalized_query),
+            )
+        )
+    if needs_attention is not None:
+        filters.append(
+            LoreExtractionCandidate.needs_attention.is_(
+                needs_attention
+            )
+        )
+
+    page_filters = list(filters)
+    if cursor:
+        cursor_data = _decode_cursor(cursor)
+        if (
+            cursor_data.get("kind") != "candidate_inbox"
+            or cursor_data.get("project_id") != project_id
+            or cursor_data.get("filters") != query_signature
+        ):
+            raise HTTPException(status_code=400, detail="分页游标与当前候选查询不匹配")
+        after = cursor_data.get("after")
+        if (
+            not isinstance(after, list)
+            or len(after) != 2
+            or not all(isinstance(value, str) for value in after)
+        ):
+            raise HTTPException(status_code=400, detail="分页游标无效")
+        try:
+            after_time = datetime.fromisoformat(after[0])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="分页游标无效") from exc
+        page_filters.append(
+            or_(
+                LoreExtractionCandidate.updated_at < after_time,
+                (
+                    (LoreExtractionCandidate.updated_at == after_time)
+                    & (LoreExtractionCandidate.id < after[1])
+                ),
+            )
+        )
+
+    total = await db.scalar(
+        select(func.count())
+        .select_from(LoreExtractionCandidate)
+        .where(*filters)
+    )
+    result = await db.execute(
+        select(LoreExtractionCandidate)
+        .where(*page_filters)
+        .order_by(
+            LoreExtractionCandidate.updated_at.desc(),
+            LoreExtractionCandidate.id.desc(),
+        )
+        .limit(limit + 1)
+    )
+    rows = list(result.scalars().all())
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    next_cursor = None
+    if has_more and page:
+        last = page[-1]
+        next_cursor = _encode_cursor(
+            {
+                "v": 1,
+                "kind": "candidate_inbox",
+                "project_id": project_id,
+                "filters": query_signature,
+                "after": [last.updated_at.isoformat(), last.id],
+            }
+        )
+    return LoreCandidateInboxResponse(
+        items=await _candidate_responses(
+            db,
+            page,
+            project_mode=project.lore_storage_mode or "legacy",
+        ),
+        next_cursor=next_cursor,
+        has_more=has_more,
+        total=int(total or 0),
+        applied_filters=applied_filters,
+        query_signature=query_signature,
+    )
 
 
 @router.get("/{batch_id}", response_model=LoreExtractionBatchResponse)
@@ -907,6 +1056,13 @@ async def edit_extraction_candidate(
     candidate.field_states = field_states
     candidate.suggestion_resolutions = resolutions
     candidate.user_overrides = overrides
+    candidate.needs_attention = candidate_needs_attention(
+        name=candidate.name,
+        type_key=candidate.type_key,
+        field_states=candidate.field_states,
+        suggestions=candidate.duplicate_conflict_suggestions,
+        resolutions=candidate.suggestion_resolutions,
+    )
     await _record_candidate_revision(db, candidate, current_user.id, "edited")
     ensure_project_writes_available()
     await db.commit()
@@ -1068,6 +1224,7 @@ async def accept_extraction_candidate(
             sources_input=await _candidate_sources(db, batch, candidate),
         )
         candidate.status = "accepted"
+        candidate.needs_attention = False
         candidate.accepted_element_id = element.id
         await _record_candidate_revision(db, candidate, current_user.id, "accepted")
         ensure_project_writes_available()
@@ -1156,6 +1313,7 @@ async def reject_extraction_candidate(
         await _claim_candidate_revision(db, candidate, body.expected_version)
         candidate.suggestion_resolutions = resolutions
         candidate.status = "rejected"
+        candidate.needs_attention = False
         await _record_candidate_revision(db, candidate, current_user.id, "rejected")
         ensure_project_writes_available()
         await db.commit()

@@ -24,6 +24,28 @@ EXTRACTOR_VERSION = "lore-candidates-v1"
 MAX_CANDIDATES = 200
 
 
+def candidate_needs_attention(
+    *,
+    name: str | None,
+    type_key: str | None,
+    field_states: dict[str, str] | None,
+    suggestions: list[dict[str, object]] | None,
+    resolutions: dict[str, str] | None,
+) -> bool:
+    """Return whether a pending candidate still needs explicit user action."""
+    if not name or not type_key or type_key not in BUILTIN_TYPE_KEYS:
+        return True
+    if "needs_confirmation" in (field_states or {}).values():
+        return True
+    resolved = resolutions or {}
+    return any(
+        suggestion.get("suggestion_id")
+        and resolved.get(str(suggestion["suggestion_id"]))
+        not in ("accept_as_new", "dismissed")
+        for suggestion in (suggestions or [])
+    )
+
+
 class ExtractionValidationError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)

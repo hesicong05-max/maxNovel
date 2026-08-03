@@ -38,6 +38,7 @@ from app.core.lore_write import (
     update_relation,
 )
 from app.database import get_db
+from app.models.extraction import LoreExtractionCandidate
 from app.models.lore import (
     ElementRelation,
     ElementRelationVersion,
@@ -67,6 +68,8 @@ from app.schemas.lore import (
     LoreRelationUpdate,
     LoreRelationVersionSummary,
     LoreRelationVersionsResponse,
+    LoreRepositoryCapabilities,
+    LoreRepositoryOverview,
     LoreSourceSummary,
     LoreSourcesResponse,
     LoreTypeSummary,
@@ -82,6 +85,31 @@ router = APIRouter(prefix="/api/projects/{project_id}/lore", tags=["lore"])
 
 _CURSOR_VERSION = 1
 _CURSOR_SECRET = (settings.JWT_SECRET or "development-lore-cursor-secret").encode()
+
+_CONFIRMATION_LABELS = {
+    "candidate": "待确认",
+    "confirmed": "已确认",
+    "rejected": "已拒绝",
+}
+_SOURCE_KIND_LABELS = {
+    "manual": "手动创建",
+    "manual_review": "人工复核",
+    "document_import": "文档导入",
+    "system_extract": "AI 提取",
+    "migration": "旧数据迁移",
+    "legacy_import": "旧数据导入",
+}
+_LIFECYCLE_LABELS = {
+    "active": "活动",
+    "archived": "已归档",
+    "merged": "已合并",
+}
+
+
+def _source_kind_label(kind: str | None) -> str:
+    if not kind:
+        return "未记录来源"
+    return _SOURCE_KIND_LABELS.get(kind, "其他来源")
 
 
 def _cursor_signature(payload: bytes) -> str:
@@ -129,6 +157,7 @@ def _filter_signature(
     source_kind: str | None,
     lifecycle_status: str | None = None,
     enabled: bool | None = None,
+    has_relation: bool | None = None,
 ) -> str:
     payload = json.dumps(
         {
@@ -138,6 +167,7 @@ def _filter_signature(
             "source": source_kind or "",
             "lifecycle": lifecycle_status or "",
             "enabled": enabled,
+            "has_relation": has_relation,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -197,6 +227,7 @@ async def _list_relational_elements(
     source_kind: str | None,
     lifecycle_status: str | None,
     enabled: bool | None,
+    has_relation: bool | None,
 ) -> LoreListResponse:
     filter_sig = _filter_signature(
         q,
@@ -205,6 +236,7 @@ async def _list_relational_elements(
         source_kind,
         lifecycle_status,
         enabled,
+        has_relation,
     )
     filters = [SettingElement.project_id == project_id]
     normalized_query = normalize_lore_name(q or "")
@@ -223,6 +255,23 @@ async def _list_relational_elements(
         filters.append(SettingElement.lifecycle_status == lifecycle_status)
     if enabled is not None:
         filters.append(SettingElement.enabled == enabled)
+    active_relation_exists = (
+        select(ElementRelation.id)
+        .where(
+            ElementRelation.project_id == project_id,
+            ElementRelation.status == "active",
+            or_(
+                ElementRelation.source_element_id == SettingElement.id,
+                ElementRelation.target_element_id == SettingElement.id,
+            ),
+        )
+        .correlate(SettingElement)
+        .exists()
+    )
+    if has_relation is True:
+        filters.append(active_relation_exists)
+    elif has_relation is False:
+        filters.append(~active_relation_exists)
     if source_kind:
         filters.append(
             select(ElementSource.id)
@@ -329,7 +378,7 @@ async def _list_relational_elements(
             lifecycle_status=element.lifecycle_status,
             enabled=element.enabled,
             generation_eligible=generation_eligible(element),
-            source_summary=source_labels.get(element.id, "未记录来源"),
+            source_summary=_source_kind_label(source_labels.get(element.id)),
             current_version=element.content_version,
             revision=element.payload_schema_revision,
             lock_version=element.lock_version,
@@ -383,6 +432,32 @@ async def _list_relational_elements(
         .group_by(ElementSource.source_kind)
         .order_by(ElementSource.source_kind)
     )
+    lifecycle_rows = await db.execute(
+        select(SettingElement.lifecycle_status, func.count())
+        .select_from(SettingElement)
+        .join(SettingType, SettingType.id == SettingElement.type_id)
+        .where(*filters)
+        .group_by(SettingElement.lifecycle_status)
+    )
+    enabled_rows = await db.execute(
+        select(SettingElement.enabled, func.count())
+        .select_from(SettingElement)
+        .join(SettingType, SettingType.id == SettingElement.type_id)
+        .where(*filters)
+        .group_by(SettingElement.enabled)
+    )
+    related_count = await db.scalar(
+        select(func.count())
+        .select_from(SettingElement)
+        .join(SettingType, SettingType.id == SettingElement.type_id)
+        .where(*filters, active_relation_exists)
+    )
+    unrelated_count = await db.scalar(
+        select(func.count())
+        .select_from(SettingElement)
+        .join(SettingType, SettingType.id == SettingElement.type_id)
+        .where(*filters, ~active_relation_exists)
+    )
     return LoreListResponse(
         items=items,
         next_cursor=next_cursor,
@@ -394,12 +469,48 @@ async def _list_relational_elements(
                 for key, label, count in type_rows.all()
             ],
             confirmation_statuses=[
-                LoreFacetCount(key=key, label=key, count=count)
+                LoreFacetCount(
+                    key=key,
+                    label=_CONFIRMATION_LABELS.get(key, key),
+                    count=count,
+                )
                 for key, count in confirmation_rows.all()
             ],
             sources=[
-                LoreFacetCount(key=key, label=key, count=count)
+                LoreFacetCount(
+                    key=key,
+                    label=_source_kind_label(key),
+                    count=count,
+                )
                 for key, count in source_facet_rows.all()
+            ],
+            lifecycle_statuses=[
+                LoreFacetCount(
+                    key=key,
+                    label=_LIFECYCLE_LABELS.get(key, key),
+                    count=count,
+                )
+                for key, count in lifecycle_rows.all()
+            ],
+            enabled_statuses=[
+                LoreFacetCount(
+                    key="enabled" if key else "disabled",
+                    label="已启用" if key else "已停用",
+                    count=count,
+                )
+                for key, count in enabled_rows.all()
+            ],
+            relation_statuses=[
+                LoreFacetCount(
+                    key="with_relations",
+                    label="有关联",
+                    count=int(related_count or 0),
+                ),
+                LoreFacetCount(
+                    key="without_relations",
+                    label="无关联",
+                    count=int(unrelated_count or 0),
+                ),
             ],
         ),
         migration_status=_relational_migration_status(),
@@ -464,6 +575,7 @@ async def list_lore_elements(
         Query(pattern="^(active|archived|merged)$"),
     ] = None,
     enabled: bool | None = None,
+    has_relation: bool | None = None,
 ):
     project = await get_project_for_owner(project_id, current_user, db)
     if project.lore_storage_mode == "relational":
@@ -479,6 +591,7 @@ async def list_lore_elements(
             source_kind,
             lifecycle_status,
             enabled,
+            has_relation,
         )
     worldview = await db.scalar(
         select(Worldview).where(Worldview.project_id == project_id)
@@ -491,6 +604,7 @@ async def list_lore_elements(
         source_kind,
         lifecycle_status,
         enabled,
+        has_relation,
     )
     elements = projection.elements
     normalized_query = normalize_lore_name(q or "")
@@ -516,6 +630,8 @@ async def list_lore_elements(
     if lifecycle_status and lifecycle_status != "active":
         elements = []
     if enabled is False:
+        elements = []
+    if has_relation is True:
         elements = []
 
     elements = sorted(
@@ -597,8 +713,134 @@ async def list_lore_elements(
                 )
                 for key, count in sorted(source_counts.items())
             ],
+            lifecycle_statuses=[
+                LoreFacetCount(key="active", label="活动", count=len(elements))
+            ]
+            if elements
+            else [],
+            enabled_statuses=[
+                LoreFacetCount(key="enabled", label="已启用", count=len(elements))
+            ]
+            if elements
+            else [],
+            relation_statuses=[
+                LoreFacetCount(
+                    key="without_relations",
+                    label="无关联",
+                    count=len(elements),
+                )
+            ]
+            if elements
+            else [],
         ),
         migration_status=_migration_status(project, projection),
+    )
+
+
+@router.get("/overview", response_model=LoreRepositoryOverview)
+async def get_lore_repository_overview(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    project = await get_project_for_owner(project_id, current_user, db)
+    pending_count = await db.scalar(
+        select(func.count())
+        .select_from(LoreExtractionCandidate)
+        .where(
+            LoreExtractionCandidate.project_id == project_id,
+            LoreExtractionCandidate.status == "pending_review",
+        )
+    )
+    attention_count = await db.scalar(
+        select(func.count())
+        .select_from(LoreExtractionCandidate)
+        .where(
+            LoreExtractionCandidate.project_id == project_id,
+            LoreExtractionCandidate.status == "pending_review",
+            LoreExtractionCandidate.needs_attention.is_(True),
+        )
+    )
+    if project.lore_storage_mode == "relational":
+        formal_total = await db.scalar(
+            select(func.count())
+            .select_from(SettingElement)
+            .where(SettingElement.project_id == project_id)
+        )
+        confirmed_active = await db.scalar(
+            select(func.count())
+            .select_from(SettingElement)
+            .where(
+                SettingElement.project_id == project_id,
+                SettingElement.confirmation_status == "confirmed",
+                SettingElement.lifecycle_status == "active",
+            )
+        )
+        disabled = await db.scalar(
+            select(func.count())
+            .select_from(SettingElement)
+            .where(
+                SettingElement.project_id == project_id,
+                SettingElement.lifecycle_status == "active",
+                SettingElement.enabled.is_(False),
+            )
+        )
+        archived = await db.scalar(
+            select(func.count())
+            .select_from(SettingElement)
+            .where(
+                SettingElement.project_id == project_id,
+                SettingElement.lifecycle_status == "archived",
+            )
+        )
+        migration_status = _relational_migration_status()
+    else:
+        worldview = await db.scalar(
+            select(Worldview).where(Worldview.project_id == project_id)
+        )
+        projection = project_legacy_worldview(project_id, worldview)
+        formal_total = len(projection.elements)
+        confirmed_active = len(projection.elements)
+        disabled = 0
+        archived = 0
+        migration_status = _migration_status(project, projection)
+    return LoreRepositoryOverview(
+        formal_total=int(formal_total or 0),
+        confirmed_active=int(confirmed_active or 0),
+        pending_review=int(pending_count or 0),
+        needs_attention=int(attention_count or 0),
+        disabled=int(disabled or 0),
+        archived=int(archived or 0),
+        migration_status=migration_status,
+        capabilities=LoreRepositoryCapabilities(
+            candidate_accept=(project.lore_storage_mode == "relational")
+        ),
+        count_definitions={
+            "formal_total": {"entity": "formal_lore"},
+            "confirmed_active": {
+                "entity": "formal_lore",
+                "confirmation_status": "confirmed",
+                "lifecycle_status": "active",
+            },
+            "pending_review": {
+                "entity": "extraction_candidate",
+                "status": "pending_review",
+            },
+            "needs_attention": {
+                "entity": "extraction_candidate",
+                "status": "pending_review",
+                "needs_attention": True,
+            },
+            "disabled": {
+                "entity": "formal_lore",
+                "lifecycle_status": "active",
+                "enabled": False,
+            },
+            "archived": {
+                "entity": "formal_lore",
+                "lifecycle_status": "archived",
+            },
+        },
     )
 
 
