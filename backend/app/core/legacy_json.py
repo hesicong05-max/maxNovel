@@ -20,6 +20,39 @@ class LegacyObjectListResult:
         return self.error_category is None
 
 
+@dataclass(frozen=True)
+class LegacyJsonResult:
+    """A decoded historical JSON value plus a safe error category."""
+
+    value: Any
+    error_category: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.error_category is None
+
+
+def read_legacy_json(value: Any) -> LegacyJsonResult:
+    """Decode native, JSON-text, or double-encoded historical JSON safely."""
+
+    decoded = value
+    # Historical PostgreSQL schemas declared JSON-backed columns as Text while
+    # the ORM declared JSON. A string written through that mismatch can be
+    # stored with one extra encoding layer, so unwrap at most two string
+    # layers. The depth cap keeps malformed or adversarial input bounded.
+    for _ in range(2):
+        if not isinstance(decoded, str):
+            break
+        if not decoded.strip():
+            return LegacyJsonResult(value=None, error_category="empty_string")
+        try:
+            decoded = json.loads(decoded)
+        except (TypeError, json.JSONDecodeError):
+            return LegacyJsonResult(value=None, error_category="malformed_json")
+
+    return LegacyJsonResult(value=copy.deepcopy(decoded))
+
+
 def read_legacy_object_list(value: Any) -> LegacyObjectListResult:
     """Read a native list or a historical JSON string without changing storage.
 
@@ -31,20 +64,12 @@ def read_legacy_object_list(value: Any) -> LegacyObjectListResult:
     if value is None:
         return LegacyObjectListResult(items=[])
 
-    decoded = value
-    # Historical PostgreSQL schemas declared these columns as Text while the
-    # ORM declared JSON.  A JSON string written through that mismatch can be
-    # stored with one extra encoding layer, so unwrap at most two string
-    # layers.  The depth cap keeps malformed or adversarial input bounded.
-    for _ in range(2):
-        if not isinstance(decoded, str):
-            break
-        if not decoded.strip():
-            return LegacyObjectListResult(items=[], error_category="empty_string")
-        try:
-            decoded = json.loads(decoded)
-        except (TypeError, json.JSONDecodeError):
-            return LegacyObjectListResult(items=[], error_category="malformed_json")
+    result = read_legacy_json(value)
+    if not result.valid:
+        return LegacyObjectListResult(
+            items=[], error_category=result.error_category
+        )
+    decoded = result.value
 
     if not isinstance(decoded, list):
         return LegacyObjectListResult(items=[], error_category="not_a_list")

@@ -20,7 +20,7 @@ from app.core.maintenance import (
     project_write_frozen_sse_event,
     require_project_writes_available,
 )
-from app.core.memory_store import memory_store
+from app.core.memory_store import InvalidLegacyStoryMemoryError, memory_store
 from app.core.pacing_planner import pacing_planner
 from app.core.rate_limiter import limiter
 from app.core.worldview_parser import worldview_parser
@@ -858,7 +858,18 @@ async def _generate_chapter_core(
         await db.rollback()
         yield _sse(project_write_frozen_sse_event())
         return
-    context = await memory_store.get_context_for_chapter(memory, chapter_num)
+    try:
+        context = await memory_store.get_context_for_chapter(memory, chapter_num)
+    except InvalidLegacyStoryMemoryError:
+        await db.rollback()
+        yield _sse(
+            {
+                "type": "error",
+                "error": "故事记忆配置无法读取，请检查数据后重试",
+                "code": "LEGACY_STORY_MEMORY_INVALID",
+            }
+        )
+        return
 
     # Persist newly-created memory before the long-running stream. Keep a
     # completed project completed while a regeneration attempt is in flight;
