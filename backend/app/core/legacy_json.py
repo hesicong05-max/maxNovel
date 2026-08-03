@@ -32,11 +32,17 @@ def read_legacy_object_list(value: Any) -> LegacyObjectListResult:
         return LegacyObjectListResult(items=[])
 
     decoded = value
-    if isinstance(value, str):
-        if not value.strip():
+    # Historical PostgreSQL schemas declared these columns as Text while the
+    # ORM declared JSON.  A JSON string written through that mismatch can be
+    # stored with one extra encoding layer, so unwrap at most two string
+    # layers.  The depth cap keeps malformed or adversarial input bounded.
+    for _ in range(2):
+        if not isinstance(decoded, str):
+            break
+        if not decoded.strip():
             return LegacyObjectListResult(items=[], error_category="empty_string")
         try:
-            decoded = json.loads(value)
+            decoded = json.loads(decoded)
         except (TypeError, json.JSONDecodeError):
             return LegacyObjectListResult(items=[], error_category="malformed_json")
 

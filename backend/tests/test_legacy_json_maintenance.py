@@ -433,6 +433,8 @@ async def test_invalid_legacy_outline_is_not_generated_or_overwritten(
     )
     db_session.add(outline)
     await db_session.commit()
+    await db_session.refresh(outline)
+    stored_chapters = outline.chapters
 
     word_counts = await client.get(
         f"/api/chapters/{project_id}/word-counts",
@@ -492,4 +494,4 @@ async def test_invalid_legacy_outline_is_not_generated_or_overwritten(
     assert llm_called is False
 
     await db_session.refresh(outline)
-    assert outline.chapters == raw_chapters
+    assert outline.chapters == stored_chapters

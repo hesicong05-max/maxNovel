@@ -24,6 +24,15 @@ def test_json_string_object_list_is_decoded():
     assert result.items == [{"chapter_num": 1, "title": "启程"}]
 
 
+def test_double_encoded_json_string_object_list_is_decoded():
+    result = read_legacy_object_list(
+        '"[{\\"chapter_num\\": 1, \\"title\\": \\"启程\\"}]"'
+    )
+
+    assert result.valid is True
+    assert result.items == [{"chapter_num": 1, "title": "启程"}]
+
+
 @pytest.mark.parametrize(
     ("value", "category"),
     [
