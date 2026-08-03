@@ -174,6 +174,7 @@ export interface ApiErrorData {
   retryable?: boolean;
   retry_after_seconds?: number;
   event_id?: string;
+  reload_required?: boolean;
 }
 
 export interface StreamMessage {

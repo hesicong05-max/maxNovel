@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { Link, useParams, useNavigate } from "react-router-dom";
 import { api } from "@/services/api";
 import type { Project } from "@/types";
 import WorldviewEditor from "@/components/WorldviewEditor";
@@ -83,6 +83,9 @@ export default function ProjectDetail() {
         <p>
           {project.genre} · {project.total_chapters} 章 · 单章 {project.chapter_word_count} 字 · {project.style_intensity}
         </p>
+        <Link className="btn btn-secondary project-lore-link" to={`/project/${project.id}/lore`}>
+          打开设定仓库
+        </Link>
       </div>
 
       {/* Workflow steps */}

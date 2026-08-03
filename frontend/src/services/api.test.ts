@@ -340,6 +340,58 @@ describe("API - maintenance error contract", () => {
   });
 });
 
+describe("API - lore repository", () => {
+  beforeEach(() => {
+    setAuthToken("valid-token");
+    vi.restoreAllMocks();
+  });
+
+  it("encodes lore filters without dropping false boolean values", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        items: [],
+        next_cursor: null,
+        has_more: false,
+        total: 0,
+        facets: {},
+        migration_status: { storage_mode: "normalized", state: "ready", read_only: false },
+      }), { status: 200, headers: { "Content-Type": "application/json" } })
+    );
+
+    await api.listLoreElements("project/one", {
+      q: "龙 城",
+      enabled: false,
+      has_relation: true,
+      limit: 20,
+    });
+
+    const [url] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(url).toBe(
+      "/api/projects/project/one/lore/elements?q=%E9%BE%99+%E5%9F%8E&enabled=false&has_relation=true&limit=20"
+    );
+  });
+
+  it("parses nested FastAPI error details and reload requirement", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        detail: {
+          code: "LORE_CURSOR_STALE",
+          message: "列表游标已失效。",
+          reload_required: true,
+        },
+      }), { status: 409, headers: { "Content-Type": "application/json" } })
+    );
+
+    await expect(api.listLoreElements("project-1", { cursor: "stale" })).rejects.toMatchObject({
+      name: "ApiError",
+      status: 409,
+      code: "LORE_CURSOR_STALE",
+      detail: "列表游标已失效。",
+      reloadRequired: true,
+    });
+  });
+});
+
 describe("API - Projects", () => {
   beforeEach(() => {
     setAuthToken("valid-token");

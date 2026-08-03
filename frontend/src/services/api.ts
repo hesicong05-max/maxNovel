@@ -23,6 +23,14 @@ import type {
   WorldviewElement,
   WorldviewImportResult,
 } from "@/types";
+import type {
+  LoreCandidateFilters,
+  LoreCandidateInboxResponse,
+  LoreElementDetail,
+  LoreElementFilters,
+  LoreListResponse,
+  LoreOverview,
+} from "@/types/lore";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 
@@ -34,6 +42,7 @@ export class ApiError extends Error {
   readonly retryable: boolean;
   readonly retryAfterSeconds?: number;
   readonly eventId?: string;
+  readonly reloadRequired: boolean;
 
   constructor(status: number, data: ApiErrorData) {
     super(data.detail);
@@ -45,6 +54,7 @@ export class ApiError extends Error {
     this.retryable = data.retryable === true;
     this.retryAfterSeconds = data.retry_after_seconds;
     this.eventId = data.event_id;
+    this.reloadRequired = data.reload_required === true;
   }
 }
 
@@ -69,14 +79,19 @@ async function responseApiError(response: Response): Promise<ApiError> {
     value && typeof value === "object"
       ? (value as Record<string, unknown>)
       : {};
+  const nestedDetail =
+    payload.detail && typeof payload.detail === "object"
+      ? (payload.detail as Record<string, unknown>)
+      : {};
   const retryHeader = Number(response.headers.get("Retry-After"));
   return new ApiError(response.status, {
     detail:
       optionalString(payload.detail) ||
+      optionalString(nestedDetail.message) ||
       (response.statusText
         ? response.statusText
         : `HTTP ${response.status}`),
-    code: optionalString(payload.code),
+    code: optionalString(payload.code) || optionalString(nestedDetail.code),
     maintenance_state: optionalString(payload.maintenance_state),
     retryable: payload.retryable === true,
     retry_after_seconds:
@@ -85,7 +100,27 @@ async function responseApiError(response: Response): Promise<ApiError> {
         ? retryHeader
         : undefined),
     event_id: optionalString(payload.event_id),
+    reload_required:
+      payload.reload_required === true || nestedDetail.reload_required === true,
   });
+}
+
+function withQuery(
+  path: string,
+  values: object
+): string {
+  const params = new URLSearchParams();
+  Object.entries(values as Record<string, unknown>).forEach(([key, value]) => {
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
+      if (value !== "") params.set(key, String(value));
+    }
+  });
+  const query = params.toString();
+  return query ? `${path}?${query}` : path;
 }
 
 async function throwResponseError(response: Response): Promise<never> {
@@ -238,6 +273,33 @@ export const api = {
     }
     return resp.json() as Promise<{ text: string; filename: string; char_count: number }>;
   },
+
+  // Unified lore repository (read-only first slice)
+  getLoreOverview: (projectId: string, signal?: AbortSignal) =>
+    fetchJSON<LoreOverview>(`/projects/${projectId}/lore/overview`, { signal }),
+  listLoreElements: (
+    projectId: string,
+    filters: LoreElementFilters = {},
+    signal?: AbortSignal
+  ) =>
+    fetchJSON<LoreListResponse>(
+      withQuery(`/projects/${projectId}/lore/elements`, filters),
+      { signal }
+    ),
+  getLoreElement: (projectId: string, elementId: string, signal?: AbortSignal) =>
+    fetchJSON<LoreElementDetail>(
+      `/projects/${projectId}/lore/elements/${elementId}`,
+      { signal }
+    ),
+  listLoreCandidates: (
+    projectId: string,
+    filters: LoreCandidateFilters = {},
+    signal?: AbortSignal
+  ) =>
+    fetchJSON<LoreCandidateInboxResponse>(
+      withQuery(`/projects/${projectId}/lore/extractions/candidates`, filters),
+      { signal }
+    ),
 
   // Outline
   getOutline: (projectId: string) =>
