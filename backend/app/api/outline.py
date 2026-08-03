@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.llm_client import LLMResponseTruncatedError, llm_client
+from app.core.legacy_json import read_legacy_object_list
 from app.core.maintenance import (
     ProjectWriteFrozenError,
     ensure_project_writes_available,
@@ -36,6 +37,18 @@ router = APIRouter(prefix="/api/outline", tags=["outline"])
 # 30 chapters ≈ 3700 tokens + story_arc + JSON overhead ≈ 4000-4500 tokens
 # 8192 gives comfortable headroom for up to 50 chapters
 OUTLINE_MAX_TOKENS = 8192
+
+
+def _read_outline_list(outline: Outline, field_name: str) -> list[dict[str, Any]]:
+    result = read_legacy_object_list(getattr(outline, field_name, None))
+    if not result.valid:
+        logger.warning(
+            "Invalid legacy outline list project=%s field=%s category=%s",
+            outline.project_id,
+            field_name,
+            result.error_category,
+        )
+    return result.items
 
 
 def _load_worldview_elements(
@@ -295,10 +308,8 @@ async def generate_outline(
         "id": outline.id,
         "project_id": project_id,
         "story_arc": outline.story_arc,
-        "chapters": outline.chapters if isinstance(outline.chapters, list) else [],
-        "reveal_plan": outline.reveal_plan
-        if isinstance(outline.reveal_plan, list)
-        else [],
+        "chapters": _read_outline_list(outline, "chapters"),
+        "reveal_plan": _read_outline_list(outline, "reveal_plan"),
     }
     if warning:
         result["warning"] = warning
@@ -443,9 +454,7 @@ async def diagnose_outline(
             "story_arc_preview": (existing_outline.story_arc[:300] + "...")
             if existing_outline and len(existing_outline.story_arc) > 300
             else (existing_outline.story_arc if existing_outline else ""),
-            "chapters_count": len(existing_outline.chapters)
-            if existing_outline and isinstance(existing_outline.chapters, list)
-            else 0,
+            "chapters_count": len(_read_outline_list(existing_outline, "chapters")),
         }
         if existing_outline
         else None,
@@ -651,12 +660,8 @@ async def generate_outline_stream(
                     "id": outline.id,
                     "project_id": project_id_val,
                     "story_arc": outline.story_arc,
-                    "chapters": outline.chapters
-                    if isinstance(outline.chapters, list)
-                    else [],
-                    "reveal_plan": outline.reveal_plan
-                    if isinstance(outline.reveal_plan, list)
-                    else [],
+                    "chapters": _read_outline_list(outline, "chapters"),
+                    "reveal_plan": _read_outline_list(outline, "reveal_plan"),
                 }
 
                 event_data = {"type": "complete", "outline": result}
@@ -741,10 +746,8 @@ async def get_outline(
         "id": outline.id,
         "project_id": project_id,
         "story_arc": outline.story_arc,
-        "chapters": outline.chapters if isinstance(outline.chapters, list) else [],
-        "reveal_plan": outline.reveal_plan
-        if isinstance(outline.reveal_plan, list)
-        else [],
+        "chapters": _read_outline_list(outline, "chapters"),
+        "reveal_plan": _read_outline_list(outline, "reveal_plan"),
         "created_at": outline.created_at.isoformat() if outline.created_at else None,
         "updated_at": outline.updated_at.isoformat() if outline.updated_at else None,
     }
@@ -795,10 +798,8 @@ async def update_outline(
         "id": outline.id,
         "project_id": project_id,
         "story_arc": outline.story_arc,
-        "chapters": outline.chapters if isinstance(outline.chapters, list) else [],
-        "reveal_plan": outline.reveal_plan
-        if isinstance(outline.reveal_plan, list)
-        else [],
+        "chapters": _read_outline_list(outline, "chapters"),
+        "reveal_plan": _read_outline_list(outline, "reveal_plan"),
     }
 
 

@@ -7,6 +7,8 @@ version boundary, excerpt storage, type resolution, payload key validation,
 Alembic upgrade-downgrade-upgrade.
 """
 
+import copy
+
 import pytest
 from sqlalchemy import func, select
 
@@ -228,7 +230,8 @@ async def test_legacy_write_does_not_mutate_worldview(client, auth_headers):
         worldview = await session.scalar(
             select(Worldview).where(Worldview.project_id == project_id)
         )
-        old_characters = list(worldview.characters)
+        old_characters = copy.deepcopy(worldview.characters)
+        old_characters_type = type(worldview.characters)
         old_setting_types = await session.scalar(
             select(func.count()).select_from(SettingType)
         )
@@ -262,8 +265,8 @@ async def test_legacy_write_does_not_mutate_worldview(client, auth_headers):
         worldview = await session.scalar(
             select(Worldview).where(Worldview.project_id == project_id)
         )
-        assert len(worldview.characters) == len(old_characters)
-        assert worldview.characters[0]["name"] == "旧角色"
+        assert type(worldview.characters) is old_characters_type
+        assert worldview.characters == old_characters
         assert await session.scalar(
             select(func.count()).select_from(SettingType)
         ) == old_setting_types

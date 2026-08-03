@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import DATA_DIR
+from app.core.legacy_json import read_legacy_object_list
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +197,18 @@ def save_outline_file(project_id: str, outline: Any) -> None:
 
         created_at = getattr(outline, "created_at", None)
         updated_at = getattr(outline, "updated_at", None)
+        chapters = read_legacy_object_list(getattr(outline, "chapters", None))
+        reveal_plan = read_legacy_object_list(
+            getattr(outline, "reveal_plan", None)
+        )
+        if not chapters.valid or not reveal_plan.valid:
+            logger.warning(
+                "Outline file export skipped project=%s chapters=%s reveal_plan=%s",
+                project_id,
+                chapters.error_category or "valid",
+                reveal_plan.error_category or "valid",
+            )
+            return
 
         doc = {
             "_doc_type": "outline",
@@ -203,8 +216,8 @@ def save_outline_file(project_id: str, outline: Any) -> None:
             "_version": 1,
             "_exported_at": datetime.now(timezone.utc).isoformat(),
             "story_arc": getattr(outline, "story_arc", ""),
-            "chapters": getattr(outline, "chapters", []),
-            "reveal_plan": getattr(outline, "reveal_plan", []),
+            "chapters": chapters.items,
+            "reveal_plan": reveal_plan.items,
             "created_at": created_at.isoformat() if isinstance(created_at, datetime) else created_at,
             "updated_at": updated_at.isoformat() if isinstance(updated_at, datetime) else updated_at,
         }

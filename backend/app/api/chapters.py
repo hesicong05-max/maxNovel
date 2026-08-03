@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings as app_settings
 from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.llm_client import LLMResponseTruncatedError, llm_client
+from app.core.legacy_json import LegacyObjectListResult, read_legacy_object_list
 from app.core.maintenance import (
     PROJECT_WRITE_FROZEN_CODE,
     ProjectWriteFrozenError,
@@ -46,6 +47,25 @@ logger = logging.getLogger(__name__)
 # Word count validation constants
 MIN_WORD_COUNT = 500
 MAX_WORD_COUNT = 10000
+
+_LEGACY_OUTLINE_CHAPTERS_INVALID = "LEGACY_OUTLINE_CHAPTERS_INVALID"
+
+
+def _read_outline_object_list(
+    outline: Outline | None,
+    field_name: str,
+) -> LegacyObjectListResult:
+    if outline is None:
+        return LegacyObjectListResult(items=[])
+    result = read_legacy_object_list(getattr(outline, field_name, None))
+    if not result.valid:
+        logger.warning(
+            "Invalid legacy outline list project=%s field=%s category=%s",
+            outline.project_id,
+            field_name,
+            result.error_category,
+        )
+    return result
 
 # Prevent overlapping single/batch writers from corrupting the same project's
 # chapter and memory state within one application process. Database uniqueness
@@ -112,7 +132,7 @@ async def get_word_counts(
     )
     outline = ol_result.scalar_one_or_none()
 
-    outline_chapters = (outline.chapters if outline else []) or []
+    outline_chapters = _read_outline_object_list(outline, "chapters").items
     total_word_count = None
 
     # Check if total_word_count is stored in outline metadata
@@ -214,7 +234,16 @@ async def update_word_counts(
     ensure_project_writes_available()
 
     # Update chapter entries with target_word_count
-    chapters_data = list(outline.chapters or [])
+    chapters_result = _read_outline_object_list(outline, "chapters")
+    if not chapters_result.valid:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": _LEGACY_OUTLINE_CHAPTERS_INVALID,
+                "message": "大纲章节配置无法读取，请重新保存大纲后重试",
+            },
+        )
+    chapters_data = chapters_result.items
     for ch in chapters_data:
         ch_num = ch.get("chapter_num")
         if ch_num and ch_num in overrides:
@@ -327,8 +356,9 @@ async def get_progress(
     )
     outline = ol_result.scalar_one_or_none()
     phase = ""
-    if outline and outline.reveal_plan:
-        for entry in outline.reveal_plan:
+    reveal_plan = _read_outline_object_list(outline, "reveal_plan").items
+    if reveal_plan:
+        for entry in reveal_plan:
             if isinstance(entry, dict) and entry.get("chapter") == (
                 current_chapter or 1
             ):
@@ -742,10 +772,25 @@ async def _generate_chapter_core(
         yield _sse({"type": "error", "error": "世界观不存在"})
         return
 
+    chapters_result = _read_outline_object_list(outline, "chapters")
+    if not chapters_result.valid:
+        yield _sse(
+            {
+                "type": "error",
+                "error": "大纲章节配置无法读取，请重新保存大纲后重试",
+                "code": _LEGACY_OUTLINE_CHAPTERS_INVALID,
+            }
+        )
+        return
+    outline_chapters = chapters_result.items
+    outline_reveal_plan = _read_outline_object_list(
+        outline, "reveal_plan"
+    ).items
+
     # Find the chapter entry in outline
     chapter_entry = None
     total_word_count_target = None
-    for ch in outline.chapters or []:
+    for ch in outline_chapters:
         if ch.get("chapter_num") == -1:
             total_word_count_target = ch.get("total_word_count")
         elif ch.get("chapter_num") == chapter_num:
@@ -786,7 +831,7 @@ async def _generate_chapter_core(
 
     # Round 2: also check outline.reveal_plan for this chapter
     # (reveal_plan.elements contains names, same as chapter.reveal_elements)
-    for entry in outline.reveal_plan or []:
+    for entry in outline_reveal_plan:
         if not isinstance(entry, dict):
             continue
         if entry.get("chapter") != chapter_num:
@@ -831,7 +876,7 @@ async def _generate_chapter_core(
     # Determine phase from outline's LLM-generated reveal_plan
     phase = ""
     phase_guidance = ""
-    for entry in outline.reveal_plan or []:
+    for entry in outline_reveal_plan:
         if isinstance(entry, dict) and entry.get("chapter") == chapter_num:
             phase = entry.get("phase", "")
             phase_guidance = entry.get("summary", "")

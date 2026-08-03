@@ -342,19 +342,30 @@ async def test_chapter_stream_rechecks_freeze_before_final_commit(
         Outline(
             project_id=project_id,
             story_arc="林远踏上旅途。",
-            chapters=[
-                {
-                    "chapter_num": 1,
-                    "title": "启程",
-                    "summary": "林远出发。",
-                    "key_events": ["离开故乡"],
-                    "reveal_elements": ["林远"],
-                }
-            ],
-            reveal_plan=[],
+            chapters=json.dumps(
+                [
+                    {
+                        "chapter_num": 1,
+                        "title": "启程",
+                        "summary": "林远出发。",
+                        "key_events": ["离开故乡"],
+                        "reveal_elements": ["林远"],
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            reveal_plan="{malformed",
         )
     )
     await db_session.commit()
+
+    outline_response = await client.get(
+        f"/api/outline/{project_id}",
+        headers=auth_headers,
+    )
+    assert outline_response.status_code == 200
+    assert outline_response.json()["chapters"][0]["title"] == "启程"
+    assert outline_response.json()["reveal_plan"] == []
 
     async def freeze_after_generation(*_args, **_kwargs):
         yield "林远离开故乡，踏上旅途。"
@@ -399,3 +410,86 @@ async def test_chapter_stream_rechecks_freeze_before_final_commit(
         if isinstance(event.get("error"), dict)
     )
     assert all(event["type"] != "batch_complete" for event in batch_events)
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_invalid_legacy_outline_is_not_generated_or_overwritten(
+    client, auth_headers, db_session, monkeypatch
+):
+    project_id = await _create_project(client, auth_headers)
+    worldview = await client.post(
+        f"/api/worldview/{project_id}",
+        json=WORLDVIEW_PAYLOAD,
+        headers=auth_headers,
+    )
+    assert worldview.status_code == 200
+
+    raw_chapters = "{invalid chapters"
+    outline = Outline(
+        project_id=project_id,
+        story_arc="损坏数据必须保持原样。",
+        chapters=raw_chapters,
+        reveal_plan="[]",
+    )
+    db_session.add(outline)
+    await db_session.commit()
+
+    word_counts = await client.get(
+        f"/api/chapters/{project_id}/word-counts",
+        headers=auth_headers,
+    )
+    assert word_counts.status_code == 200
+    assert word_counts.json()["chapters"][0]["chapter_num"] == 1
+
+    outline_response = await client.get(
+        f"/api/outline/{project_id}",
+        headers=auth_headers,
+    )
+    assert outline_response.status_code == 200
+    assert outline_response.json()["chapters"] == []
+
+    rejected_update = await client.put(
+        f"/api/chapters/{project_id}/word-counts",
+        headers=auth_headers,
+        json={
+            "total_word_count": 1000,
+            "chapters": [{"chapter_num": 1, "target_word_count": 1000}],
+        },
+    )
+    assert rejected_update.status_code == 409
+    assert (
+        rejected_update.json()["detail"]["code"]
+        == "LEGACY_OUTLINE_CHAPTERS_INVALID"
+    )
+
+    llm_called = False
+
+    async def forbidden_llm(*_args, **_kwargs):
+        nonlocal llm_called
+        llm_called = True
+        yield "不应生成"
+
+    monkeypatch.setattr(
+        "app.api.chapters.llm_client.chat_stream",
+        forbidden_llm,
+    )
+    generation = await client.post(
+        f"/api/chapters/{project_id}/1/generate",
+        headers=auth_headers,
+    )
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in generation.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert events == [
+        {
+            "type": "error",
+            "error": "大纲章节配置无法读取，请重新保存大纲后重试",
+            "code": "LEGACY_OUTLINE_CHAPTERS_INVALID",
+        }
+    ]
+    assert llm_called is False
+
+    await db_session.refresh(outline)
+    assert outline.chapters == raw_chapters

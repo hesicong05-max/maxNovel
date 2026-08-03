@@ -191,6 +191,37 @@ class TestSaveOutlineFile:
         assert len(data["reveal_plan"]) == 1
         assert data["reveal_plan"][0]["phase"] == "起势"
 
+    def test_legacy_json_strings_export_as_arrays(
+        self, mock_outline, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
+        mock_outline.chapters = json.dumps(mock_outline.chapters)
+        mock_outline.reveal_plan = json.dumps(mock_outline.reveal_plan)
+
+        save_outline_file("proj_legacy", mock_outline)
+
+        data = json.loads(
+            (tmp_path / "proj_legacy" / "outline.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert isinstance(data["chapters"], list)
+        assert data["chapters"][0]["title"] == "Awakening"
+        assert isinstance(data["reveal_plan"], list)
+
+    def test_invalid_legacy_data_does_not_overwrite_existing_export(
+        self, mock_outline, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
+        save_outline_file("proj_safe", mock_outline)
+        filepath = tmp_path / "proj_safe" / "outline.json"
+        original = filepath.read_bytes()
+
+        mock_outline.chapters = "{invalid"
+        save_outline_file("proj_safe", mock_outline)
+
+        assert filepath.read_bytes() == original
+
     def test_file_contains_metadata(self, mock_outline, tmp_path, monkeypatch):
         """File contains doc_type, project_id, version, exported_at."""
         monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
