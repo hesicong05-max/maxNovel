@@ -47,6 +47,9 @@ def test_lore_migration_upgrade_and_downgrade_are_additive(tmp_path):
             "element_state_events",
             "element_relations",
             "element_relation_versions",
+            "lore_extraction_batches",
+            "lore_extraction_candidates",
+            "lore_candidate_field_evidence",
         }.issubset(tables)
         project_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(projects)")
@@ -69,6 +72,22 @@ def test_lore_migration_upgrade_and_downgrade_are_additive(tmp_path):
         assert "fk_element_relation_project_source" in table_sql["element_relations"]
         assert "fk_element_relation_project_target" in table_sql["element_relations"]
         assert "uq_element_relation_version" in table_sql["element_relation_versions"]
+        assert (
+            "uq_lore_extraction_project_idempotency"
+            in table_sql["lore_extraction_batches"]
+        )
+        assert (
+            "fk_lore_extraction_candidate_project_batch"
+            in table_sql["lore_extraction_candidates"]
+        )
+        assert (
+            "fk_lore_extraction_candidate_project_element"
+            in table_sql["lore_extraction_candidates"]
+        )
+        assert (
+            "uq_lore_candidate_field_evidence"
+            in table_sql["lore_candidate_field_evidence"]
+        )
 
     _run_alembic(backend_dir, database_url, "downgrade", "a1d3c7e9f002")
     with sqlite3.connect(database_path) as connection:

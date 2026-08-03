@@ -25,6 +25,24 @@ class LLMResponseTruncatedError(RuntimeError):
     """Raised when the provider stops because the output token limit was reached."""
 
 
+class LLMSingleCallError(RuntimeError):
+    """Safe failure metadata for an at-most-once LLM request."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool = False,
+        outcome_unknown: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.safe_message = message
+        self.retryable = retryable
+        self.outcome_unknown = outcome_unknown
+
+
 class LLMClient:
     """Async client for OpenAI-compatible chat completions API."""
 
@@ -67,6 +85,80 @@ class LLMClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+
+    async def chat_once(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Call the provider exactly once, with no mock response or retry.
+
+        Extraction jobs use this method because retrying an uncertain request can
+        duplicate provider work or charges. Error metadata never contains the
+        provider response body or user content.
+        """
+
+        self._reload()
+        if not self.api_key:
+            raise LLMSingleCallError(
+                "LLM_NOT_CONFIGURED",
+                "LLM 尚未配置，未发起提取调用",
+            )
+
+        client = await self._get_client()
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature if temperature is not None else self.temperature,
+            "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
+        }
+        try:
+            response = await client.post(
+                f"{self.base_url}/chat/completions",
+                headers=self._headers(),
+                json=payload,
+            )
+        except httpx.TimeoutException as exc:
+            raise LLMSingleCallError(
+                "LLM_OUTCOME_UNKNOWN",
+                "LLM 请求超时，结果状态无法确认",
+                outcome_unknown=True,
+            ) from exc
+        except httpx.TransportError as exc:
+            raise LLMSingleCallError(
+                "LLM_OUTCOME_UNKNOWN",
+                "LLM 连接中断，结果状态无法确认",
+                outcome_unknown=True,
+            ) from exc
+
+        if response.status_code != 200:
+            raise LLMSingleCallError(
+                "LLM_REQUEST_REJECTED",
+                f"LLM 请求未成功（HTTP {response.status_code}）",
+                retryable=response.status_code in _RETRY_STATUS_CODES,
+            )
+
+        try:
+            data = response.json()
+            choice = data["choices"][0]
+            content = choice["message"]["content"]
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise LLMSingleCallError(
+                "LLM_RESPONSE_INVALID",
+                "LLM 返回了无法读取的响应",
+            ) from exc
+        if choice.get("finish_reason") == "length":
+            raise LLMSingleCallError(
+                "LLM_RESPONSE_TRUNCATED",
+                "LLM 输出不完整，未保存任何候选",
+            )
+        if not isinstance(content, str):
+            raise LLMSingleCallError(
+                "LLM_RESPONSE_INVALID",
+                "LLM 返回了无法读取的响应",
+            )
+        return content
 
     async def chat(
         self,

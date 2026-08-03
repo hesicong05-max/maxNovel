@@ -18,6 +18,7 @@ from app.api import (
     community,
     export,
     lore,
+    lore_extraction,
     outline,
     projects,
     settings,
@@ -226,6 +227,7 @@ app.include_router(auth.router)
 app.include_router(projects.router)
 app.include_router(worldview.router)
 app.include_router(lore.router)
+app.include_router(lore_extraction.router)
 app.include_router(outline.router)
 app.include_router(chapters.router)
 app.include_router(export.router)

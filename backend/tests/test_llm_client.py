@@ -9,6 +9,7 @@ import pytest
 from app.core.llm_client import (
     LLMClient,
     LLMResponseTruncatedError,
+    LLMSingleCallError,
     _mock_chapter,
     _mock_outline,
     _mock_response,
@@ -412,6 +413,71 @@ class TestLLMClientChat:
             client._client = mock_http_client
             result = await client.chat([{"role": "user", "content": "Hi"}])
             assert result == "Connected"
+
+
+class TestLLMClientChatOnce:
+    @pytest.mark.asyncio
+    async def test_chat_once_never_uses_mock_without_key(self):
+        client = LLMClient()
+        with patch("app.core.llm_client.load_settings") as mock_load:
+            mock_load.return_value = {
+                "api_key": "",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
+            with pytest.raises(LLMSingleCallError) as caught:
+                await client.chat_once([{"role": "user", "content": "Hi"}])
+            assert caught.value.code == "LLM_NOT_CONFIGURED"
+
+    @pytest.mark.asyncio
+    async def test_chat_once_timeout_has_unknown_outcome_and_one_attempt(self):
+        client = LLMClient()
+        with patch("app.core.llm_client.load_settings") as mock_load:
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
+            mock_http_client = AsyncMock()
+            mock_http_client.post = AsyncMock(
+                side_effect=httpx.TimeoutException("timeout")
+            )
+            mock_http_client.is_closed = False
+            client._client = mock_http_client
+
+            with pytest.raises(LLMSingleCallError) as caught:
+                await client.chat_once([{"role": "user", "content": "Hi"}])
+            assert caught.value.code == "LLM_OUTCOME_UNKNOWN"
+            assert caught.value.outcome_unknown is True
+            assert mock_http_client.post.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_chat_once_does_not_retry_retryable_http_status(self):
+        client = LLMClient()
+        with patch("app.core.llm_client.load_settings") as mock_load:
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
+            response = MagicMock()
+            response.status_code = 503
+            mock_http_client = AsyncMock()
+            mock_http_client.post = AsyncMock(return_value=response)
+            mock_http_client.is_closed = False
+            client._client = mock_http_client
+
+            with pytest.raises(LLMSingleCallError) as caught:
+                await client.chat_once([{"role": "user", "content": "Hi"}])
+            assert caught.value.code == "LLM_REQUEST_REJECTED"
+            assert caught.value.retryable is True
+            assert mock_http_client.post.call_count == 1
 
 
 # ─── Chat stream tests ──────────────────────────────────────
