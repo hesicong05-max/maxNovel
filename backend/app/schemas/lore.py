@@ -89,6 +89,7 @@ class LoreRepositoryOverview(BaseModel):
     needs_attention: int
     disabled: int
     archived: int
+    review_pending: int = 0
     migration_status: LoreMigrationStatus
     capabilities: LoreRepositoryCapabilities
     count_definitions: dict[str, dict[str, Any]] = Field(default_factory=dict)
@@ -451,3 +452,103 @@ class LoreRelationVersionSummary(BaseModel):
 class LoreRelationVersionsResponse(BaseModel):
     items: list[LoreRelationVersionSummary]
     total: int
+
+
+class LoreReviewEndpoint(BaseModel):
+    id: str
+    name: str
+    type: LoreTypeSummary
+    summary: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
+    field_states: dict[str, str] = Field(default_factory=dict)
+    content_version: int
+    lifecycle_status: str
+    enabled: bool
+    sources: list[LoreSourceSummary] = Field(default_factory=list)
+
+
+class LoreReviewEvidence(BaseModel):
+    field_key: str
+    label: str
+    comparison: Literal["same", "different", "left_empty", "right_empty"]
+    left_value: str | None = None
+    right_value: str | None = None
+
+
+class LoreReviewDecisionEvent(BaseModel):
+    id: str
+    previous_status: str
+    new_status: str
+    evidence_revision: int
+    note: str = ""
+    applied: bool
+    performed_by: str | None = None
+    created_at: datetime
+
+
+class LoreReviewSuggestionListItem(BaseModel):
+    id: str
+    kind: Literal["possible_duplicate", "possible_conflict"]
+    detection_state: Literal["active", "stale"]
+    review_status: str
+    needs_review: bool
+    lock_version: int
+    evidence_revision: int
+    left: LoreRelationEndpoint
+    right: LoreRelationEndpoint
+    primary_reason: str
+    stale: bool
+    updated_at: datetime
+
+
+class LoreReviewSuggestionDetail(LoreReviewSuggestionListItem):
+    rule_key: str
+    rule_version: int
+    left_snapshot: LoreReviewEndpoint
+    right_snapshot: LoreReviewEndpoint
+    evidence: list[LoreReviewEvidence]
+    decided_evidence_revision: int | None = None
+    history: list[LoreReviewDecisionEvent] = Field(default_factory=list)
+
+
+class LoreReviewSuggestionsResponse(BaseModel):
+    items: list[LoreReviewSuggestionListItem]
+    next_cursor: str | None = None
+    has_more: bool
+    total: int
+
+
+class LoreReviewScanResponse(BaseModel):
+    created: int
+    updated: int
+    unchanged: int
+    marked_stale: int
+    active_total: int
+    pending_total: int
+    truncated: bool = False
+    rescan_required: bool = False
+
+
+class LoreReviewDecisionInput(BaseModel):
+    operation_key: str = Field(
+        ...,
+        min_length=16,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    expected_version: int = Field(..., ge=1)
+    expected_evidence_revision: int = Field(..., ge=1)
+    decision: Literal[
+        "deferred",
+        "confirmed_duplicate",
+        "confirmed_conflict",
+        "not_an_issue",
+    ]
+    note: str = Field(default="", max_length=500)
+
+
+class LoreReviewDecisionResponse(BaseModel):
+    suggestion: LoreReviewSuggestionDetail
+    replayed: bool = False
+    applied: bool = True
+    next_pending_id: str | None = None

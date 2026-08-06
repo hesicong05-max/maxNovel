@@ -17,6 +17,7 @@ export interface LoreOverview {
   needs_attention: number;
   disabled: number;
   archived: number;
+  review_pending: number;
   migration_status: LoreMigrationStatus;
   capabilities: {
     candidate_review: boolean;
@@ -356,4 +357,114 @@ export interface LoreCandidateFilters {
   needs_attention?: boolean;
   cursor?: string;
   limit?: number;
+}
+
+export type LoreReviewKind = "possible_duplicate" | "possible_conflict";
+export type LoreReviewStatus =
+  | "pending"
+  | "deferred"
+  | "confirmed_duplicate"
+  | "confirmed_conflict"
+  | "not_an_issue";
+
+export interface LoreReviewEndpointSummary {
+  id: string;
+  name: string;
+  type: { key: string; display_name: string };
+  summary: string;
+  lifecycle_status: string;
+  enabled: boolean;
+}
+
+export interface LoreReviewEndpoint extends LoreReviewEndpointSummary {
+  payload: Record<string, unknown>;
+  field_states: Record<string, LoreFieldState>;
+  content_version: number;
+  sources: Array<{
+    id: string | null;
+    kind: string;
+    label: string;
+    is_primary: boolean;
+    created_at: string;
+    reference: string | null;
+    excerpt: string | null;
+    confirmation_status: string;
+  }>;
+}
+
+export interface LoreReviewListItem {
+  id: string;
+  kind: LoreReviewKind;
+  detection_state: "active" | "stale";
+  review_status: LoreReviewStatus;
+  needs_review: boolean;
+  lock_version: number;
+  evidence_revision: number;
+  left: LoreReviewEndpointSummary;
+  right: LoreReviewEndpointSummary;
+  primary_reason: string;
+  stale: boolean;
+  updated_at: string;
+}
+
+export interface LoreReviewEvidence {
+  field_key: string;
+  label: string;
+  comparison: "same" | "different" | "left_empty" | "right_empty";
+  left_value: string | null;
+  right_value: string | null;
+}
+
+export interface LoreReviewDecisionEvent {
+  id: string;
+  previous_status: LoreReviewStatus;
+  new_status: LoreReviewStatus;
+  evidence_revision: number;
+  note: string;
+  applied: boolean;
+  performed_by: string | null;
+  created_at: string;
+}
+
+export interface LoreReviewDetail extends LoreReviewListItem {
+  rule_key: string;
+  rule_version: number;
+  left_snapshot: LoreReviewEndpoint;
+  right_snapshot: LoreReviewEndpoint;
+  evidence: LoreReviewEvidence[];
+  decided_evidence_revision: number | null;
+  history: LoreReviewDecisionEvent[];
+}
+
+export interface LoreReviewListResponse {
+  items: LoreReviewListItem[];
+  next_cursor: string | null;
+  has_more: boolean;
+  total: number;
+}
+
+export interface LoreReviewScanResponse {
+  created: number;
+  updated: number;
+  unchanged: number;
+  marked_stale: number;
+  active_total: number;
+  pending_total: number;
+  truncated: boolean;
+  rescan_required: boolean;
+}
+
+export interface LoreReviewDecisionInput {
+  operation_key: string;
+  expected_version: number;
+  expected_evidence_revision: number;
+  decision: Exclude<LoreReviewStatus, "pending">;
+  note: string;
+}
+
+export interface LoreReviewDecisionResponse {
+  suggestion: LoreReviewDetail;
+  replayed: boolean;
+  applied: boolean;
+  next_pending_id: string | null;
 }

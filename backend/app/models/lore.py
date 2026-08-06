@@ -553,3 +553,115 @@ class ElementRelationVersion(Base):
         nullable=True,
     )
     created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+
+class LoreReviewSuggestion(Base):
+    """Reviewable, non-destructive duplicate/conflict clue for formal lore."""
+
+    __tablename__ = "lore_review_suggestions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "left_element_id"],
+            ["setting_elements.project_id", "setting_elements.id"],
+            name="fk_lore_review_suggestion_left",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "right_element_id"],
+            ["setting_elements.project_id", "setting_elements.id"],
+            name="fk_lore_review_suggestion_right",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "project_id", "left_element_id", "right_element_id", "rule_key",
+            name="uq_lore_review_suggestion_pair_rule",
+        ),
+        UniqueConstraint(
+            "project_id", "id", name="uq_lore_review_suggestion_project_id_id",
+        ),
+        CheckConstraint(
+            "left_element_id <> right_element_id",
+            name="ck_lore_review_suggestion_distinct_elements",
+        ),
+        CheckConstraint(
+            "kind IN ('possible_duplicate', 'possible_conflict')",
+            name="ck_lore_review_suggestion_kind",
+        ),
+        CheckConstraint(
+            "detection_state IN ('active', 'stale')",
+            name="ck_lore_review_suggestion_detection_state",
+        ),
+        CheckConstraint(
+            "review_status IN ('pending', 'deferred', 'confirmed_duplicate', "
+            "'confirmed_conflict', 'not_an_issue')",
+            name="ck_lore_review_suggestion_review_status",
+        ),
+        Index(
+            "ix_lore_review_suggestions_project_status_updated",
+            "project_id", "detection_state", "review_status", "updated_at", "id",
+        ),
+    )
+
+    id = Column(String(32), primary_key=True, default=gen_id)
+    project_id = Column(
+        String(32), ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    left_element_id = Column(String(32), nullable=False, index=True)
+    right_element_id = Column(String(32), nullable=False, index=True)
+    rule_key = Column(String(80), nullable=False)
+    rule_version = Column(Integer, nullable=False, default=1)
+    kind = Column(String(30), nullable=False)
+    detection_state = Column(String(20), nullable=False, default="active")
+    review_status = Column(String(30), nullable=False, default="pending")
+    left_content_version = Column(Integer, nullable=False)
+    right_content_version = Column(Integer, nullable=False)
+    evidence = Column(JSON, nullable=False, default=list)
+    evidence_fingerprint = Column(String(64), nullable=False)
+    evidence_revision = Column(Integer, nullable=False, default=1)
+    decided_evidence_revision = Column(Integer, nullable=True)
+    lock_version = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+
+class LoreReviewSuggestionEvent(Base):
+    """Decision audit record and durable idempotency receipt."""
+
+    __tablename__ = "lore_review_suggestion_events"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "suggestion_id"],
+            ["lore_review_suggestions.project_id", "lore_review_suggestions.id"],
+            name="fk_lore_review_event_suggestion", ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "project_id", "performed_by", "operation_key",
+            name="uq_lore_review_event_operation",
+        ),
+        Index(
+            "ix_lore_review_events_suggestion_created",
+            "suggestion_id", "created_at", "id",
+        ),
+    )
+
+    id = Column(String(32), primary_key=True, default=gen_id)
+    project_id = Column(
+        String(32), ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    suggestion_id = Column(String(32), nullable=False, index=True)
+    performed_by = Column(
+        String(32), ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    operation_key = Column(String(128), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    previous_status = Column(String(30), nullable=False)
+    new_status = Column(String(30), nullable=False)
+    evidence_revision = Column(Integer, nullable=False)
+    previous_lock_version = Column(Integer, nullable=False)
+    new_lock_version = Column(Integer, nullable=False)
+    note = Column(Text, nullable=False, default="")
+    applied = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)

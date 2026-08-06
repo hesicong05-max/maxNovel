@@ -46,6 +46,11 @@ import type {
   LoreRelationStateInput,
   LoreRelationType,
   LoreRelationUpdateInput,
+  LoreReviewDecisionInput,
+  LoreReviewDecisionResponse,
+  LoreReviewDetail,
+  LoreReviewListResponse,
+  LoreReviewScanResponse,
   LoreTypesResponse,
 } from "@/types/lore";
 
@@ -385,6 +390,38 @@ export const api = {
     data: LoreRelationStateInput
   ) => fetchJSON<LoreRelation>(
     `/projects/${projectId}/lore/relations/${relationId}/${action}`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
+  scanLoreReviews: (projectId: string) =>
+    fetchJSON<LoreReviewScanResponse>(
+      `/projects/${projectId}/lore/reviews/scan`,
+      { method: "POST" }
+    ),
+  listLoreReviews: (
+    projectId: string,
+    filters: {
+      q?: string;
+      kind?: "possible_duplicate" | "possible_conflict";
+      review_status?: string;
+      cursor?: string;
+      limit?: number;
+    } = {},
+    signal?: AbortSignal
+  ) => fetchJSON<LoreReviewListResponse>(
+    withQuery(`/projects/${projectId}/lore/reviews`, filters),
+    { signal }
+  ),
+  getLoreReview: (projectId: string, suggestionId: string, signal?: AbortSignal) =>
+    fetchJSON<LoreReviewDetail>(
+      `/projects/${projectId}/lore/reviews/${suggestionId}`,
+      { signal }
+    ),
+  decideLoreReview: (
+    projectId: string,
+    suggestionId: string,
+    data: LoreReviewDecisionInput
+  ) => fetchJSON<LoreReviewDecisionResponse>(
+    `/projects/${projectId}/lore/reviews/${suggestionId}/decide`,
     { method: "POST", body: JSON.stringify(data) }
   ),
   getLoreCandidate: (

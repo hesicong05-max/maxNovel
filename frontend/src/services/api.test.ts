@@ -525,6 +525,48 @@ describe("API - lore repository", () => {
       expect.objectContaining({ method: "POST", body: expect.stringContaining('"expected_version":2') })
     );
   });
+
+  it("uses the scoped review scan, filters, detail, and idempotent decision endpoints", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ items: [], has_more: false, total: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const decision = {
+      operation_key: "review-operation-0001",
+      expected_version: 3,
+      expected_evidence_revision: 2,
+      decision: "confirmed_duplicate" as const,
+      note: "作者确认",
+    };
+
+    await api.scanLoreReviews("project-1");
+    await api.listLoreReviews("project-1", {
+      q: "林岚",
+      kind: "possible_conflict",
+      review_status: "needs_review",
+      limit: 20,
+    });
+    await api.getLoreReview("project-1", "review-1");
+    await api.decideLoreReview("project-1", "review-1", decision);
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(1,
+      "/api/projects/project-1/lore/reviews/scan",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(fetchSpy.mock.calls[1][0]).toBe(
+      "/api/projects/project-1/lore/reviews?q=%E6%9E%97%E5%B2%9A&kind=possible_conflict&review_status=needs_review&limit=20"
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(3,
+      "/api/projects/project-1/lore/reviews/review-1",
+      expect.objectContaining({ headers: expect.any(Object) })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(4,
+      "/api/projects/project-1/lore/reviews/review-1/decide",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(decision) })
+    );
+  });
 });
 
 describe("API - Projects", () => {

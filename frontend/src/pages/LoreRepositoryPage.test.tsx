@@ -20,6 +20,7 @@ const overview: LoreOverview = {
   needs_attention: 1,
   disabled: 0,
   archived: 0,
+  review_pending: 0,
   migration_status: { storage_mode: "relational", state: "ready", read_only: false },
   capabilities: {
     candidate_review: true,
@@ -255,6 +256,33 @@ describe("LoreRepositoryPage", () => {
       listLoreCandidates: vi.fn().mockResolvedValue(candidateResponse),
       listLoreTypes: vi.fn().mockResolvedValue({ items: [], total: 0 }),
     });
+  });
+
+  it("opens a separate formal-lore review scope without mixing candidate attention", async () => {
+    const listLoreReviews = vi.fn().mockResolvedValue({
+      items: [], next_cursor: null, has_more: false, total: 0,
+    });
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      ...relationApiMocks(),
+      getLoreOverview: vi.fn().mockResolvedValue({
+        ...writableOverview,
+        review_pending: 3,
+        capabilities: { ...writableOverview.capabilities, formal_conflict_tracking: true },
+      }),
+      listLoreElements: vi.fn().mockResolvedValue(formalResponse()),
+      listLoreCandidates: vi.fn().mockResolvedValue(candidateResponse),
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+      listLoreReviews,
+    });
+    renderPage();
+    expect((await screen.findAllByText("待审核提取")).length).toBeGreaterThan(0);
+    expect(screen.getByText("需要关注")).toBeInTheDocument();
+    expect(screen.getByText("待核对线索")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "重复与冲突" }));
+    expect(await screen.findByRole("heading", { name: "重复与冲突" })).toBeInTheDocument();
+    expect(screen.getByText("系统只提供待核对线索，不会自动认定、合并或改写设定。")).toBeInTheDocument();
+    await waitFor(() => expect(listLoreReviews).toHaveBeenCalled());
   });
 
   it("does not expose manual creation when the capability is closed", async () => {

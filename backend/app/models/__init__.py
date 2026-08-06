@@ -22,6 +22,8 @@ from app.models.lore import (  # noqa: F401
     LegacyElementMap,
     LoreElementCreateOperation,
     LoreRelationCreateOperation,
+    LoreReviewSuggestion,
+    LoreReviewSuggestionEvent,
     ProjectLoreMigration,
     SettingElement,
     SettingType,

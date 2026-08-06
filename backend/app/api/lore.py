@@ -10,9 +10,10 @@ from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.config import settings
 from app.core.auth import User, get_current_user, get_project_for_owner
@@ -26,6 +27,7 @@ from app.core.lore_migration import (
     validate_projection,
 )
 from app.core.lore_relation_types import RELATION_TYPES, resolve_relation_type
+from app.core.lore_review import scan_lore_review_suggestions
 from app.core.lore_write import (
     LoreStaleVersionError,
     LoreWriteError,
@@ -50,10 +52,12 @@ from app.models.lore import (
     ElementVersion,
     LoreElementCreateOperation,
     LoreRelationCreateOperation,
+    LoreReviewSuggestion,
+    LoreReviewSuggestionEvent,
     SettingElement,
     SettingType,
 )
-from app.models.project import Worldview
+from app.models.project import Worldview, _utcnow
 from app.schemas.lore import (
     LoreElementCreate,
     LoreElementCreateResponse,
@@ -78,6 +82,15 @@ from app.schemas.lore import (
     LoreRelationUpdate,
     LoreRelationVersionSummary,
     LoreRelationVersionsResponse,
+    LoreReviewDecisionEvent,
+    LoreReviewDecisionInput,
+    LoreReviewDecisionResponse,
+    LoreReviewEndpoint,
+    LoreReviewEvidence,
+    LoreReviewScanResponse,
+    LoreReviewSuggestionDetail,
+    LoreReviewSuggestionListItem,
+    LoreReviewSuggestionsResponse,
     LoreRepositoryCapabilities,
     LoreRepositoryOverview,
     LoreSourceSummary,
@@ -97,6 +110,7 @@ _CURSOR_VERSION = 1
 _CURSOR_SECRET = (settings.JWT_SECRET or "development-lore-cursor-secret").encode()
 _CREATE_FINGERPRINT_VERSION = "lore-element-create:v1"
 _RELATION_CREATE_FINGERPRINT_VERSION = "lore-relation-create:v1"
+_REVIEW_DECISION_FINGERPRINT_VERSION = "lore-review-decision:v1"
 
 _CONFIRMATION_LABELS = {
     "candidate": "待确认",
@@ -805,6 +819,20 @@ async def get_lore_repository_overview(
                 SettingElement.lifecycle_status == "archived",
             )
         )
+        review_pending = await db.scalar(
+            select(func.count())
+            .select_from(LoreReviewSuggestion)
+            .where(
+                LoreReviewSuggestion.project_id == project_id,
+                LoreReviewSuggestion.detection_state == "active",
+                or_(
+                    LoreReviewSuggestion.review_status.in_(("pending", "deferred")),
+                    LoreReviewSuggestion.decided_evidence_revision.is_(None),
+                    LoreReviewSuggestion.decided_evidence_revision
+                    != LoreReviewSuggestion.evidence_revision,
+                ),
+            )
+        )
         migration_status = _relational_migration_status()
     else:
         worldview = await db.scalar(
@@ -815,6 +843,7 @@ async def get_lore_repository_overview(
         confirmed_active = len(projection.elements)
         disabled = 0
         archived = 0
+        review_pending = 0
         migration_status = _migration_status(project, projection)
     return LoreRepositoryOverview(
         formal_total=int(formal_total or 0),
@@ -823,6 +852,7 @@ async def get_lore_repository_overview(
         needs_attention=int(attention_count or 0),
         disabled=int(disabled or 0),
         archived=int(archived or 0),
+        review_pending=int(review_pending or 0),
         migration_status=migration_status,
         capabilities=LoreRepositoryCapabilities(
             candidate_accept=(project.lore_storage_mode == "relational"),
@@ -830,6 +860,7 @@ async def get_lore_repository_overview(
                 project.lore_storage_mode == "relational"
                 and not migration_status.read_only
             ),
+            formal_conflict_tracking=(project.lore_storage_mode == "relational"),
         ),
         count_definitions={
             "formal_total": {"entity": "formal_lore"},
@@ -855,6 +886,11 @@ async def get_lore_repository_overview(
             "archived": {
                 "entity": "formal_lore",
                 "lifecycle_status": "archived",
+            },
+            "review_pending": {
+                "entity": "formal_lore_review_suggestion",
+                "detection_state": "active",
+                "needs_review": True,
             },
         },
     )
@@ -1594,6 +1630,547 @@ async def _replay_relation_create_operation(
             },
         )
     return await _build_relation_create_response(relation, db, replayed=True)
+
+
+def _review_endpoint_summary(
+    element: SettingElement,
+    setting_type: SettingType,
+) -> LoreRelationEndpoint:
+    return LoreRelationEndpoint(
+        id=element.id,
+        name=element.name,
+        type=LoreTypeSummary(
+            key=setting_type.key,
+            display_name=setting_type.display_name,
+        ),
+        summary=element.summary or "",
+        lifecycle_status=element.lifecycle_status,
+        enabled=element.enabled,
+    )
+
+
+def _review_primary_reason(suggestion: LoreReviewSuggestion) -> str:
+    evidence = suggestion.evidence or []
+    if suggestion.kind == "possible_conflict" and evidence:
+        labels = "、".join(str(item.get("label") or item.get("field_key")) for item in evidence[:3])
+        suffix = "等字段" if len(evidence) > 3 else "字段"
+        return f"名称和类型相同，但{labels}{suffix}的已提供内容不同"
+    return "名称和类型相同，系统建议人工核对是否为同一项设定"
+
+
+def _review_needs_review(suggestion: LoreReviewSuggestion) -> bool:
+    return suggestion.detection_state == "active" and (
+        suggestion.review_status in ("pending", "deferred")
+        or suggestion.decided_evidence_revision != suggestion.evidence_revision
+    )
+
+
+async def _review_endpoint_detail(
+    element: SettingElement,
+    setting_type: SettingType,
+    db: AsyncSession,
+) -> LoreReviewEndpoint:
+    source_rows = await db.execute(
+        select(ElementSource)
+        .where(
+            ElementSource.project_id == element.project_id,
+            ElementSource.element_id == element.id,
+        )
+        .order_by(ElementSource.is_primary.desc(), ElementSource.created_at.asc())
+    )
+    sources = [
+        LoreSourceSummary(
+            id=source.id,
+            kind=source.source_kind,
+            label=_source_kind_label(source.source_kind),
+            is_primary=source.is_primary,
+            created_at=source.created_at,
+            reference=source.source_ref,
+            locator=source.locator or {},
+            excerpt=source.excerpt,
+            excerpt_hash=source.excerpt_hash,
+            confirmation_status=source.confirmation_status,
+        )
+        for source in source_rows.scalars().all()
+    ]
+    return LoreReviewEndpoint(
+        id=element.id,
+        name=element.name,
+        type=LoreTypeSummary(
+            key=setting_type.key,
+            display_name=setting_type.display_name,
+        ),
+        summary=element.summary or "",
+        payload=element.payload or {},
+        field_states=element.field_states or {},
+        content_version=element.content_version,
+        lifecycle_status=element.lifecycle_status,
+        enabled=element.enabled,
+        sources=sources,
+    )
+
+
+async def _get_review_row(
+    project_id: str,
+    suggestion_id: str,
+    db: AsyncSession,
+    *,
+    for_update: bool = False,
+) -> LoreReviewSuggestion:
+    statement = select(LoreReviewSuggestion).where(
+        LoreReviewSuggestion.project_id == project_id,
+        LoreReviewSuggestion.id == suggestion_id,
+    )
+    if for_update:
+        statement = statement.with_for_update()
+    suggestion = await db.scalar(statement)
+    if suggestion is None:
+        raise HTTPException(status_code=404, detail="设定线索不存在")
+    return suggestion
+
+
+async def _build_review_detail(
+    suggestion: LoreReviewSuggestion,
+    db: AsyncSession,
+) -> LoreReviewSuggestionDetail:
+    left = await db.scalar(
+        select(SettingElement).where(
+            SettingElement.project_id == suggestion.project_id,
+            SettingElement.id == suggestion.left_element_id,
+        )
+    )
+    right = await db.scalar(
+        select(SettingElement).where(
+            SettingElement.project_id == suggestion.project_id,
+            SettingElement.id == suggestion.right_element_id,
+        )
+    )
+    if left is None or right is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "LORE_REVIEW_SUGGESTION_CORRUPT",
+                "message": "设定线索与正式设定不一致，已停止自动处理",
+            },
+        )
+    left_type = await db.scalar(select(SettingType).where(SettingType.id == left.type_id))
+    right_type = await db.scalar(select(SettingType).where(SettingType.id == right.type_id))
+    if left_type is None or right_type is None:
+        raise HTTPException(status_code=409, detail="设定线索的类型记录不完整")
+    left_detail = await _review_endpoint_detail(left, left_type, db)
+    right_detail = await _review_endpoint_detail(right, right_type, db)
+    event_rows = await db.execute(
+        select(LoreReviewSuggestionEvent)
+        .where(LoreReviewSuggestionEvent.suggestion_id == suggestion.id)
+        .order_by(
+            LoreReviewSuggestionEvent.created_at.asc(),
+            LoreReviewSuggestionEvent.id.asc(),
+        )
+    )
+    history = [
+        LoreReviewDecisionEvent(
+            id=event.id,
+            previous_status=event.previous_status,
+            new_status=event.new_status,
+            evidence_revision=event.evidence_revision,
+            note=event.note or "",
+            applied=event.applied,
+            performed_by=event.performed_by,
+            created_at=event.created_at,
+        )
+        for event in event_rows.scalars().all()
+    ]
+    stale = (
+        suggestion.detection_state == "stale"
+        or left.content_version != suggestion.left_content_version
+        or right.content_version != suggestion.right_content_version
+    )
+    return LoreReviewSuggestionDetail(
+        id=suggestion.id,
+        kind=suggestion.kind,
+        detection_state=suggestion.detection_state,
+        review_status=suggestion.review_status,
+        needs_review=_review_needs_review(suggestion),
+        lock_version=suggestion.lock_version,
+        evidence_revision=suggestion.evidence_revision,
+        left=_review_endpoint_summary(left, left_type),
+        right=_review_endpoint_summary(right, right_type),
+        primary_reason=_review_primary_reason(suggestion),
+        stale=stale,
+        updated_at=suggestion.updated_at,
+        rule_key=suggestion.rule_key,
+        rule_version=suggestion.rule_version,
+        left_snapshot=left_detail,
+        right_snapshot=right_detail,
+        evidence=[LoreReviewEvidence(**item) for item in (suggestion.evidence or [])],
+        decided_evidence_revision=suggestion.decided_evidence_revision,
+        history=history,
+    )
+
+
+def _review_decision_fingerprint(
+    suggestion_id: str,
+    body: LoreReviewDecisionInput,
+) -> str:
+    canonical = json.dumps(
+        {
+            "suggestion_id": suggestion_id,
+            "body": body.model_dump(mode="json", exclude={"operation_key"}),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(
+        f"{_REVIEW_DECISION_FINGERPRINT_VERSION}\n{canonical}".encode("utf-8")
+    ).hexdigest()
+
+
+async def _find_review_event(
+    project_id: str,
+    user_id: str,
+    operation_key: str,
+    db: AsyncSession,
+) -> LoreReviewSuggestionEvent | None:
+    return await db.scalar(
+        select(LoreReviewSuggestionEvent).where(
+            LoreReviewSuggestionEvent.project_id == project_id,
+            LoreReviewSuggestionEvent.performed_by == user_id,
+            LoreReviewSuggestionEvent.operation_key == operation_key,
+        )
+    )
+
+
+async def _next_pending_review_id(
+    project_id: str,
+    current_id: str,
+    db: AsyncSession,
+) -> str | None:
+    return await db.scalar(
+        select(LoreReviewSuggestion.id)
+        .where(
+            LoreReviewSuggestion.project_id == project_id,
+            LoreReviewSuggestion.id != current_id,
+            LoreReviewSuggestion.detection_state == "active",
+            or_(
+                LoreReviewSuggestion.review_status.in_(("pending", "deferred")),
+                LoreReviewSuggestion.decided_evidence_revision.is_(None),
+                LoreReviewSuggestion.decided_evidence_revision
+                != LoreReviewSuggestion.evidence_revision,
+            ),
+        )
+        .order_by(
+            LoreReviewSuggestion.updated_at.desc(),
+            LoreReviewSuggestion.id.desc(),
+        )
+        .limit(1)
+    )
+
+
+async def _replay_review_decision(
+    event: LoreReviewSuggestionEvent,
+    fingerprint: str,
+    db: AsyncSession,
+) -> LoreReviewDecisionResponse:
+    if event.request_fingerprint != fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "LORE_REVIEW_DECISION_IDEMPOTENCY_CONFLICT",
+                "message": "这次判断与先前请求不同，为避免重复记录，系统没有再次提交",
+                "retryable": False,
+            },
+        )
+    suggestion = await _get_review_row(event.project_id, event.suggestion_id, db)
+    return LoreReviewDecisionResponse(
+        suggestion=await _build_review_detail(suggestion, db),
+        replayed=True,
+        applied=event.applied,
+        next_pending_id=await _next_pending_review_id(
+            event.project_id, event.suggestion_id, db
+        ),
+    )
+
+
+@router.post("/reviews/scan", response_model=LoreReviewScanResponse)
+async def scan_lore_reviews(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    project = await get_project_for_owner(project_id, current_user, db)
+    _require_relational_mode(project)
+    result = await scan_lore_review_suggestions(db, project_id)
+    return LoreReviewScanResponse(**result)
+
+
+@router.get("/reviews", response_model=LoreReviewSuggestionsResponse)
+async def list_lore_reviews(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    q: Annotated[str | None, Query(max_length=200)] = None,
+    kind: Annotated[
+        str | None,
+        Query(pattern="^(possible_duplicate|possible_conflict)$"),
+    ] = None,
+    review_status: Annotated[
+        str,
+        Query(
+            pattern="^(needs_review|resolved|pending|deferred|confirmed_duplicate|confirmed_conflict|not_an_issue)$"
+        ),
+    ] = "needs_review",
+    cursor: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+):
+    project = await get_project_for_owner(project_id, current_user, db)
+    _require_relational_mode(project)
+    left = aliased(SettingElement)
+    right = aliased(SettingElement)
+    left_type = aliased(SettingType)
+    right_type = aliased(SettingType)
+    needs_review = and_(
+        LoreReviewSuggestion.detection_state == "active",
+        or_(
+            LoreReviewSuggestion.review_status.in_(("pending", "deferred")),
+            LoreReviewSuggestion.decided_evidence_revision.is_(None),
+            LoreReviewSuggestion.decided_evidence_revision
+            != LoreReviewSuggestion.evidence_revision,
+        ),
+    )
+    filters = [LoreReviewSuggestion.project_id == project_id]
+    if kind:
+        filters.append(LoreReviewSuggestion.kind == kind)
+    if review_status == "needs_review":
+        filters.append(needs_review)
+    elif review_status == "resolved":
+        filters.append(~needs_review)
+    else:
+        filters.append(LoreReviewSuggestion.review_status == review_status)
+    if q:
+        filters.append(or_(left.name.ilike(f"%{q}%"), right.name.ilike(f"%{q}%")))
+    filter_signature = hashlib.sha256(
+        json.dumps(
+            {"q": q or "", "kind": kind or "", "review_status": review_status},
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    offset = 0
+    if cursor:
+        cursor_data = _decode_cursor(cursor)
+        if (
+            cursor_data.get("kind") != "lore_reviews"
+            or cursor_data.get("project_id") != project_id
+            or cursor_data.get("filters") != filter_signature
+        ):
+            raise HTTPException(status_code=400, detail="分页游标与当前筛选不一致")
+        offset = int(cursor_data.get("offset", 0))
+    base = (
+        select(LoreReviewSuggestion, left, right, left_type, right_type)
+        .join(
+            left,
+            and_(
+                left.project_id == LoreReviewSuggestion.project_id,
+                left.id == LoreReviewSuggestion.left_element_id,
+            ),
+        )
+        .join(
+            right,
+            and_(
+                right.project_id == LoreReviewSuggestion.project_id,
+                right.id == LoreReviewSuggestion.right_element_id,
+            ),
+        )
+        .join(left_type, left_type.id == left.type_id)
+        .join(right_type, right_type.id == right.type_id)
+        .where(*filters)
+    )
+    total = await db.scalar(select(func.count()).select_from(base.subquery()))
+    rows = await db.execute(
+        base.order_by(
+            LoreReviewSuggestion.updated_at.desc(),
+            LoreReviewSuggestion.id.desc(),
+        )
+        .offset(offset)
+        .limit(limit + 1)
+    )
+    page = list(rows.all())
+    has_more = len(page) > limit
+    page = page[:limit]
+    items = []
+    for suggestion, left_element, right_element, left_kind, right_kind in page:
+        stale = (
+            suggestion.detection_state == "stale"
+            or left_element.content_version != suggestion.left_content_version
+            or right_element.content_version != suggestion.right_content_version
+        )
+        items.append(
+            LoreReviewSuggestionListItem(
+                id=suggestion.id,
+                kind=suggestion.kind,
+                detection_state=suggestion.detection_state,
+                review_status=suggestion.review_status,
+                needs_review=_review_needs_review(suggestion),
+                lock_version=suggestion.lock_version,
+                evidence_revision=suggestion.evidence_revision,
+                left=_review_endpoint_summary(left_element, left_kind),
+                right=_review_endpoint_summary(right_element, right_kind),
+                primary_reason=_review_primary_reason(suggestion),
+                stale=stale,
+                updated_at=suggestion.updated_at,
+            )
+        )
+    next_cursor = None
+    if has_more:
+        next_cursor = _encode_cursor(
+            {
+                "v": _CURSOR_VERSION,
+                "kind": "lore_reviews",
+                "project_id": project_id,
+                "filters": filter_signature,
+                "offset": offset + limit,
+            }
+        )
+    return LoreReviewSuggestionsResponse(
+        items=items,
+        next_cursor=next_cursor,
+        has_more=has_more,
+        total=int(total or 0),
+    )
+
+
+@router.get("/reviews/{suggestion_id}", response_model=LoreReviewSuggestionDetail)
+async def get_lore_review(
+    project_id: str,
+    suggestion_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    project = await get_project_for_owner(project_id, current_user, db)
+    _require_relational_mode(project)
+    suggestion = await _get_review_row(project_id, suggestion_id, db)
+    return await _build_review_detail(suggestion, db)
+
+
+@router.post(
+    "/reviews/{suggestion_id}/decide",
+    response_model=LoreReviewDecisionResponse,
+)
+async def decide_lore_review(
+    project_id: str,
+    suggestion_id: str,
+    body: LoreReviewDecisionInput,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    project = await get_project_for_owner(project_id, current_user, db)
+    _require_relational_mode(project)
+    fingerprint = _review_decision_fingerprint(suggestion_id, body)
+    existing_event = await _find_review_event(
+        project_id, current_user.id, body.operation_key, db
+    )
+    if existing_event is not None:
+        return await _replay_review_decision(existing_event, fingerprint, db)
+    check_writes_available()
+    try:
+        suggestion = await _get_review_row(
+            project_id, suggestion_id, db, for_update=True
+        )
+        existing_event = await _find_review_event(
+            project_id, current_user.id, body.operation_key, db
+        )
+        if existing_event is not None:
+            return await _replay_review_decision(existing_event, fingerprint, db)
+        endpoints = await db.execute(
+            select(SettingElement)
+            .where(
+                SettingElement.project_id == project_id,
+                SettingElement.id.in_((
+                    suggestion.left_element_id,
+                    suggestion.right_element_id,
+                )),
+            )
+            .order_by(SettingElement.id)
+            .with_for_update()
+        )
+        by_id = {element.id: element for element in endpoints.scalars().all()}
+        left = by_id.get(suggestion.left_element_id)
+        right = by_id.get(suggestion.right_element_id)
+        if left is None or right is None:
+            raise HTTPException(status_code=409, detail="设定线索的关联对象已变化")
+        if suggestion.lock_version != body.expected_version:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "LORE_REVIEW_VERSION_CONFLICT",
+                    "message": "这条线索已被其他操作更新，请核对最新内容",
+                    "current_lock_version": suggestion.lock_version,
+                },
+            )
+        if (
+            suggestion.detection_state != "active"
+            or suggestion.evidence_revision != body.expected_evidence_revision
+            or left.content_version != suggestion.left_content_version
+            or right.content_version != suggestion.right_content_version
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "LORE_REVIEW_EVIDENCE_STALE",
+                    "message": "对比依据已经变化，请重新扫描并核对后再判断",
+                    "retryable": False,
+                },
+            )
+        previous_status = suggestion.review_status
+        previous_lock = suggestion.lock_version
+        applied = not (
+            previous_status == body.decision
+            and suggestion.decided_evidence_revision == suggestion.evidence_revision
+        )
+        if applied:
+            suggestion.review_status = body.decision
+            suggestion.decided_evidence_revision = suggestion.evidence_revision
+            suggestion.lock_version += 1
+            suggestion.updated_at = _utcnow()
+        event = LoreReviewSuggestionEvent(
+            project_id=project_id,
+            suggestion_id=suggestion.id,
+            performed_by=current_user.id,
+            operation_key=body.operation_key,
+            request_fingerprint=fingerprint,
+            previous_status=previous_status,
+            new_status=body.decision,
+            evidence_revision=suggestion.evidence_revision,
+            previous_lock_version=previous_lock,
+            new_lock_version=suggestion.lock_version,
+            note=body.note.strip(),
+            applied=applied,
+        )
+        db.add(event)
+        check_writes_available()
+        await db.commit()
+        await db.refresh(suggestion)
+    except IntegrityError:
+        await db.rollback()
+        existing_event = await _find_review_event(
+            project_id, current_user.id, body.operation_key, db
+        )
+        if existing_event is not None:
+            return await _replay_review_decision(existing_event, fingerprint, db)
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "LORE_REVIEW_DECISION_CONFLICT",
+                "message": "设定判断发生并发冲突，请重新加载后重试",
+            },
+        )
+    return LoreReviewDecisionResponse(
+        suggestion=await _build_review_detail(suggestion, db),
+        replayed=False,
+        applied=applied,
+        next_pending_id=await _next_pending_review_id(project_id, suggestion.id, db),
+    )
 
 
 # ─── Write endpoints ──────────────────────────────────────────────

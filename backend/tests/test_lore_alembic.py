@@ -195,6 +195,8 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
             "lore_candidate_revisions",
             "lore_element_create_operations",
             "lore_relation_create_operations",
+            "lore_review_suggestions",
+            "lore_review_suggestion_events",
         }.issubset(tables)
         project_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(projects)")
@@ -268,6 +270,26 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
             "fk_lore_relation_create_operation_relation"
             in table_sql["lore_relation_create_operations"]
         )
+        assert (
+            "uq_lore_review_suggestion_pair_rule"
+            in table_sql["lore_review_suggestions"]
+        )
+        assert (
+            "fk_lore_review_suggestion_left"
+            in table_sql["lore_review_suggestions"]
+        )
+        assert (
+            "fk_lore_review_suggestion_right"
+            in table_sql["lore_review_suggestions"]
+        )
+        assert (
+            "uq_lore_review_event_operation"
+            in table_sql["lore_review_suggestion_events"]
+        )
+        assert (
+            "fk_lore_review_event_suggestion"
+            in table_sql["lore_review_suggestion_events"]
+        )
         indexes = {
             row[0]
             for row in connection.execute(
@@ -277,6 +299,8 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
         assert "ix_lore_candidate_project_attention_updated" in indexes
         assert "ix_lore_element_create_operations_project_created" in indexes
         assert "ix_lore_relation_create_operations_project_created" in indexes
+        assert "ix_lore_review_suggestions_project_status_updated" in indexes
+        assert "ix_lore_review_events_suggestion_created" in indexes
 
     _run_alembic(backend_dir, database_url, "downgrade", "a1d3c7e9f002")
     with sqlite3.connect(database_path) as connection:
@@ -291,6 +315,8 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
         assert "element_relation_versions" not in tables
         assert "lore_element_create_operations" not in tables
         assert "lore_relation_create_operations" not in tables
+        assert "lore_review_suggestions" not in tables
+        assert "lore_review_suggestion_events" not in tables
         table_sql = {
             name: sql or ""
             for name, sql in connection.execute(

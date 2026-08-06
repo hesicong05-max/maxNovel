@@ -6,6 +6,7 @@ import LoreCreateForm, {
   type LoreCreateStoredPayload,
 } from "@/components/LoreCreateForm";
 import LoreRelationsPanel from "@/components/LoreRelationsPanel";
+import LoreReviewPanel from "@/components/LoreReviewPanel";
 import { ApiError, api } from "@/services/api";
 import { clearDraft, loadDraft, type DraftScope } from "@/services/maintenanceDrafts";
 import type {
@@ -24,7 +25,7 @@ import type {
   LoreTypeDefinition,
 } from "@/types/lore";
 
-type Scope = "formal" | "review";
+type Scope = "formal" | "review" | "conflicts";
 
 const CANDIDATE_STATUS: Record<string, string> = {
   pending_review: "待审核",
@@ -134,7 +135,10 @@ export default function LoreRepositoryPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryKey = searchParams.toString();
-  const scope: Scope = searchParams.get("scope") === "review" ? "review" : "formal";
+  const requestedScope = searchParams.get("scope");
+  const scope: Scope = requestedScope === "review" || requestedScope === "conflicts"
+    ? requestedScope
+    : "formal";
   const [searchDraft, setSearchDraft] = useState(searchParams.get("q") ?? "");
   const [overview, setOverview] = useState<LoreOverview | null>(null);
   const [overviewError, setOverviewError] = useState("");
@@ -345,6 +349,11 @@ export default function LoreRepositoryPage() {
     setCandidateCursor(null);
     setCandidateHasMore(false);
     clearSelection(true);
+
+    if (scope === "conflicts") {
+      setLoading(false);
+      return;
+    }
 
     const q = searchParams.get("q") || undefined;
     const request = scope === "formal"
@@ -671,6 +680,14 @@ export default function LoreRepositoryPage() {
     setReloadToken((value) => value + 1);
   }
 
+  function openElementFromReview(elementId: string) {
+    if (!confirmDiscardDrafts()) return;
+    nextFormalAfterMutation.current = elementId;
+    focusFormalAfterMutation.current = true;
+    setSearchDraft("");
+    setSearchParams(new URLSearchParams({ scope: "formal" }));
+  }
+
   if (!id) return <div className="empty-state">项目地址无效</div>;
 
   const formalItems = formal?.items ?? [];
@@ -716,6 +733,9 @@ export default function LoreRepositoryPage() {
         <button type="button" onClick={() => changeScope("review", { needs_attention: "true" })}>
           <strong>{overview?.needs_attention ?? "—"}</strong><span>需要关注</span>
         </button>
+        <button type="button" onClick={() => changeScope("conflicts")}>
+          <strong>{overview?.review_pending ?? "—"}</strong><span>待核对线索</span>
+        </button>
         <button type="button" onClick={() => changeScope("formal", { enabled: "false", lifecycle: "active" })}>
           <strong>{overview?.disabled ?? "—"}</strong><span>暂停用于生成</span>
         </button>
@@ -736,8 +756,25 @@ export default function LoreRepositoryPage() {
       <nav className="lore-scope-tabs" aria-label="设定范围">
         <button type="button" aria-current={scope === "formal" ? "page" : undefined} className={scope === "formal" ? "active" : ""} onClick={() => changeScope("formal")}>正式设定</button>
         <button type="button" aria-current={scope === "review" ? "page" : undefined} className={scope === "review" ? "active" : ""} onClick={() => changeScope("review")}>待审核提取</button>
+        <button type="button" aria-current={scope === "conflicts" ? "page" : undefined} className={scope === "conflicts" ? "active" : ""} onClick={() => changeScope("conflicts")}>重复与冲突</button>
       </nav>
 
+      {scope === "conflicts" && overview?.capabilities.formal_conflict_tracking && user && (
+        <LoreReviewPanel
+          projectId={id}
+          userId={user.id}
+          readOnly={overview.migration_status.read_only}
+          onDirtyChange={setFormalDirty}
+          onBusyChange={setFormalMutationBusy}
+          onOpenElement={openElementFromReview}
+          onOverviewRefresh={() => setReloadToken((value) => value + 1)}
+        />
+      )}
+      {scope === "conflicts" && overview && !overview.capabilities.formal_conflict_tracking && (
+        <div className="lore-empty"><strong>当前项目尚未开放正式设定线索审查</strong><span>旧世界观资料仍可正常查看和保存，完成模块化存储升级后再使用此功能。</span></div>
+      )}
+
+      {scope !== "conflicts" && <>
       <form className="lore-filters" onSubmit={submitSearch} aria-label="筛选设定">
         <label className="lore-search">
           <span>搜索名称或摘要</span>
@@ -840,6 +877,7 @@ export default function LoreRepositoryPage() {
           )}
         </aside>
       </div>
+      </>}
     </div>
   );
 }
