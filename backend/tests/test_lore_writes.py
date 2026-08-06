@@ -587,6 +587,21 @@ async def test_project_delete_cascades_lore_create_operation(
         project_id,
         name="随项目删除的测试设定",
         operation_key="manual-create-project-delete-01",
+        sources=[
+            {
+                "kind": "manual_text",
+                "excerpt": "随项目删除的测试设定",
+                "is_primary": True,
+            }
+        ],
+    )
+    other_project_id = await _create_project(client, auth_headers, title="隔离项目")
+    other_created = await _create_relational_element(
+        client,
+        auth_headers,
+        other_project_id,
+        name="必须保留的测试设定",
+        operation_key="manual-create-project-delete-isolation-01",
     )
     projects_dir = tmp_path / "projects"
     staging_dir = tmp_path / "project-delete-staging"
@@ -613,6 +628,41 @@ async def test_project_delete_cascades_lore_create_operation(
                 SettingElement.id == created["id"]
             )
         ) == 0
+        assert await session.scalar(
+            select(func.count()).select_from(ElementVersion).where(
+                ElementVersion.element_id == created["id"]
+            )
+        ) == 0
+        assert await session.scalar(
+            select(func.count()).select_from(ElementSource).where(
+                ElementSource.element_id == created["id"]
+            )
+        ) == 0
+        assert await session.scalar(
+            select(func.count()).select_from(ElementStateEvent).where(
+                ElementStateEvent.element_id == created["id"]
+            )
+        ) == 0
+        assert await session.scalar(
+            select(func.count()).select_from(SettingType).where(
+                SettingType.project_id == project_id
+            )
+        ) == 0
+        assert await session.scalar(
+            select(func.count()).select_from(LoreElementCreateOperation).where(
+                LoreElementCreateOperation.project_id == other_project_id
+            )
+        ) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(SettingElement).where(
+                SettingElement.id == other_created["id"]
+            )
+        ) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(ElementVersion).where(
+                ElementVersion.element_id == other_created["id"]
+            )
+        ) == 1
 
 
 @pytest.mark.usefixtures("clean_db")

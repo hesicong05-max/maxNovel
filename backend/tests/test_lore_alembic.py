@@ -23,12 +23,32 @@ def _run_alembic(backend_dir, database_url, *args):
     )
 
 
+def _element_version_type_ondelete(database_path):
+    with sqlite3.connect(database_path) as connection:
+        matches = [
+            row
+            for row in connection.execute(
+                "PRAGMA foreign_key_list(element_versions)"
+            )
+            if row[2] == "setting_types" and row[3] == "type_id" and row[4] == "id"
+        ]
+    assert len(matches) == 1
+    return matches[0][6]
+
+
 def test_lore_migration_upgrade_and_downgrade_are_additive(tmp_path):
     backend_dir = os.path.dirname(os.path.dirname(__file__))
     database_path = tmp_path / "lore-migration.db"
     database_url = f"sqlite+aiosqlite:///{database_path}"
 
     _run_alembic(backend_dir, database_url, "upgrade", "head")
+    assert _element_version_type_ondelete(database_path) == "CASCADE"
+
+    _run_alembic(backend_dir, database_url, "downgrade", "f6c8d2e4a005")
+    assert _element_version_type_ondelete(database_path) == "RESTRICT"
+
+    _run_alembic(backend_dir, database_url, "upgrade", "head")
+    assert _element_version_type_ondelete(database_path) == "CASCADE"
 
 
 def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_path):

@@ -265,7 +265,11 @@ class ElementVersion(Base):
     version_no = Column(Integer, nullable=False)
     type_id = Column(
         String(32),
-        ForeignKey("setting_types.id", ondelete="RESTRICT"),
+        ForeignKey(
+            "setting_types.id",
+            name="fk_element_version_type",
+            ondelete="CASCADE",
+        ),
         nullable=False,
     )
     type_schema_revision = Column(Integer, nullable=False, default=1)
