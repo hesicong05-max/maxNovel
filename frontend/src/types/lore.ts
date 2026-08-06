@@ -47,11 +47,7 @@ export interface LoreElementListItem {
 export interface LoreElementDetail extends LoreElementListItem {
   payload: Record<string, unknown>;
   field_states: Record<string, string>;
-  field_definitions: Array<{
-    key: string;
-    label: string;
-    order: number;
-  }>;
+  field_definitions: LoreFieldDefinition[];
   sources: Array<{
     id: string | null;
     kind: string;
@@ -63,6 +59,41 @@ export interface LoreElementDetail extends LoreElementListItem {
   }>;
   version_count: number;
   read_only: boolean;
+}
+
+export interface LoreElementUpdateInput {
+  expected_version: number;
+  name: string;
+  summary: string;
+  payload: Record<string, string | null>;
+  field_states: Record<string, LoreFieldState>;
+}
+
+export interface LoreElementStateInput {
+  expected_version: number;
+  reason?: string;
+}
+
+export interface LoreElementWriteResponse {
+  id: string;
+  type: { key: string; display_name: string };
+  name: string;
+  summary: string;
+  confirmation_status: string;
+  lifecycle_status: string;
+  enabled: boolean;
+  generation_eligible: boolean;
+  lock_version: number;
+  content_version: number;
+  payload_schema_revision: number;
+  payload: Record<string, unknown>;
+  field_states: Record<string, LoreFieldState>;
+  field_definitions: LoreFieldDefinition[];
+  sources: LoreElementDetail["sources"];
+  relation_count: number;
+  binding_count: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface LoreFieldDefinition {

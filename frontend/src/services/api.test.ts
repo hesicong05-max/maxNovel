@@ -430,6 +430,44 @@ describe("API - lore repository", () => {
       expect.objectContaining({ method: "POST", body: expect.stringContaining('"expected_version":8') })
     );
   });
+
+  it("sends formal element edits and reversible state changes with lock versions", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const edit = {
+      expected_version: 4,
+      name: "寒川城",
+      summary: "北境城邦",
+      payload: { description: "终年积雪" },
+      field_states: { description: "provided" as const },
+    };
+
+    await api.updateLoreElement("project-1", "element-1", edit);
+    await api.changeLoreElementState("project-1", "element-1", "disable", {
+      expected_version: 5,
+      reason: "暂不参与生成",
+    });
+    await api.changeLoreElementState("project-1", "element-1", "restore-archive", {
+      expected_version: 6,
+    });
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(1,
+      "/api/projects/project-1/lore/elements/element-1",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify(edit) })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(2,
+      "/api/projects/project-1/lore/elements/element-1/disable",
+      expect.objectContaining({ method: "POST", body: expect.stringContaining('"expected_version":5') })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(3,
+      "/api/projects/project-1/lore/elements/element-1/restore-archive",
+      expect.objectContaining({ method: "POST", body: expect.stringContaining('"expected_version":6') })
+    );
+  });
 });
 
 describe("API - Projects", () => {

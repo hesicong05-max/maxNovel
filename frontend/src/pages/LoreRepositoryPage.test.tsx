@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "@/services/api";
-import type { LoreCandidateInboxResponse, LoreListResponse, LoreOverview } from "@/types/lore";
+import type { LoreCandidateInboxResponse, LoreElementDetail, LoreListResponse, LoreOverview } from "@/types/lore";
 import LoreRepositoryPage from "./LoreRepositoryPage";
 
 const overview: LoreOverview = {
@@ -53,6 +53,28 @@ function formalResponse(name = "林渊"): LoreListResponse {
       relation_statuses: [],
     },
     migration_status: { storage_mode: "relational", state: "ready", read_only: false },
+  };
+}
+
+function writableFormalDetail(overrides: Partial<LoreElementDetail> = {}): LoreElementDetail {
+  return {
+    ...formalResponse().items[0],
+    lock_version: 4,
+    payload: { appearance: "黑发" },
+    field_states: { appearance: "provided" },
+    field_definitions: [{
+      key: "appearance",
+      label: "外貌",
+      control: "textarea",
+      value_type: "text",
+      help: "角色外貌",
+      order: 10,
+      required: false,
+    }],
+    sources: [{ id: "source-1", kind: "manual", label: "manual", is_primary: true, created_at: "2026-08-03T00:00:00Z", excerpt: "林渊黑发。", reference: null }],
+    version_count: 1,
+    read_only: false,
+    ...overrides,
   };
 }
 
@@ -210,6 +232,330 @@ describe("LoreRepositoryPage", () => {
     expect(screen.getByText("林渊黑发。")).toBeInTheDocument();
   });
 
+  it("edits a formal element with lock_version and reloads the filtered list", async () => {
+    const original = writableFormalDetail();
+    const updated = writableFormalDetail({ name: "林渊·修订", lock_version: 5, current_version: 2 });
+    const updatedList = formalResponse("林渊·修订");
+    updatedList.items[0].id = original.id;
+    updatedList.items[0].lock_version = 5;
+    const update = vi.fn().mockResolvedValue({});
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(overview),
+      listLoreElements: vi.fn().mockResolvedValueOnce(formalResponse()).mockResolvedValue(updatedList),
+      getLoreElement: vi.fn().mockResolvedValueOnce(original).mockResolvedValue(updated),
+      listLoreCandidates: vi.fn(),
+      listLoreTypes: vi.fn(),
+      updateLoreElement: update,
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /林渊/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "编辑内容" }));
+    const name = screen.getByLabelText("名称");
+    await userEvent.clear(name);
+    await userEvent.type(name, "林渊·修订");
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+
+    expect(update).toHaveBeenCalledWith("project-1", original.id, expect.objectContaining({
+      expected_version: 4,
+      name: "林渊·修订",
+      payload: { appearance: "黑发" },
+      field_states: { appearance: "provided" },
+    }));
+    expect(await screen.findByText(/正式设定修改已保存/)).toBeInTheDocument();
+  });
+
+  it("preserves a formal edit on 409 and requires latest-state review before retry", async () => {
+    const original = writableFormalDetail();
+    const latest = writableFormalDetail({ name: "服务器版本", lock_version: 5 });
+    const update = vi.fn().mockRejectedValue(new apiModule.ApiError(409, {
+      detail: "设定已被其他操作更新，请重新加载后重试",
+      code: "LORE_VERSION_CONFLICT",
+    }));
+    const get = vi.fn().mockResolvedValueOnce(original).mockResolvedValueOnce(latest);
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(overview),
+      listLoreElements: vi.fn().mockResolvedValue(formalResponse()),
+      getLoreElement: get,
+      listLoreCandidates: vi.fn(),
+      listLoreTypes: vi.fn(),
+      updateLoreElement: update,
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /林渊/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "编辑内容" }));
+    const name = screen.getByLabelText("名称");
+    await userEvent.clear(name);
+    await userEvent.type(name, "本地草稿");
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("其他操作更新");
+    expect(name).toHaveValue("本地草稿");
+    expect(screen.getByRole("button", { name: "保存修改" })).toBeDisabled();
+    expect(update).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "核对最新状态" }));
+    expect(await screen.findByText(/服务器当前内容与本次提交不一致/)).toBeInTheDocument();
+    expect(screen.getByText(/服务器版本 · 内容版本 1/)).toBeInTheDocument();
+    expect(name).toHaveValue("本地草稿");
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a formal edit intact while repository writes are frozen", async () => {
+    const original = writableFormalDetail();
+    const update = vi.fn().mockRejectedValue(new apiModule.ApiError(503, {
+      detail: "项目正在维护，写入暂时冻结",
+      code: "PROJECT_WRITE_FROZEN",
+    }));
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(overview),
+      listLoreElements: vi.fn().mockResolvedValue(formalResponse()),
+      getLoreElement: vi.fn().mockResolvedValue(original),
+      listLoreCandidates: vi.fn(),
+      listLoreTypes: vi.fn(),
+      updateLoreElement: update,
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /林渊/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "编辑内容" }));
+    const name = screen.getByLabelText("名称");
+    await userEvent.clear(name);
+    await userEvent.type(name, "维护中的本地设定");
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("正在维护");
+    expect(name).toHaveValue("维护中的本地设定");
+    expect(screen.getByRole("button", { name: "保存修改" })).toBeEnabled();
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles an unknown edit result with GET instead of repeating the mutation", async () => {
+    const original = writableFormalDetail();
+    const saved = writableFormalDetail({ name: "已由服务器保存", lock_version: 5, current_version: 2 });
+    const update = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    const listAfter = formalResponse("已由服务器保存");
+    listAfter.items[0].id = original.id;
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(overview),
+      listLoreElements: vi.fn().mockResolvedValueOnce(formalResponse()).mockResolvedValue(listAfter),
+      getLoreElement: vi.fn().mockResolvedValueOnce(original).mockResolvedValue(saved),
+      listLoreCandidates: vi.fn(),
+      listLoreTypes: vi.fn(),
+      updateLoreElement: update,
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /林渊/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "编辑内容" }));
+    const name = screen.getByLabelText("名称");
+    await userEvent.clear(name);
+    await userEvent.type(name, "已由服务器保存");
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+
+    expect(await screen.findByText(/服务器内容与本地提交一致/)).toBeInTheDocument();
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not create a content version when the formal draft is unchanged", async () => {
+    const update = vi.fn();
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(overview),
+      listLoreElements: vi.fn().mockResolvedValue(formalResponse()),
+      getLoreElement: vi.fn().mockResolvedValue(writableFormalDetail()),
+      listLoreCandidates: vi.fn(),
+      listLoreTypes: vi.fn(),
+      updateLoreElement: update,
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /林渊/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "编辑内容" }));
+
+    expect(screen.getByRole("button", { name: "保存修改" })).toBeDisabled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("treats leading and trailing whitespace as a no-op", async () => {
+    const update = vi.fn();
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(overview),
+      listLoreElements: vi.fn().mockResolvedValue(formalResponse()),
+      getLoreElement: vi.fn().mockResolvedValue(writableFormalDetail()),
+      listLoreCandidates: vi.fn(),
+      listLoreTypes: vi.fn(),
+      updateLoreElement: update,
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /林渊/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "编辑内容" }));
+    const name = screen.getByLabelText("名称");
+    await userEvent.clear(name);
+    await userEvent.type(name, "  林渊  ");
+
+    expect(screen.getByRole("button", { name: "保存修改" })).toBeDisabled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("confirms a reversible generation pause and sends the current lock version once", async () => {
+    const original = writableFormalDetail();
+    const changed = writableFormalDetail({ enabled: false, generation_eligible: false, lock_version: 5 });
+    const listAfter = formalResponse();
+    listAfter.items[0].enabled = false;
+    listAfter.items[0].generation_eligible = false;
+    listAfter.items[0].lock_version = 5;
+    const changeState = vi.fn().mockResolvedValue({});
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(overview),
+      listLoreElements: vi.fn().mockResolvedValueOnce(formalResponse()).mockResolvedValue(listAfter),
+      getLoreElement: vi.fn().mockResolvedValueOnce(original).mockResolvedValue(changed),
+      listLoreCandidates: vi.fn(),
+      listLoreTypes: vi.fn(),
+      changeLoreElementState: changeState,
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /林渊/ }));
+    const trigger = await screen.findByRole("button", { name: "暂停用于生成" });
+    await userEvent.click(trigger);
+    const confirmation = screen.getByRole("alertdialog", { name: "确认暂停用于生成" });
+    await waitFor(() => expect(confirmation).toHaveFocus());
+    await userEvent.type(screen.getByLabelText("原因（可选）"), "暂不参与本卷");
+    await userEvent.click(screen.getByRole("button", { name: "确认暂停用于生成" }));
+
+    expect(changeState).toHaveBeenCalledTimes(1);
+    expect(changeState).toHaveBeenCalledWith("project-1", original.id, "disable", {
+      expected_version: 4,
+      reason: "暂不参与本卷",
+    });
+    expect(await screen.findByText("该设定已暂停用于生成。")).toBeInTheDocument();
+  });
+
+  it("reconciles an unknown state result without claiming who changed the state", async () => {
+    const original = writableFormalDetail();
+    const changed = writableFormalDetail({ enabled: false, generation_eligible: false, lock_version: 5 });
+    const listAfter = formalResponse();
+    listAfter.items[0].enabled = false;
+    listAfter.items[0].generation_eligible = false;
+    listAfter.items[0].lock_version = 5;
+    const changeState = vi.fn().mockRejectedValue(new TypeError("Failed to fetch"));
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(overview),
+      listLoreElements: vi.fn().mockResolvedValueOnce(formalResponse()).mockResolvedValue(listAfter),
+      getLoreElement: vi.fn().mockResolvedValueOnce(original).mockResolvedValue(changed),
+      listLoreCandidates: vi.fn(),
+      listLoreTypes: vi.fn(),
+      changeLoreElementState: changeState,
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /林渊/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "暂停用于生成" }));
+    await userEvent.click(screen.getByRole("button", { name: "确认暂停用于生成" }));
+
+    expect(await screen.findByText(/目标状态已达成，但无法确认是否由本次请求产生/)).toBeInTheDocument();
+    expect(changeState).toHaveBeenCalledTimes(1);
+  });
+
+  it("freezes formal actions after a state version conflict until latest data is reviewed", async () => {
+    const original = writableFormalDetail();
+    const latest = writableFormalDetail({ lock_version: 5 });
+    const changeState = vi.fn().mockRejectedValue(new apiModule.ApiError(409, {
+      detail: "设定已被其他操作更新，请重新加载后重试",
+      code: "LORE_VERSION_CONFLICT",
+    }));
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(overview),
+      listLoreElements: vi.fn().mockResolvedValue(formalResponse()),
+      getLoreElement: vi.fn().mockResolvedValueOnce(original).mockResolvedValue(latest),
+      listLoreCandidates: vi.fn(),
+      listLoreTypes: vi.fn(),
+      changeLoreElementState: changeState,
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /林渊/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "暂停用于生成" }));
+    await userEvent.click(screen.getByRole("button", { name: "确认暂停用于生成" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("其他操作更新");
+    expect(screen.getByRole("button", { name: "编辑内容" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "暂停用于生成" })).toBeDisabled();
+    expect(changeState).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "核对最新状态" }));
+    expect(await screen.findByText(/服务器当前内容与本次提交不一致/)).toBeInTheDocument();
+    expect(changeState).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains the active-relation archive conflict without retrying the write", async () => {
+    const original = writableFormalDetail({ relation_count: 0 });
+    const changeState = vi.fn().mockRejectedValue(new apiModule.ApiError(409, {
+      detail: "该设定仍有启用中的关系，请先归档相关关系",
+      code: "LORE_ELEMENT_ACTIVE_RELATIONS",
+    }));
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(overview),
+      listLoreElements: vi.fn().mockResolvedValue(formalResponse()),
+      getLoreElement: vi.fn().mockResolvedValueOnce(original).mockResolvedValue(writableFormalDetail({ relation_count: 1 })),
+      listLoreCandidates: vi.fn(),
+      listLoreTypes: vi.fn(),
+      changeLoreElementState: changeState,
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /林渊/ }));
+    const archiveTrigger = await screen.findByRole("button", { name: "归档设定" });
+    await userEvent.click(archiveTrigger);
+    await userEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(archiveTrigger).toHaveFocus());
+    await userEvent.click(archiveTrigger);
+    await userEvent.click(screen.getByRole("button", { name: "确认归档设定" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("关系管理将在后续里程碑开放");
+    expect(changeState).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "核对最新状态" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "归档设定" })).not.toBeInTheDocument();
+  });
+
+  it("blocks archive in advance when relation management is not yet available", async () => {
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(overview),
+      listLoreElements: vi.fn().mockResolvedValue(formalResponse()),
+      getLoreElement: vi.fn().mockResolvedValue(writableFormalDetail({ relation_count: 2 })),
+      listLoreCandidates: vi.fn(),
+      listLoreTypes: vi.fn(),
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /林渊/ }));
+
+    expect(await screen.findByText(/该设定有 2 条启用关系/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "归档设定" })).not.toBeInTheDocument();
+  });
+
+  it("does not switch formal elements when an unsaved edit is kept", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const list = formalResponse();
+    list.items.push({ ...list.items[0], id: "item-另一人", name: "另一人" });
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(overview),
+      listLoreElements: vi.fn().mockResolvedValue(list),
+      getLoreElement: vi.fn().mockResolvedValue(writableFormalDetail()),
+      listLoreCandidates: vi.fn(),
+      listLoreTypes: vi.fn(),
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: /林渊/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "编辑内容" }));
+    await userEvent.type(screen.getByLabelText("名称"), "草稿");
+    await userEvent.click(screen.getByRole("button", { name: /另一人/ }));
+
+    expect(confirm).toHaveBeenCalled();
+    expect(screen.getByLabelText("名称")).toHaveValue("林渊草稿");
+  });
+
   it("opens the attention inbox from the overview without calling a write API", async () => {
     renderPage();
     await screen.findByText("林渊");
@@ -242,7 +588,7 @@ describe("LoreRepositoryPage", () => {
       expect.any(AbortSignal)
     ));
 
-    await userEvent.click(screen.getByRole("button", { name: /0\s+已停用/ }));
+    await userEvent.click(screen.getByRole("button", { name: /0\s+暂停用于生成/ }));
     await waitFor(() => expect(apiModule.api.listLoreElements).toHaveBeenLastCalledWith(
       "project-1",
       expect.objectContaining({ enabled: false, lifecycle_status: "active" }),

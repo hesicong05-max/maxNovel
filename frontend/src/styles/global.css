@@ -976,7 +976,7 @@ input, select, textarea { font-family: inherit; }
   opacity: 0.72;
 }
 
-/* ═══ 世界观设定仓库（DEV-014A 只读版） ═══ */
+/* ═══ 世界观设定仓库（DEV-014A/014B/014C） ═══ */
 .project-lore-link {
   display: inline-flex;
   margin-top: 0.875rem;
@@ -1300,6 +1300,22 @@ input, select, textarea { font-family: inherit; }
   margin: 0.25rem 0;
 }
 
+.lore-status-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  margin-top: 0.75rem;
+}
+
+.lore-status-grid span {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-soft);
+  color: var(--text-2);
+  font-size: 11px;
+}
+
 .lore-fields > div {
   padding: 0.875rem 0;
   border-bottom: 1px solid var(--border);
@@ -1366,6 +1382,7 @@ input, select, textarea { font-family: inherit; }
 }
 
 .lore-candidate-review h3,
+.lore-formal-review h3,
 .lore-edit-fields h3,
 .lore-suggestions h3 {
   margin-bottom: 0.625rem;
@@ -1495,6 +1512,33 @@ input, select, textarea { font-family: inherit; }
   min-width: 0;
 }
 
+.lore-server-latest {
+  margin-top: 1rem;
+  padding: 0.875rem;
+  border: 1px solid var(--gold-border);
+  border-radius: var(--r-md);
+  background: var(--gold-light);
+}
+
+.lore-server-latest p,
+.lore-candidate-action-panel > p {
+  margin: 0.4rem 0 0.75rem;
+  color: var(--text-2);
+}
+
+.lore-confirm label {
+  display: flex;
+  margin-top: 0.75rem;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.lore-confirm label > span {
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -1577,6 +1621,13 @@ input, select, textarea { font-family: inherit; }
 
   .lore-candidate-actions .btn {
     width: 100%;
+    min-height: 44px;
+  }
+
+  .lore-candidate-form .form-input,
+  .lore-candidate-form .form-select,
+  .lore-confirm .form-input,
+  .lore-confirm .form-select {
     min-height: 44px;
   }
 

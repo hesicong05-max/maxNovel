@@ -7,6 +7,7 @@ version boundary, excerpt storage, type resolution, payload key validation,
 Alembic upgrade-downgrade-upgrade.
 """
 
+import asyncio
 import copy
 
 import pytest
@@ -694,6 +695,99 @@ async def test_archive_and_restore(client, auth_headers):
     assert restore.status_code == 200
     assert restore.json()["lifecycle_status"] == "active"
     assert restore.json()["generation_eligible"] is True
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_archive_rejects_element_with_active_relations_without_side_effects(
+    client, auth_headers,
+):
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _create_project(client, auth_headers)
+    source = await _create_relational_element(
+        client, auth_headers, project_id, name="关系源",
+    )
+    target = await _create_relational_element(
+        client, auth_headers, project_id, name="关系目标",
+    )
+    relation = await _create_relation(
+        client, auth_headers, project_id, source["id"], target["id"],
+    )
+
+    archive = await client.post(
+        f"/api/projects/{project_id}/lore/elements/{source['id']}/archive",
+        headers=auth_headers,
+        json={"expected_version": source["lock_version"]},
+    )
+
+    assert archive.status_code == 409
+    assert archive.json()["detail"] == {
+        "code": "LORE_ELEMENT_ACTIVE_RELATIONS",
+        "message": "该设定仍有启用中的关系，请先归档相关关系",
+        "active_relation_count": 1,
+    }
+    async with TestSessionLocal() as session:
+        stored_element = await session.get(SettingElement, source["id"])
+        stored_relation = await session.get(ElementRelation, relation["id"])
+        event_count = await session.scalar(
+            select(func.count()).select_from(ElementStateEvent).where(
+                ElementStateEvent.element_id == source["id"],
+                ElementStateEvent.event_kind == "archive",
+            )
+        )
+        assert stored_element.lifecycle_status == "active"
+        assert stored_element.lock_version == source["lock_version"]
+        assert stored_relation.status == "active"
+        assert event_count == 0
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_postgres_archive_and_relation_restore_cannot_leave_active_dangling_relation(
+    client, auth_headers,
+):
+    from tests.conftest import TEST_DATABASE_BACKEND, TestSessionLocal
+
+    if TEST_DATABASE_BACKEND == "sqlite":
+        pytest.skip("Row-lock ordering is exercised by the PostgreSQL CI job")
+
+    project_id = await _create_project(client, auth_headers)
+    source = await _create_relational_element(
+        client, auth_headers, project_id, name="并发归档源",
+    )
+    target = await _create_relational_element(
+        client, auth_headers, project_id, name="并发归档目标",
+    )
+    relation = await _create_relation(
+        client, auth_headers, project_id, source["id"], target["id"],
+    )
+    archived_relation = await client.post(
+        f"/api/projects/{project_id}/lore/relations/{relation['id']}/archive",
+        headers=auth_headers,
+        json={"expected_version": relation["lock_version"]},
+    )
+    assert archived_relation.status_code == 200
+
+    archive_element, restore_relation = await asyncio.gather(
+        client.post(
+            f"/api/projects/{project_id}/lore/elements/{source['id']}/archive",
+            headers=auth_headers,
+            json={"expected_version": source["lock_version"]},
+        ),
+        client.post(
+            f"/api/projects/{project_id}/lore/relations/{relation['id']}/restore",
+            headers=auth_headers,
+            json={"expected_version": archived_relation.json()["lock_version"]},
+        ),
+    )
+    assert sorted([archive_element.status_code, restore_relation.status_code]) == [200, 409]
+
+    async with TestSessionLocal() as session:
+        stored_element = await session.get(SettingElement, source["id"])
+        stored_relation = await session.get(ElementRelation, relation["id"])
+        assert not (
+            stored_element.lifecycle_status == "archived"
+            and stored_relation.status == "active"
+        )
 
 
 @pytest.mark.usefixtures("clean_db")

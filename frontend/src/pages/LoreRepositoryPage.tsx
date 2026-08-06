@@ -7,6 +7,7 @@ import type {
   LoreCandidateEditInput,
   LoreElementDetail,
   LoreElementListItem,
+  LoreElementUpdateInput,
   LoreFieldDefinition,
   LoreFieldState,
   LoreListResponse,
@@ -65,6 +66,18 @@ const SOURCE_KIND: Record<string, string> = {
   system_extract: "AI 提取",
   migration: "旧数据迁移",
   legacy_import: "旧数据导入",
+};
+
+const CONFIRMATION_STATUS: Record<string, string> = {
+  candidate: "待确认",
+  confirmed: "已确认",
+  rejected: "已拒绝",
+};
+
+const LIFECYCLE_STATUS: Record<string, string> = {
+  active: "使用中",
+  archived: "已归档",
+  merged: "已合并",
 };
 
 const TYPE_OPTIONS = [
@@ -139,6 +152,8 @@ export default function LoreRepositoryPage() {
   const [typesError, setTypesError] = useState("");
   const [candidateDirty, setCandidateDirty] = useState(false);
   const [candidateMutationBusy, setCandidateMutationBusy] = useState(false);
+  const [formalDirty, setFormalDirty] = useState(false);
+  const [formalMutationBusy, setFormalMutationBusy] = useState(false);
   const [actionNotice, setActionNotice] = useState("");
   const [preservedCandidateDrafts, setPreservedCandidateDrafts] = useState<Record<string, CandidateDraft>>({});
   const requestSequence = useRef(0);
@@ -151,6 +166,8 @@ export default function LoreRepositoryPage() {
   const listHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const nextCandidateAfterMutation = useRef<string | null>(null);
   const focusAfterMutation = useRef(false);
+  const nextFormalAfterMutation = useRef<string | null>(null);
+  const focusFormalAfterMutation = useRef(false);
   const contextKey = `${id ?? ""}?${queryKey}`;
   const contextKeyRef = useRef(contextKey);
   contextKeyRef.current = contextKey;
@@ -160,21 +177,22 @@ export default function LoreRepositoryPage() {
     [candidates, selectedCandidateId]
   );
 
-  function confirmDiscardCandidateDraft(): boolean {
-    if (candidateMutationBusy) {
-      setActionNotice("候选操作正在提交，请等待结果后再切换页面或筛选。");
+  function confirmDiscardDrafts(): boolean {
+    if (candidateMutationBusy || formalMutationBusy) {
+      setActionNotice("设定操作正在提交，请等待结果后再切换页面或筛选。");
       return false;
     }
-    if (!candidateDirty) return true;
-    if (!window.confirm("当前候选有尚未保存的修改，确定放弃这些修改吗？")) {
+    if (!candidateDirty && !formalDirty) return true;
+    if (!window.confirm("当前设定有尚未保存的修改，确定放弃这些修改吗？")) {
       return false;
     }
     setCandidateDirty(false);
+    setFormalDirty(false);
     return true;
   }
 
   function updateQuery(changes: Record<string, string | null>) {
-    if (!confirmDiscardCandidateDraft()) return;
+    if (!confirmDiscardDrafts()) return;
     setRecoveryNotice("");
     clearSelection(true);
     const next = new URLSearchParams(searchParams);
@@ -197,13 +215,13 @@ export default function LoreRepositoryPage() {
   }, [id]);
 
   useEffect(() => {
-    if (!candidateDirty) return;
+    if (!candidateDirty && !formalDirty) return;
     const protectDraft = (event: BeforeUnloadEvent) => {
       event.preventDefault();
     };
     window.addEventListener("beforeunload", protectDraft);
     return () => window.removeEventListener("beforeunload", protectDraft);
-  }, [candidateDirty]);
+  }, [candidateDirty, formalDirty]);
 
   useEffect(() => {
     if (
@@ -297,6 +315,14 @@ export default function LoreRepositoryPage() {
       if (scope === "formal" && "facets" in data) {
         setFormal(data);
         setFormalFacets(data.facets);
+        const desired = nextFormalAfterMutation.current;
+        if (desired && data.items.some((item) => item.id === desired)) {
+          setSelectedFormalId(desired);
+        } else if (focusFormalAfterMutation.current) {
+          requestAnimationFrame(() => listHeadingRef.current?.focus());
+          focusFormalAfterMutation.current = false;
+        }
+        nextFormalAfterMutation.current = null;
       } else if (scope === "review" && "query_signature" in data) {
         setCandidates(data.items);
         setCandidateTotal(data.total);
@@ -339,7 +365,13 @@ export default function LoreRepositoryPage() {
     setDetailLoading(true);
     api.getLoreElement(id, selectedFormalId, controller.signal)
       .then((data) => {
-        if (sequence === detailSequence.current) setDetail(data);
+        if (sequence === detailSequence.current) {
+          setDetail(data);
+          if (focusFormalAfterMutation.current) {
+            requestAnimationFrame(() => detailRef.current?.focus());
+            focusFormalAfterMutation.current = false;
+          }
+        }
       })
       .catch((error) => {
         if ((error as Error).name !== "AbortError" && sequence === detailSequence.current) {
@@ -364,7 +396,7 @@ export default function LoreRepositoryPage() {
   }
 
   function changeScope(nextScope: Scope, extra: Record<string, string> = {}) {
-    if (!confirmDiscardCandidateDraft()) return;
+    if (!confirmDiscardDrafts()) return;
     setRecoveryNotice("");
     clearSelection(true);
     const next = new URLSearchParams({ scope: nextScope, ...extra });
@@ -445,7 +477,7 @@ export default function LoreRepositoryPage() {
   }
 
   function clearSelection(force = false) {
-    if (!force && !confirmDiscardCandidateDraft()) return false;
+    if (!force && !confirmDiscardDrafts()) return false;
     detailSequence.current += 1;
     setSelectedFormalId(null);
     setSelectedCandidateId(null);
@@ -453,16 +485,34 @@ export default function LoreRepositoryPage() {
     setDetailError("");
     setDetailLoading(false);
     setCandidateDirty(false);
+    setFormalDirty(false);
     return true;
+  }
+
+  function selectFormal(elementId: string) {
+    if (formalMutationBusy) return;
+    if (elementId !== selectedFormalId && !confirmDiscardDrafts()) return;
+    setFormalDirty(false);
+    setActionNotice("");
+    setSelectedCandidateId(null);
+    setSelectedFormalId(elementId);
   }
 
   function selectCandidate(candidateId: string) {
     if (candidateMutationBusy) return;
-    if (candidateId !== selectedCandidateId && !confirmDiscardCandidateDraft()) return;
+    if (candidateId !== selectedCandidateId && !confirmDiscardDrafts()) return;
     setCandidateDirty(false);
     setActionNotice("");
     setSelectedFormalId(null);
     setSelectedCandidateId(candidateId);
+  }
+
+  function finishFormalMutation(elementId: string, notice: string) {
+    setFormalDirty(false);
+    setActionNotice(notice);
+    nextFormalAfterMutation.current = elementId;
+    focusFormalAfterMutation.current = true;
+    setReloadToken((value) => value + 1);
   }
 
   function updateCandidate(updated: LoreCandidate, notice = "已载入最新候选内容。") {
@@ -501,7 +551,7 @@ export default function LoreRepositoryPage() {
   return (
     <div className="lore-page">
       <button className="btn-back" onClick={() => {
-        if (confirmDiscardCandidateDraft()) navigate(`/project/${id}`);
+        if (confirmDiscardDrafts()) navigate(`/project/${id}`);
       }}>← 返回创作项目</button>
       <header className="page-header lore-header">
         <div>
@@ -532,7 +582,7 @@ export default function LoreRepositoryPage() {
           <strong>{overview?.needs_attention ?? "—"}</strong><span>需要关注</span>
         </button>
         <button type="button" onClick={() => changeScope("formal", { enabled: "false", lifecycle: "active" })}>
-          <strong>{overview?.disabled ?? "—"}</strong><span>已停用</span>
+          <strong>{overview?.disabled ?? "—"}</strong><span>暂停用于生成</span>
         </button>
         <button type="button" onClick={() => changeScope("formal", { lifecycle: "archived" })}>
           <strong>{overview?.archived ?? "—"}</strong><span>已归档</span>
@@ -561,7 +611,7 @@ export default function LoreRepositoryPage() {
             <label><span>确认状态</span><select className="form-select" value={searchParams.get("confirmation") ?? ""} onChange={(event) => updateQuery({ confirmation: event.target.value || null })}><option value="">全部状态</option>{formalFacets?.confirmation_statuses.map((facet) => <option key={facet.key} value={facet.key}>{facet.label}（{facet.count}）</option>)}</select></label>
             <label><span>原始来源</span><select className="form-select" value={searchParams.get("source") ?? ""} onChange={(event) => updateQuery({ source: event.target.value || null })}><option value="">全部来源</option>{formalFacets?.sources.map((facet) => <option key={facet.key} value={facet.key}>{facet.label}（{facet.count}）</option>)}</select></label>
             <label><span>状态</span><select className="form-select" value={searchParams.get("lifecycle") ?? ""} onChange={(event) => updateQuery({ lifecycle: event.target.value || null })}><option value="">全部状态</option>{formalFacets?.lifecycle_statuses.map((facet) => <option key={facet.key} value={facet.key}>{facet.label}（{facet.count}）</option>)}</select></label>
-            <label><span>启用情况</span><select className="form-select" value={searchParams.get("enabled") ?? ""} onChange={(event) => updateQuery({ enabled: event.target.value || null })}><option value="">全部</option><option value="true">已启用</option><option value="false">已停用</option></select></label>
+            <label><span>生成权限</span><select className="form-select" value={searchParams.get("enabled") ?? ""} onChange={(event) => updateQuery({ enabled: event.target.value || null })}><option value="">全部</option><option value="true">允许用于生成</option><option value="false">暂停用于生成</option></select></label>
             <label><span>关联情况</span><select className="form-select" value={searchParams.get("has_relation") ?? ""} onChange={(event) => updateQuery({ has_relation: event.target.value || null })}><option value="">全部</option><option value="true">存在关联</option><option value="false">暂无关联</option></select></label>
           </>
         ) : (
@@ -587,7 +637,7 @@ export default function LoreRepositoryPage() {
             <div className="lore-empty"><strong>{activeFilters ? "没有匹配的设定" : "这里还没有内容"}</strong><span>{activeFilters ? "可清除筛选后重新查看。" : scope === "formal" ? "完成提取审核后，正式设定会显示在这里。" : "导入世界观文本后，提取结果会显示在这里。"}</span></div>
           )}
           {scope === "formal" && formalItems.map((item) => (
-            <FormalCard key={item.id} item={item} selected={selectedFormalId === item.id} onSelect={() => setSelectedFormalId(item.id)} />
+            <FormalCard key={item.id} item={item} selected={selectedFormalId === item.id} disabled={formalMutationBusy} onSelect={() => selectFormal(item.id)} />
           ))}
           {scope === "review" && candidates.map((item) => (
             <CandidateCard key={item.id} item={item} selected={selectedCandidateId === item.id} disabled={candidateMutationBusy} buttonRef={(node) => {
@@ -603,7 +653,14 @@ export default function LoreRepositoryPage() {
           {!selectedFormalId && !selectedCandidate && <div className="lore-empty"><strong>选择一项查看详情</strong><span>可核对字段、关联数量和原始文本出处。</span></div>}
           {detailLoading && <div className="lore-empty">详情加载中…</div>}
           {detailError && <div className="lore-alert" role="alert">{detailError}<button type="button" onClick={() => setDetailReloadToken((value) => value + 1)}>重试</button></div>}
-          {detail && <FormalDetail detail={detail} />}
+          {detail && <FormalDetail
+            key={`${detail.id}-${detail.lock_version}`}
+            projectId={id}
+            detail={detail}
+            onDirtyChange={setFormalDirty}
+            onBusyChange={setFormalMutationBusy}
+            onMutationComplete={finishFormalMutation}
+          />}
           {selectedCandidate && (
             <CandidateDetail
               key={selectedCandidate.id}
@@ -633,12 +690,13 @@ export default function LoreRepositoryPage() {
   );
 }
 
-function FormalCard({ item, selected, onSelect }: { item: LoreElementListItem; selected: boolean; onSelect: () => void }) {
+function FormalCard({ item, selected, disabled, onSelect }: { item: LoreElementListItem; selected: boolean; disabled: boolean; onSelect: () => void }) {
   return (
-    <button type="button" className={`lore-card ${selected ? "selected" : ""}`} onClick={onSelect} aria-pressed={selected}>
-      <span className="lore-card-top"><span className="lore-type">{item.type.display_name}</span><span className={`lore-badge ${item.enabled ? "" : "lore-badge--muted"}`}>{item.enabled ? "已启用" : "已停用"}</span></span>
+    <button type="button" className={`lore-card ${selected ? "selected" : ""}`} onClick={onSelect} aria-pressed={selected} disabled={disabled}>
+      <span className="lore-card-top"><span className="lore-type">{item.type.display_name}</span><span className={`lore-badge ${item.lifecycle_status === "archived" ? "lore-badge--muted" : ""}`}>{LIFECYCLE_STATUS[item.lifecycle_status] || "状态待确认"}</span></span>
       <strong>{item.name}</strong>
       <span className="lore-summary">{item.summary || "暂无摘要"}</span>
+      <span className="lore-meta">{CONFIRMATION_STATUS[item.confirmation_status] || "确认状态待核对"} · {item.enabled ? "允许用于生成" : "暂停用于生成"} · {item.generation_eligible ? "当前可用于生成" : "当前不可用于生成"}</span>
       <span className="lore-meta">{item.source_summary || "来源待补充"} · {item.relation_count} 项关联 · 版本 {item.current_version}</span>
     </button>
   );
@@ -655,14 +713,395 @@ function CandidateCard({ item, selected, disabled, buttonRef, onSelect }: { item
   );
 }
 
-function FormalDetail({ detail }: { detail: LoreElementDetail }) {
-  const definitions = [...detail.field_definitions]
-    .sort((left, right) => left.order - right.order);
+interface FormalDraft {
+  name: string;
+  summary: string;
+  payload: Record<string, string>;
+  fieldStates: Record<string, LoreFieldState>;
+}
+
+type FormalStateAction = "enable" | "disable" | "archive" | "restore-archive";
+
+type FormalPendingIntent =
+  | { kind: "edit"; draft: FormalDraft }
+  | { kind: "state"; action: FormalStateAction };
+
+const FORMAL_ACTION: Record<FormalStateAction, { title: string; description: string; success: string }> = {
+  enable: {
+    title: "允许用于生成",
+    description: "允许系统在该设定已确认、未归档且没有待确认字段时，把它纳入生成依据。",
+    success: "该设定已允许用于生成。",
+  },
+  disable: {
+    title: "暂停用于生成",
+    description: "设定内容、来源、版本和关系都会保留，但暂不作为生成依据。",
+    success: "该设定已暂停用于生成。",
+  },
+  archive: {
+    title: "归档设定",
+    description: "设定会标记为已归档并停止用于生成；来源、版本和关系会保留，可通过已归档筛选集中查看和恢复。",
+    success: "该设定已归档，可在已归档筛选中恢复。",
+  },
+  "restore-archive": {
+    title: "恢复到设定库",
+    description: "设定会恢复为使用中，并保留归档前的启停状态；满足条件时可能重新成为生成依据。",
+    success: "该设定已恢复到设定库。",
+  },
+};
+
+function stringValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  return typeof value === "string" ? value : valueText(value);
+}
+
+function buildFormalDraft(detail: LoreElementDetail): FormalDraft {
+  return {
+    name: detail.name,
+    summary: detail.summary,
+    payload: Object.fromEntries(
+      detail.field_definitions.map((field) => [field.key, stringValue(detail.payload[field.key])])
+    ),
+    fieldStates: Object.fromEntries(
+      detail.field_definitions.map((field) => [
+        field.key,
+        (detail.field_states[field.key] as LoreFieldState | undefined) ?? "unknown",
+      ])
+    ),
+  };
+}
+
+function formalEditInput(detail: LoreElementDetail, draft: FormalDraft): LoreElementUpdateInput | null {
+  const name = draft.name.trim();
+  if (!name) return null;
+  const payload: Record<string, string | null> = {};
+  const fieldStates: Record<string, LoreFieldState> = {};
+  for (const field of detail.field_definitions) {
+    const state = draft.fieldStates[field.key] ?? "unknown";
+    const value = draft.payload[field.key]?.trim() ?? "";
+    if (state === "provided" && !value) return null;
+    payload[field.key] = state === "unknown" ? null : value || null;
+    fieldStates[field.key] = state;
+  }
+  return {
+    expected_version: detail.lock_version,
+    name,
+    summary: draft.summary.trim(),
+    payload,
+    field_states: fieldStates,
+  };
+}
+
+function detailMatchesDraft(detail: LoreElementDetail, draft: FormalDraft): boolean {
+  const input = formalEditInput(detail, draft);
+  if (!input || detail.name !== input.name || detail.summary !== input.summary) return false;
+  return detail.field_definitions.every((field) => (
+    stringValue(detail.payload[field.key]) === stringValue(input.payload[field.key]) &&
+    (detail.field_states[field.key] || "unknown") === input.field_states[field.key]
+  ));
+}
+
+function stateReached(detail: LoreElementDetail, action: FormalStateAction): boolean {
+  if (action === "enable") return detail.enabled;
+  if (action === "disable") return !detail.enabled;
+  if (action === "archive") return detail.lifecycle_status === "archived";
+  return detail.lifecycle_status === "active";
+}
+
+function FormalDetail({
+  projectId,
+  detail,
+  onDirtyChange,
+  onBusyChange,
+  onMutationComplete,
+}: {
+  projectId: string;
+  detail: LoreElementDetail;
+  onDirtyChange: (dirty: boolean) => void;
+  onBusyChange: (busy: boolean) => void;
+  onMutationComplete: (elementId: string, notice: string) => void;
+}) {
+  const definitions = [...detail.field_definitions].sort((left, right) => left.order - right.order);
+  const [baseDetail, setBaseDetail] = useState(detail);
+  const [draft, setDraft] = useState(() => buildFormalDraft(detail));
+  const [editing, setEditing] = useState(false);
+  const [busyAction, setBusyAction] = useState<"save" | "state" | "check" | null>(null);
+  const [confirmAction, setConfirmAction] = useState<FormalStateAction | null>(null);
+  const [reason, setReason] = useState("");
+  const [operationError, setOperationError] = useState("");
+  const [conflict, setConflict] = useState(false);
+  const [outcomeUnknown, setOutcomeUnknown] = useState(false);
+  const [pendingIntent, setPendingIntent] = useState<FormalPendingIntent | null>(null);
+  const [serverLatest, setServerLatest] = useState<LoreElementDetail | null>(null);
+  const [preservedDraft, setPreservedDraft] = useState("");
+  const nameRef = useRef<HTMLInputElement | null>(null);
+  const errorRef = useRef<HTMLDivElement | null>(null);
+  const confirmRef = useRef<HTMLDivElement | null>(null);
+  const editButtonRef = useRef<HTMLButtonElement | null>(null);
+  const stateTriggerRef = useRef<HTMLButtonElement | null>(null);
+
+  const dirty = editing && JSON.stringify(draft) !== JSON.stringify(buildFormalDraft(baseDetail));
+  const hasSemanticChanges = !detailMatchesDraft(baseDetail, draft);
+  const writable = !baseDetail.read_only && baseDetail.lifecycle_status !== "merged";
+
+  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
+  useEffect(() => onBusyChange(busyAction !== null), [busyAction, onBusyChange]);
+  useEffect(() => () => {
+    onDirtyChange(false);
+    onBusyChange(false);
+  }, [onBusyChange, onDirtyChange]);
+  useEffect(() => {
+    if (operationError) requestAnimationFrame(() => errorRef.current?.focus());
+  }, [operationError]);
+  useEffect(() => {
+    if (confirmAction) requestAnimationFrame(() => confirmRef.current?.focus());
+  }, [confirmAction]);
+
+  function beginEdit() {
+    setOperationError("");
+    setConflict(false);
+    setOutcomeUnknown(false);
+    setPendingIntent(null);
+    setEditing(true);
+    requestAnimationFrame(() => nameRef.current?.focus());
+  }
+
+  function cancelEdit() {
+    if (dirty && !window.confirm("确定放弃当前尚未保存的正式设定修改吗？")) return;
+    setDraft(buildFormalDraft(baseDetail));
+    setEditing(false);
+    setOperationError("");
+    setConflict(false);
+    setOutcomeUnknown(false);
+    setPendingIntent(null);
+    requestAnimationFrame(() => editButtonRef.current?.focus());
+  }
+
+  function changeFieldState(key: string, state: LoreFieldState) {
+    setDraft((current) => ({
+      ...current,
+      payload: state === "unknown" ? { ...current.payload, [key]: "" } : current.payload,
+      fieldStates: { ...current.fieldStates, [key]: state },
+    }));
+  }
+
+  async function reconcile(intent: FormalPendingIntent) {
+    setBusyAction("check");
+    try {
+      const latest = await api.getLoreElement(projectId, baseDetail.id);
+      if (intent.kind === "edit" && detailMatchesDraft(latest, intent.draft)) {
+        onMutationComplete(baseDetail.id, "服务器内容与本地提交一致，已同步最新列表；无法确认是否由本次请求产生。当前列表已刷新。");
+        return;
+      }
+      if (intent.kind === "state" && stateReached(latest, intent.action)) {
+        onMutationComplete(baseDetail.id, `服务器显示“${FORMAL_ACTION[intent.action].title}”目标状态已达成，但无法确认是否由本次请求产生；列表已同步。`);
+        return;
+      }
+      setServerLatest(latest);
+      if (intent.kind === "edit") setPreservedDraft(JSON.stringify(intent.draft, null, 2));
+      setOperationError("服务器当前内容与本次提交不一致。请先查看最新内容；系统不会自动覆盖或重复提交。");
+      setOutcomeUnknown(false);
+      setConflict(true);
+    } catch (error) {
+      setOperationError(`暂时无法核对服务器最新状态：${errorMessage(error)} 本地内容仍保留。`);
+      setOutcomeUnknown(true);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function saveElement() {
+    if (busyAction) return;
+    if (conflict || outcomeUnknown) {
+      setOperationError("请先核对并载入服务器最新内容，再决定是否重新编辑；系统不会用旧版本重复提交。");
+      return;
+    }
+    if (!hasSemanticChanges) {
+      setOperationError("当前内容没有变化，无需保存。");
+      return;
+    }
+    const input = formalEditInput(baseDetail, draft);
+    if (!draft.name.trim()) {
+      setOperationError("名称不能为空。");
+      return;
+    }
+    const invalidField = definitions.find((field) => (
+      draft.fieldStates[field.key] === "provided" && !draft.payload[field.key]?.trim()
+    ));
+    if (!input || invalidField) {
+      setOperationError(invalidField
+        ? `“${invalidField.label}”标记为已确认有内容时不能为空。`
+        : "请检查设定字段后重试。");
+      return;
+    }
+    const intent: FormalPendingIntent = { kind: "edit", draft: { ...draft, payload: { ...draft.payload }, fieldStates: { ...draft.fieldStates } } };
+    setBusyAction("save");
+    setOperationError("");
+    setConflict(false);
+    setOutcomeUnknown(false);
+    setPendingIntent(intent);
+    try {
+      await api.updateLoreElement(projectId, baseDetail.id, input);
+      onMutationComplete(baseDetail.id, "正式设定修改已保存，并已生成新内容版本。");
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setOperationError(errorMessage(error));
+        if (error.status === 409) {
+          setConflict(true);
+          setPreservedDraft(JSON.stringify(intent.draft, null, 2));
+        }
+      } else {
+        setOutcomeUnknown(true);
+        setOperationError("网络结果不确定，正在核对服务器状态；不会自动重复提交。");
+        await reconcile(intent);
+      }
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  function openStateConfirm(action: FormalStateAction, trigger: HTMLButtonElement) {
+    setOperationError("");
+    setReason("");
+    stateTriggerRef.current = trigger;
+    setConfirmAction(action);
+  }
+
+  function cancelStateConfirm() {
+    setConfirmAction(null);
+    requestAnimationFrame(() => stateTriggerRef.current?.focus());
+  }
+
+  async function performStateAction(action: FormalStateAction) {
+    if (busyAction) return;
+    const intent: FormalPendingIntent = { kind: "state", action };
+    setBusyAction("state");
+    setConfirmAction(null);
+    setOperationError("");
+    setConflict(false);
+    setOutcomeUnknown(false);
+    setPendingIntent(intent);
+    try {
+      await api.changeLoreElementState(projectId, baseDetail.id, action, {
+        expected_version: baseDetail.lock_version,
+        reason: reason.trim(),
+      });
+      onMutationComplete(baseDetail.id, FORMAL_ACTION[action].success);
+    } catch (error) {
+      if (error instanceof ApiError) {
+        if (error.code === "LORE_ELEMENT_ACTIVE_RELATIONS") {
+          setOperationError("该设定刚刚出现了启用关系。关系管理将在后续里程碑开放；当前暂不能归档此设定。");
+          try {
+            const latest = await api.getLoreElement(projectId, baseDetail.id);
+            setBaseDetail(latest);
+            setDraft(buildFormalDraft(latest));
+            setPendingIntent(null);
+          } catch {
+            setConflict(true);
+            setOutcomeUnknown(true);
+          }
+        } else {
+          setOperationError(errorMessage(error));
+          if (error.status === 409 && error.code === "LORE_VERSION_CONFLICT") setConflict(true);
+        }
+      } else {
+        setOutcomeUnknown(true);
+        setOperationError("网络结果不确定，正在核对服务器状态；不会自动重复提交。");
+        await reconcile(intent);
+      }
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  function loadServerLatest() {
+    if (!serverLatest) return;
+    setBaseDetail(serverLatest);
+    setDraft(buildFormalDraft(serverLatest));
+    setServerLatest(null);
+    setEditing(false);
+    setOperationError("");
+    setConflict(false);
+    setOutcomeUnknown(false);
+    setPendingIntent(null);
+  }
+
+  const stateActions: FormalStateAction[] = baseDetail.lifecycle_status === "archived"
+    ? ["restore-archive"]
+    : [baseDetail.enabled ? "disable" : "enable", ...(baseDetail.relation_count === 0 ? ["archive" as const] : [])];
+  const confirmTitleId = confirmAction
+    ? `lore-formal-confirm-${baseDetail.id}-${confirmAction}`
+    : undefined;
+
   return (
-    <div>
-      <div className="lore-detail-heading"><span className="lore-type">{detail.type.display_name}</span><h2>{detail.name}</h2><p>{detail.summary || "暂无摘要"}</p></div>
-      <dl className="lore-fields">{definitions.map((definition) => <div key={definition.key}><dt>{definition.label}<span>{FIELD_STATE[detail.field_states[definition.key]] || "状态待确认"}</span></dt><dd>{valueText(detail.payload[definition.key])}</dd></div>)}</dl>
-      <section className="lore-sources"><h3>原始出处</h3>{detail.sources.length ? detail.sources.map((source, index) => <article key={source.id ?? `${source.kind}-${index}`}><strong>{SOURCE_KIND[source.kind] || "其他来源"}{source.is_primary ? " · 主要来源" : ""}</strong><p>{source.excerpt || "暂无可展示的原文摘录"}</p>{source.reference && <small>{source.reference}</small>}</article>) : <p>暂无来源记录</p>}</section>
+    <div className="lore-formal-review">
+      <div className="lore-detail-heading">
+        <span className="lore-type">{baseDetail.type.display_name}</span>
+        <h2>{baseDetail.name}</h2>
+        <p>{baseDetail.summary || "暂无摘要"}</p>
+        <div className="lore-status-grid" aria-label="设定当前状态">
+          <span>{CONFIRMATION_STATUS[baseDetail.confirmation_status] || "确认状态待核对"}</span>
+          <span>{LIFECYCLE_STATUS[baseDetail.lifecycle_status] || "生命周期待核对"}</span>
+          <span>{baseDetail.enabled ? "允许用于生成" : "暂停用于生成"}</span>
+          <span>{baseDetail.generation_eligible ? "当前可用于生成" : "当前不可用于生成"}</span>
+        </div>
+      </div>
+
+      {operationError && <div className="lore-alert lore-operation-message" role="alert" tabIndex={-1} ref={errorRef}>
+        <span>{operationError}</span>
+        {(conflict || outcomeUnknown) && pendingIntent && <button type="button" disabled={busyAction !== null} onClick={() => void reconcile(pendingIntent)}>{busyAction === "check" ? "核对中…" : "核对最新状态"}</button>}
+      </div>}
+
+      {serverLatest && <section className="lore-server-latest">
+        <h3>服务器最新内容</h3>
+        <p>{serverLatest.name} · 内容版本 {serverLatest.current_version} · {LIFECYCLE_STATUS[serverLatest.lifecycle_status] || serverLatest.lifecycle_status}</p>
+        <button className="btn btn-secondary" type="button" onClick={loadServerLatest}>载入服务器最新内容</button>
+      </section>}
+
+      {preservedDraft && <details className="lore-preserved-draft"><summary>查看冲突前保留的本地草稿</summary><textarea className="form-textarea" readOnly value={preservedDraft} aria-label="冲突前保留的本地草稿" /></details>}
+
+      {editing ? (
+        <form className="lore-candidate-form" onSubmit={(event) => { event.preventDefault(); void saveElement(); }}>
+          <fieldset disabled={busyAction !== null}>
+            <legend>编辑正式设定</legend>
+            <label><span>类型</span><input className="form-input" value={baseDetail.type.display_name} disabled /><small>普通编辑不能切换类型。</small></label>
+            <label><span>名称</span><input ref={nameRef} className="form-input" value={draft.name} maxLength={200} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
+            <label><span>摘要</span><textarea className="form-textarea" value={draft.summary} maxLength={2000} onChange={(event) => setDraft((current) => ({ ...current, summary: event.target.value }))} /></label>
+            <section className="lore-edit-fields"><h3>类型字段</h3>{definitions.length ? definitions.map((field) => <div className="lore-edit-field" key={field.key}>
+              <label><span>{field.label}</span>{field.control === "text" ? <input className="form-input" value={draft.payload[field.key] ?? ""} disabled={draft.fieldStates[field.key] === "unknown"} onChange={(event) => setDraft((current) => ({ ...current, payload: { ...current.payload, [field.key]: event.target.value } }))} /> : <textarea className="form-textarea" value={draft.payload[field.key] ?? ""} disabled={draft.fieldStates[field.key] === "unknown"} onChange={(event) => setDraft((current) => ({ ...current, payload: { ...current.payload, [field.key]: event.target.value } }))} />}</label>
+              <label><span>信息状态</span><select className="form-select" value={draft.fieldStates[field.key] ?? "unknown"} onChange={(event) => changeFieldState(field.key, event.target.value as LoreFieldState)}><option value="provided">已确认有内容</option><option value="unknown">信息为空</option><option value="needs_confirmation">待确认</option></select></label>
+              {field.help && <small>{field.help}</small>}
+            </div>) : <p>当前类型没有额外字段。</p>}</section>
+          </fieldset>
+          <div className="lore-candidate-actions">
+            <button className="btn btn-primary" type="submit" disabled={busyAction !== null || !hasSemanticChanges || conflict || outcomeUnknown}>{busyAction === "save" ? "保存中…" : "保存修改"}</button>
+            <button className="btn btn-secondary" type="button" disabled={busyAction !== null} onClick={cancelEdit}>取消</button>
+          </div>
+        </form>
+      ) : (
+        <>
+          <dl className="lore-fields">{definitions.map((definition) => <div key={definition.key}><dt>{definition.label}<span>{FIELD_STATE[baseDetail.field_states[definition.key]] || "状态待确认"}</span></dt><dd>{valueText(baseDetail.payload[definition.key])}</dd></div>)}</dl>
+          <section className="lore-sources"><h3>原始出处</h3>{baseDetail.sources.length ? baseDetail.sources.map((source, index) => <article key={source.id ?? `${source.kind}-${index}`}><strong>{SOURCE_KIND[source.kind] || "其他来源"}{source.is_primary ? " · 主要来源" : ""}</strong><p>{source.excerpt || "暂无可展示的原文摘录"}</p>{source.reference && <small>{source.reference}</small>}</article>) : <p>暂无来源记录</p>}</section>
+          {writable ? <section className="lore-candidate-action-panel">
+            <h3>管理正式设定</h3>
+            <p>内容编辑会生成新版本；暂停或归档不会删除内容、来源、版本或关系。</p>
+            <div className="lore-candidate-actions">
+              <button ref={editButtonRef} className="btn btn-primary" type="button" disabled={busyAction !== null || conflict || outcomeUnknown} onClick={beginEdit}>编辑内容</button>
+              {stateActions.map((action) => <button key={action} className="btn btn-secondary" type="button" disabled={busyAction !== null || conflict || outcomeUnknown} onClick={(event) => openStateConfirm(action, event.currentTarget)}>{FORMAL_ACTION[action].title}</button>)}
+            </div>
+            {baseDetail.lifecycle_status === "active" && baseDetail.relation_count > 0 && <p className="lore-action-reasons">该设定有 {baseDetail.relation_count} 条启用关系；关系管理将在后续里程碑开放，归档关系前暂不能归档此设定。</p>}
+          </section> : <div className="lore-note">当前资料为只读或已合并，不能在这里修改。</div>}
+        </>
+      )}
+
+      {confirmAction && <section className="lore-confirm" role="alertdialog" aria-labelledby={confirmTitleId} tabIndex={-1} ref={confirmRef}>
+        <h3 id={confirmTitleId}>确认{FORMAL_ACTION[confirmAction].title}</h3>
+        <p>{FORMAL_ACTION[confirmAction].description}</p>
+        <label><span>原因（可选）</span><input className="form-input" value={reason} maxLength={200} onChange={(event) => setReason(event.target.value)} /></label>
+        <div className="lore-candidate-actions">
+          <button className="btn btn-primary" type="button" disabled={busyAction !== null} onClick={() => void performStateAction(confirmAction)}>确认{FORMAL_ACTION[confirmAction].title}</button>
+          <button className="btn btn-secondary" type="button" disabled={busyAction !== null} onClick={cancelStateConfirm}>取消</button>
+        </div>
+      </section>}
     </div>
   );
 }

@@ -28,6 +28,7 @@ from app.core.lore_write import (
     LoreWriteError,
     change_element_state,
     change_relation_state,
+    check_writes_available,
     create_custom_type,
     create_element,
     create_relation,
@@ -1632,6 +1633,30 @@ async def archive_lore_element(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     element = await _load_relational_element(project_id, element_id, db, current_user)
+    check_writes_available()
+    relation_result = await db.execute(
+        select(ElementRelation).where(
+            ElementRelation.project_id == project_id,
+            or_(
+                ElementRelation.source_element_id == element.id,
+                ElementRelation.target_element_id == element.id,
+            ),
+        ).order_by(ElementRelation.id.asc()).with_for_update()
+    )
+    active_relation_count = sum(
+        1 for relation in relation_result.scalars().all()
+        if relation.status == "active"
+    )
+    if active_relation_count:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "LORE_ELEMENT_ACTIVE_RELATIONS",
+                "message": "该设定仍有启用中的关系，请先归档相关关系",
+                "active_relation_count": active_relation_count,
+            },
+        )
     try:
         await change_element_state(
             db=db,

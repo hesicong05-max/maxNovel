@@ -32,6 +32,9 @@ import type {
   LoreCandidateInboxResponse,
   LoreElementDetail,
   LoreElementFilters,
+  LoreElementStateInput,
+  LoreElementUpdateInput,
+  LoreElementWriteResponse,
   LoreListResponse,
   LoreOverview,
   LoreTypesResponse,
@@ -295,6 +298,25 @@ export const api = {
     fetchJSON<LoreElementDetail>(
       `/projects/${projectId}/lore/elements/${elementId}`,
       { signal }
+    ),
+  updateLoreElement: (
+    projectId: string,
+    elementId: string,
+    data: LoreElementUpdateInput
+  ) =>
+    fetchJSON<LoreElementWriteResponse>(
+      `/projects/${projectId}/lore/elements/${elementId}`,
+      { method: "PATCH", body: JSON.stringify(data) }
+    ),
+  changeLoreElementState: (
+    projectId: string,
+    elementId: string,
+    action: "enable" | "disable" | "archive" | "restore-archive",
+    data: LoreElementStateInput
+  ) =>
+    fetchJSON<LoreElementWriteResponse>(
+      `/projects/${projectId}/lore/elements/${elementId}/${action}`,
+      { method: "POST", body: JSON.stringify(data) }
     ),
   listLoreCandidates: (
     projectId: string,
