@@ -40,6 +40,9 @@ import type {
   LoreListResponse,
   LoreMergePreviewInput,
   LoreMergePreviewResponse,
+  LoreMergeCommitInput,
+  LoreMergeOperation,
+  LoreMergeOperationsResponse,
   LoreOverview,
   LoreRelation,
   LoreRelationCreateInput,
@@ -433,6 +436,30 @@ export const api = {
   ) => fetchJSON<LoreMergePreviewResponse>(
     `/projects/${projectId}/lore/reviews/${suggestionId}/merge-preview`,
     { method: "POST", body: JSON.stringify(data) }
+  ),
+  commitLoreMerge: (
+    projectId: string,
+    suggestionId: string,
+    data: LoreMergeCommitInput
+  ) => fetchJSON<LoreMergeOperation>(
+    `/projects/${projectId}/lore/reviews/${suggestionId}/merge-commit`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
+  getLoreMergeOperationByKey: (
+    projectId: string,
+    operationKey: string,
+    signal?: AbortSignal
+  ) => fetchJSON<LoreMergeOperation>(
+    `/projects/${projectId}/lore/merge-operations/by-key/${encodeURIComponent(operationKey)}`,
+    { signal }
+  ),
+  listLoreElementMergeHistory: (
+    projectId: string,
+    elementId: string,
+    signal?: AbortSignal
+  ) => fetchJSON<LoreMergeOperationsResponse>(
+    `/projects/${projectId}/lore/elements/${elementId}/merge-history`,
+    { signal }
   ),
   getLoreCandidate: (
     projectId: string,

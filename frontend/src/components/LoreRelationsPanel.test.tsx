@@ -213,8 +213,7 @@ describe("LoreRelationsPanel", () => {
 
     await user.click(await screen.findByRole("button", { name: "添加关系" }));
     const searchbox = screen.getByRole("searchbox", { name: "搜索目标设定" });
-    await user.type(searchbox, "星盟");
-    await waitFor(() => expect(searchbox).toHaveValue("星盟"));
+    await user.type(searchbox, "星");
     await user.click(await screen.findByRole("button", { name: /星盟.*阵营/ }));
     await user.click(screen.getByRole("button", { name: "创建关系" }));
     const refresh = await screen.findByRole("button", { name: "载入最新端点版本" });

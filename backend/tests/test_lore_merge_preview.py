@@ -154,8 +154,15 @@ async def test_preview_is_zero_write_and_token_contains_only_fingerprints(
         "strategy": "preserve_in_place",
     }
     claims = decode_merge_preview_token(preview["preview_token"])
+    assert claims["v"] == 2
     assert claims["project_id"] == project_id
     assert claims["survivor_id"] == left["id"]
+    assert isinstance(claims["type_id"], str)
+    assert claims["type_id"]
+    assert claims["type_schema_revision"] == 1
+    assert claims["survivor_payload_schema_revision"] == 1
+    assert claims["merged_payload_schema_revision"] == 1
+    assert claims["field_schema_fingerprint"]
     assert "Alice 是一名谨慎的主角。" not in str(claims)
     assert "final_name" not in claims
     token = preview["preview_token"]

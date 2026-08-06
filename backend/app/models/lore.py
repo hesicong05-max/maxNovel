@@ -101,6 +101,16 @@ class SettingElement(Base):
             "lifecycle_status IN ('active', 'archived', 'merged')",
             name="ck_setting_element_lifecycle",
         ),
+        CheckConstraint(
+            "merged_into_element_id IS NULL OR merged_into_element_id <> id",
+            name="ck_setting_element_no_self_merge",
+        ),
+        CheckConstraint(
+            "(lifecycle_status = 'merged' AND enabled IS FALSE "
+            "AND merged_into_element_id IS NOT NULL) OR "
+            "(lifecycle_status <> 'merged' AND merged_into_element_id IS NULL)",
+            name="ck_setting_element_merge_state",
+        ),
         Index(
             "ix_setting_elements_project_status_updated",
             "project_id",

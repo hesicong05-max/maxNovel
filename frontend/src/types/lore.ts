@@ -526,3 +526,46 @@ export interface LoreMergePreviewResponse {
   expires_at: string;
   commit_available: false;
 }
+
+export interface LoreMergeCommitInput {
+  operation_key: string;
+  preview_token: string;
+  preview: LoreMergePreviewInput;
+}
+
+export interface LoreMergeRelationActionSummary {
+  id: string;
+  relation_id: string | null;
+  retained_relation_id: string | null;
+  action: "rewired" | "exact_duplicate_archived" | "self_loop_archived";
+  before_snapshot: Record<string, unknown>;
+  after_snapshot: Record<string, unknown>;
+  previous_lock_version: number;
+  new_lock_version: number;
+}
+
+export interface LoreMergeOperation {
+  id: string;
+  project_id: string;
+  operation_key: string;
+  suggestion_id: string | null;
+  evidence_revision: number;
+  survivor_element_id: string;
+  merged_element_id: string;
+  survivor_before_content_version: number;
+  survivor_before_lock_version: number;
+  survivor_after_content_version: number;
+  survivor_after_lock_version: number;
+  merged_before_content_version: number;
+  merged_before_lock_version: number;
+  merged_after_lock_version: number;
+  selection_snapshot: Record<string, unknown>;
+  impact_summary: Record<string, unknown>;
+  relation_actions: LoreMergeRelationActionSummary[];
+  created_at: string;
+  replayed: boolean;
+}
+
+export interface LoreMergeOperationsResponse {
+  items: LoreMergeOperation[];
+}

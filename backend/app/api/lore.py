@@ -26,6 +26,14 @@ from app.core.lore_migration import (
     type_field_definitions,
     validate_projection,
 )
+from app.core.lore_merge_commit import (
+    build_merge_operation_response,
+    commit_lore_merge,
+    find_merge_operation,
+    list_element_merge_history,
+    merge_request_fingerprint,
+    replay_merge_operation,
+)
 from app.core.lore_merge_preview import build_merge_preview
 from app.core.lore_relation_types import RELATION_TYPES, resolve_relation_type
 from app.core.lore_review import scan_lore_review_suggestions
@@ -74,6 +82,9 @@ from app.schemas.lore import (
     LoreMigrationStatus,
     LoreMergePreviewInput,
     LoreMergePreviewResponse,
+    LoreMergeCommitInput,
+    LoreMergeOperationResponse,
+    LoreMergeOperationsResponse,
     LoreRelationCreate,
     LoreRelationCreateResponse,
     LoreRelationEndpoint,
@@ -868,7 +879,7 @@ async def get_lore_repository_overview(
                 project.lore_storage_mode == "relational"
                 and not migration_status.read_only
             ),
-            formal_merge_commit=False,
+            formal_merge_commit=(project.lore_storage_mode == "relational"),
         ),
         count_definitions={
             "formal_total": {"entity": "formal_lore"},
@@ -1185,6 +1196,15 @@ async def _load_relational_element(
     element = result.scalar_one_or_none()
     if element is None:
         raise HTTPException(status_code=404, detail="设定不存在")
+    if element.lifecycle_status == "merged" or element.merged_into_element_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "LORE_ELEMENT_ALREADY_MERGED",
+                "message": "该设定已合并，不能继续修改；请打开保留设定",
+                "merged_into_element_id": element.merged_into_element_id,
+            },
+        )
     return element
 
 
@@ -2086,6 +2106,102 @@ async def preview_lore_merge(
         )
     except LoreWriteError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post(
+    "/reviews/{suggestion_id}/merge-commit",
+    response_model=LoreMergeOperationResponse,
+)
+async def commit_reviewed_lore_merge(
+    project_id: str,
+    suggestion_id: str,
+    body: LoreMergeCommitInput,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    project = await get_project_for_owner(project_id, current_user, db)
+    _require_relational_mode(project)
+    request_fingerprint = merge_request_fingerprint(suggestion_id, body)
+    try:
+        return await commit_lore_merge(
+            db,
+            project_id=project_id,
+            user_id=current_user.id,
+            suggestion_id=suggestion_id,
+            body=body,
+        )
+    except LoreWriteError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except IntegrityError as exc:
+        await db.rollback()
+        existing = await find_merge_operation(
+            db,
+            project_id=project_id,
+            user_id=current_user.id,
+            operation_key=body.operation_key,
+        )
+        if existing is not None:
+            try:
+                return await replay_merge_operation(
+                    db, existing, request_fingerprint
+                )
+            except LoreWriteError as replay_exc:
+                raise HTTPException(
+                    status_code=replay_exc.status_code,
+                    detail=replay_exc.detail,
+                ) from replay_exc
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "LORE_MERGE_CONFLICT",
+                "message": "合并发生并发冲突，请先核对结果再重新预览",
+                "retryable": True,
+            },
+        ) from exc
+    except Exception:
+        await db.rollback()
+        raise
+
+
+@router.get(
+    "/merge-operations/by-key/{operation_key}",
+    response_model=LoreMergeOperationResponse,
+)
+async def get_lore_merge_operation_by_key(
+    project_id: str,
+    operation_key: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    project = await get_project_for_owner(project_id, current_user, db)
+    _require_relational_mode(project)
+    operation = await find_merge_operation(
+        db,
+        project_id=project_id,
+        user_id=current_user.id,
+        operation_key=operation_key,
+    )
+    if operation is None:
+        raise HTTPException(status_code=404, detail="未找到该合并操作")
+    return await build_merge_operation_response(db, operation, replayed=True)
+
+
+@router.get(
+    "/elements/{element_id}/merge-history",
+    response_model=LoreMergeOperationsResponse,
+)
+async def get_lore_element_merge_history(
+    project_id: str,
+    element_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    await _load_relational_read_element(project_id, element_id, db, current_user)
+    items = await list_element_merge_history(
+        db, project_id=project_id, element_id=element_id
+    )
+    return LoreMergeOperationsResponse(items=items)
 
 
 @router.post(

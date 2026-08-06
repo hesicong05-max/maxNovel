@@ -39,7 +39,7 @@ from app.schemas.lore import (
     LoreTypeSummary,
 )
 
-_TOKEN_VERSION = 1
+_TOKEN_VERSION = 2
 _TOKEN_TTL = timedelta(minutes=15)
 _TOKEN_CONTEXT = b"lore-merge-preview:v1\n"
 _SOURCE_KIND_LABELS = {
@@ -110,6 +110,11 @@ def decode_merge_preview_token(token: str, *, now: datetime | None = None) -> di
             },
             status_code=409,
         ) from exc
+
+
+def stable_merge_claims(claims: dict[str, Any]) -> dict[str, Any]:
+    """Return the immutable authorization anchors, excluding token timing."""
+    return {key: value for key, value in claims.items() if key not in {"iat", "exp"}}
 
 
 def _conflict(code: str, message: str) -> LoreWriteError:
@@ -585,6 +590,12 @@ async def build_merge_preview(
         "survivor_content_version": survivor.content_version,
         "merged_lock_version": merged.lock_version,
         "merged_content_version": merged.content_version,
+        "type_id": setting_type.id,
+        "type_status": setting_type.status,
+        "type_schema_revision": setting_type.schema_revision,
+        "field_schema_fingerprint": _fingerprint(field_schema_for_type(setting_type)),
+        "survivor_payload_schema_revision": survivor.payload_schema_revision,
+        "merged_payload_schema_revision": merged.payload_schema_revision,
         "source_fingerprint": source_fingerprint,
         "relation_fingerprint": relation_fingerprint,
         "selection_fingerprint": _fingerprint(selection_snapshot),

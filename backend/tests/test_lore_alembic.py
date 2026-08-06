@@ -298,6 +298,8 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
             in table_sql["lore_review_suggestion_events"]
         )
         assert "fk_setting_element_merged_into" in table_sql["setting_elements"]
+        assert "ck_setting_element_no_self_merge" in table_sql["setting_elements"]
+        assert "ck_setting_element_merge_state" in table_sql["setting_elements"]
         assert "uq_lore_merge_operation_key" in table_sql["lore_merge_operations"]
         assert (
             "fk_lore_merge_operation_survivor"

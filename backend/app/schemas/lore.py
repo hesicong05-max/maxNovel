@@ -628,3 +628,51 @@ class LoreMergePreviewResponse(BaseModel):
     preview_token: str
     expires_at: datetime
     commit_available: bool = False
+
+
+class LoreMergeCommitInput(BaseModel):
+    operation_key: str = Field(
+        ...,
+        min_length=16,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    preview_token: str = Field(..., min_length=32, max_length=4096)
+    preview: LoreMergePreviewInput
+
+
+class LoreMergeRelationActionSummary(BaseModel):
+    id: str
+    relation_id: str | None
+    retained_relation_id: str | None
+    action: Literal["rewired", "exact_duplicate_archived", "self_loop_archived"]
+    before_snapshot: dict[str, Any]
+    after_snapshot: dict[str, Any]
+    previous_lock_version: int
+    new_lock_version: int
+
+
+class LoreMergeOperationResponse(BaseModel):
+    id: str
+    project_id: str
+    operation_key: str
+    suggestion_id: str | None
+    evidence_revision: int
+    survivor_element_id: str
+    merged_element_id: str
+    survivor_before_content_version: int
+    survivor_before_lock_version: int
+    survivor_after_content_version: int
+    survivor_after_lock_version: int
+    merged_before_content_version: int
+    merged_before_lock_version: int
+    merged_after_lock_version: int
+    selection_snapshot: dict[str, Any]
+    impact_summary: dict[str, Any]
+    relation_actions: list[LoreMergeRelationActionSummary] = Field(default_factory=list)
+    created_at: datetime
+    replayed: bool = False
+
+
+class LoreMergeOperationsResponse(BaseModel):
+    items: list[LoreMergeOperationResponse]

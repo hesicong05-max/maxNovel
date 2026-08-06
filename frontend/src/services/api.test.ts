@@ -568,6 +568,14 @@ describe("API - lore repository", () => {
       final_field_states: { personality: "provided" as const },
     };
     await api.previewLoreMerge("project-1", "review-1", preview);
+    const commit = {
+      operation_key: "merge-operation-1234",
+      preview_token: "signed-preview-token",
+      preview,
+    };
+    await api.commitLoreMerge("project-1", "review-1", commit);
+    await api.getLoreMergeOperationByKey("project-1", "merge:key/1");
+    await api.listLoreElementMergeHistory("project-1", "element-1");
 
     expect(fetchSpy).toHaveBeenNthCalledWith(1,
       "/api/projects/project-1/lore/reviews/scan",
@@ -587,6 +595,16 @@ describe("API - lore repository", () => {
     expect(fetchSpy).toHaveBeenNthCalledWith(5,
       "/api/projects/project-1/lore/reviews/review-1/merge-preview",
       expect.objectContaining({ method: "POST", body: JSON.stringify(preview) })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(6,
+      "/api/projects/project-1/lore/reviews/review-1/merge-commit",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(commit) })
+    );
+    expect(fetchSpy.mock.calls[6][0]).toBe(
+      "/api/projects/project-1/lore/merge-operations/by-key/merge%3Akey%2F1"
+    );
+    expect(fetchSpy.mock.calls[7][0]).toBe(
+      "/api/projects/project-1/lore/elements/element-1/merge-history"
     );
   });
 });
