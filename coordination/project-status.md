@@ -330,3 +330,18 @@
   真实数据迁移。根工作树用户的 `.env.prod` 修改保持不动。
 - 剩余门禁：等待提交 `9a297da` 的 GitHub Actions；全部通过后由最高管理者给出最终
   验收。正式设定 CRUD、启停/归档、关系写入和合并继续保留到 `DEV-014C`。
+
+## 2026-08-06 12:10 CST 最终验收
+
+- 任务编号：`DEV-014B`
+- 当前状态：`APPROVED`
+- 验收结果：GitHub Actions `31070075203` 的 frontend-test、backend-test、
+  PostgreSQL 16.4 迁移/回滚及候选写入门禁、Docker 双镜像构建全部成功；与本地
+  回归和双角色 `APPROVED` 结论一致。
+- 交付位置：功能提交 `9a297da`，CI 触发提交 `87ef5b8`，Draft PR #6；CI 完成后
+  PR 已恢复堆叠基线 `codex/dev-003b-safe-writes`。未合并、未部署、未修改生产数据。
+- 最终决定：`DEV-014B` 验收通过；第一阶段尚未整体验收，下一项为 `DEV-014C`
+  正式设定 CRUD、启停/归档与关系写入的最小安全切片，启动前仍需双角色方案审查。
+- 非阻断风险：GitHub 提示 `actions/checkout@v4`、`setup-node@v4` 和 `setup-python@v5`
+  的 Node 20 运行时弃用公告；本次作业由 GitHub 强制使用 Node 24 并成功，后续另立
+  CI 维护任务，不在 Lore 功能提交中升级依赖。
