@@ -1562,6 +1562,156 @@ input, select, textarea { font-family: inherit; }
   font-weight: 600;
 }
 
+.lore-relations {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+}
+
+.lore-relations-heading,
+.lore-relation-tabs {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.lore-relations-heading p,
+.lore-relation-card p {
+  margin-top: 0.35rem;
+  color: var(--text-2);
+}
+
+.lore-relation-tabs {
+  justify-content: flex-start;
+  margin: 0.875rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.lore-relation-tabs button {
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.lore-relation-tabs button[aria-pressed="true"] {
+  border-color: var(--gold);
+  color: var(--text-1);
+  font-weight: 700;
+}
+
+.lore-relation-tabs span {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.lore-relation-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.lore-relation-card {
+  padding: 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+}
+
+.lore-relation-card:focus-visible {
+  outline: 3px solid var(--gold-border);
+  outline-offset: 2px;
+}
+
+.lore-relation-sentence {
+  color: var(--text-1) !important;
+  line-height: 1.6;
+}
+
+.lore-relation-sentence button {
+  min-height: 44px;
+  padding: 0.25rem 0.4rem;
+  border: 0;
+  background: transparent;
+  color: var(--gold-dark);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.lore-relation-form {
+  display: grid;
+  gap: 0.875rem;
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--gold-border);
+  border-radius: var(--r-md);
+  background: var(--gold-light);
+}
+
+.lore-relation-form fieldset,
+.lore-relation-custom-labels {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.lore-relation-form label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.lore-relation-form label > span {
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.lore-relation-targets {
+  display: grid;
+  max-height: 240px;
+  gap: 0.5rem;
+  overflow-y: auto;
+}
+
+.lore-relation-targets button {
+  display: grid;
+  min-height: 52px;
+  padding: 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+  color: var(--text-1);
+  cursor: pointer;
+  text-align: left;
+}
+
+.lore-relation-targets button[aria-pressed="true"] {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 2px var(--gold-light);
+}
+
+.lore-relation-targets span,
+.lore-relation-preview p,
+.lore-relation-card small {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.lore-relation-preview {
+  padding: 0.75rem;
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -1650,6 +1800,32 @@ input, select, textarea { font-family: inherit; }
   .lore-candidate-actions .btn {
     width: 100%;
     min-height: 44px;
+  }
+
+  .lore-relations-heading,
+  .lore-relation-tabs {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .lore-relations-heading .btn,
+  .lore-relation-tabs button,
+  .lore-relation-targets button {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .lore-relation-tabs span {
+    margin-left: 0;
+  }
+
+  .lore-relation-form .form-input,
+  .lore-relation-form .form-select {
+    min-height: 44px;
+  }
+
+  .lore-relation-form .form-textarea {
+    min-height: 96px;
   }
 
   .lore-candidate-form .form-input,

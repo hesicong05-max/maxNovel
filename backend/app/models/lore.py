@@ -420,6 +420,11 @@ class ElementRelation(Base):
             "relation_key",
             name="uq_element_relation_key",
         ),
+        UniqueConstraint(
+            "project_id",
+            "id",
+            name="uq_element_relation_project_id_id",
+        ),
         Index(
             "ix_element_relations_project_source_status_key",
             "project_id",
@@ -464,6 +469,55 @@ class ElementRelation(Base):
     lock_version = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+
+class LoreRelationCreateOperation(Base):
+    """Durable exactly-once receipt for relation creation."""
+
+    __tablename__ = "lore_relation_create_operations"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "requested_by",
+            "operation_key",
+            name="uq_lore_relation_create_operation_key",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "relation_id",
+            name="uq_lore_relation_create_operation_relation",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "relation_id"],
+            ["element_relations.project_id", "element_relations.id"],
+            name="fk_lore_relation_create_operation_relation",
+            ondelete="CASCADE",
+        ),
+        Index(
+            "ix_lore_relation_create_operations_project_created",
+            "project_id",
+            "created_at",
+            "id",
+        ),
+    )
+
+    id = Column(String(32), primary_key=True, default=gen_id)
+    project_id = Column(
+        String(32),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    requested_by = Column(
+        String(32),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    operation_key = Column(String(128), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    relation_id = Column(String(32), nullable=False, index=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
 
 
 class ElementRelationVersion(Base):

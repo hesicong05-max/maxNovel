@@ -468,6 +468,63 @@ describe("API - lore repository", () => {
       expect.objectContaining({ method: "POST", body: expect.stringContaining('"expected_version":6') })
     );
   });
+
+  it("uses the relation catalog and versioned relation write endpoints", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ items: [], has_more: false, total: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const create = {
+      operation_key: "lore-relation:test-operation-0001",
+      target_element_id: "element-2",
+      source_expected_version: 4,
+      target_expected_version: 7,
+      relation_type: "member_of",
+      description: "用户确认",
+    };
+
+    await api.listLoreRelationTypes("project-1");
+    await api.listLoreRelations("project-1", "element-1", { status: "active", limit: 20 });
+    await api.getLoreRelation("project-1", "relation-1");
+    await api.createLoreRelation("project-1", "element-1", create);
+    await api.updateLoreRelation("project-1", "relation-1", {
+      expected_version: 1,
+      forward_label: "隶属于",
+      reverse_label: "成员包括",
+      description: "用户确认",
+      metadata: {},
+    });
+    await api.changeLoreRelationState("project-1", "relation-1", "archive", {
+      expected_version: 2,
+      reason: "剧情变化",
+    });
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(1,
+      "/api/projects/project-1/lore/relation-types",
+      expect.objectContaining({ headers: expect.any(Object) })
+    );
+    expect(fetchSpy.mock.calls[1][0]).toBe(
+      "/api/projects/project-1/lore/elements/element-1/relations?status=active&limit=20"
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(3,
+      "/api/projects/project-1/lore/relations/relation-1",
+      expect.objectContaining({ headers: expect.any(Object) })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(4,
+      "/api/projects/project-1/lore/elements/element-1/relations",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(create) })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(5,
+      "/api/projects/project-1/lore/relations/relation-1",
+      expect.objectContaining({ method: "PATCH", body: expect.stringContaining('"expected_version":1') })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(6,
+      "/api/projects/project-1/lore/relations/relation-1/archive",
+      expect.objectContaining({ method: "POST", body: expect.stringContaining('"expected_version":2') })
+    );
+  });
 });
 
 describe("API - Projects", () => {

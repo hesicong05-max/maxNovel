@@ -178,6 +178,32 @@ const loreTypesResponse = {
   total: 2,
 };
 
+function relationApiMocks() {
+  return {
+    listLoreRelationTypes: vi.fn().mockResolvedValue({
+      items: [{
+        key: "related_to",
+        display_name: "关联",
+        forward_label: "关联于",
+        reverse_label: "关联于",
+        symmetric: true,
+        custom: false,
+      }],
+      total: 1,
+    }),
+    listLoreRelations: vi.fn().mockResolvedValue({
+      items: [],
+      next_cursor: null,
+      has_more: false,
+      total: 0,
+    }),
+    getLoreRelation: vi.fn(),
+    createLoreRelation: vi.fn(),
+    updateLoreRelation: vi.fn(),
+    changeLoreRelationState: vi.fn(),
+  };
+}
+
 function readyCandidateResponse(): LoreCandidateInboxResponse {
   const candidate = candidateResponse.items[0];
   return {
@@ -214,6 +240,7 @@ describe("LoreRepositoryPage", () => {
     localStorage.clear();
     vi.spyOn(apiModule, "api", "get").mockReturnValue({
       ...apiModule.api,
+      ...relationApiMocks(),
       getLoreOverview: vi.fn().mockResolvedValue(overview),
       listLoreElements: vi.fn().mockResolvedValue(formalResponse()),
       getLoreElement: vi.fn().mockResolvedValue({
@@ -641,13 +668,13 @@ describe("LoreRepositoryPage", () => {
     await userEvent.click(archiveTrigger);
     await userEvent.click(screen.getByRole("button", { name: "确认归档设定" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("关系管理将在后续里程碑开放");
+    expect(await screen.findByRole("alert")).toHaveTextContent("请先在下方“设定关系”中归档相关关系");
     expect(changeState).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "核对最新状态" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "归档设定" })).not.toBeInTheDocument();
   });
 
-  it("blocks archive in advance when relation management is not yet available", async () => {
+  it("blocks archive in advance until active relations are archived", async () => {
     vi.spyOn(apiModule, "api", "get").mockReturnValue({
       ...apiModule.api,
       getLoreOverview: vi.fn().mockResolvedValue(overview),
@@ -659,7 +686,7 @@ describe("LoreRepositoryPage", () => {
     renderPage();
     await userEvent.click(await screen.findByRole("button", { name: /林渊/ }));
 
-    expect(await screen.findByText(/该设定有 2 条启用关系/)).toBeInTheDocument();
+    expect(await screen.findByText(/该设定有 2 条使用中的关系/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "归档设定" })).not.toBeInTheDocument();
   });
 

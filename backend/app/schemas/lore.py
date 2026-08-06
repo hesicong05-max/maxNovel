@@ -353,19 +353,24 @@ class LoreSourcesResponse(BaseModel):
 
 
 class LoreRelationCreate(BaseModel):
+    operation_key: str = Field(
+        ...,
+        min_length=16,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
     target_element_id: str = Field(..., min_length=1, max_length=32)
     source_expected_version: int = Field(..., ge=1)
     target_expected_version: int = Field(..., ge=1)
-    relation_key: str = Field(
+    relation_type: str = Field(
         ...,
         min_length=1,
         max_length=50,
         pattern=r"^[a-z][a-z0-9_:-]*$",
     )
-    forward_label: str = Field(..., min_length=1, max_length=100)
-    reverse_label: str = Field(..., min_length=1, max_length=100)
+    custom_forward_label: str | None = Field(default=None, max_length=100)
+    custom_reverse_label: str | None = Field(default=None, max_length=100)
     description: str = Field(default="", max_length=2000)
-    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class LoreRelationUpdate(BaseModel):
@@ -404,6 +409,22 @@ class LoreRelationResponse(BaseModel):
     lock_version: int
     created_at: datetime
     updated_at: datetime
+
+
+class LoreRelationCreateResponse(LoreRelationResponse):
+    replayed: bool = False
+
+
+class LoreRelationTypeResponse(BaseModel):
+    key: str
+    display_name: str
+    forward_label: str
+    reverse_label: str
+    symmetric: bool
+
+
+class LoreRelationTypesResponse(BaseModel):
+    items: list[LoreRelationTypeResponse]
 
 
 class LoreRelationListResponse(BaseModel):

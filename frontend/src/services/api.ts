@@ -39,6 +39,13 @@ import type {
   LoreElementWriteResponse,
   LoreListResponse,
   LoreOverview,
+  LoreRelation,
+  LoreRelationCreateInput,
+  LoreRelationCreateResponse,
+  LoreRelationListResponse,
+  LoreRelationStateInput,
+  LoreRelationType,
+  LoreRelationUpdateInput,
   LoreTypesResponse,
 } from "@/types/lore";
 
@@ -336,6 +343,50 @@ export const api = {
     ),
   listLoreTypes: (projectId: string, signal?: AbortSignal) =>
     fetchJSON<LoreTypesResponse>(`/projects/${projectId}/lore/types`, { signal }),
+  listLoreRelationTypes: (projectId: string, signal?: AbortSignal) =>
+    fetchJSON<{ items: LoreRelationType[] }>(
+      `/projects/${projectId}/lore/relation-types`,
+      { signal }
+    ),
+  listLoreRelations: (
+    projectId: string,
+    elementId: string,
+    filters: { status?: "active" | "archived"; cursor?: string; limit?: number } = {},
+    signal?: AbortSignal
+  ) => fetchJSON<LoreRelationListResponse>(
+    withQuery(`/projects/${projectId}/lore/elements/${elementId}/relations`, filters),
+    { signal }
+  ),
+  getLoreRelation: (projectId: string, relationId: string, signal?: AbortSignal) =>
+    fetchJSON<LoreRelation>(
+      `/projects/${projectId}/lore/relations/${relationId}`,
+      { signal }
+    ),
+  createLoreRelation: (
+    projectId: string,
+    sourceElementId: string,
+    data: LoreRelationCreateInput
+  ) => fetchJSON<LoreRelationCreateResponse>(
+    `/projects/${projectId}/lore/elements/${sourceElementId}/relations`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
+  updateLoreRelation: (
+    projectId: string,
+    relationId: string,
+    data: LoreRelationUpdateInput
+  ) => fetchJSON<LoreRelation>(
+    `/projects/${projectId}/lore/relations/${relationId}`,
+    { method: "PATCH", body: JSON.stringify(data) }
+  ),
+  changeLoreRelationState: (
+    projectId: string,
+    relationId: string,
+    action: "archive" | "restore",
+    data: LoreRelationStateInput
+  ) => fetchJSON<LoreRelation>(
+    `/projects/${projectId}/lore/relations/${relationId}/${action}`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
   getLoreCandidate: (
     projectId: string,
     batchId: string,

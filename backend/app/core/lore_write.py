@@ -749,13 +749,25 @@ async def update_relation(
     check_writes_available()
     if relation.status != "active":
         raise LoreWriteError("已归档关系需恢复后才能编辑", status_code=409)
+    if relation.lock_version != expected_version:
+        raise LoreStaleVersionError(relation.lock_version, relation.updated_at)
+
+    normalized_description = description or ""
+    normalized_metadata = dict(metadata or {})
+    if (
+        relation.forward_label == forward_label
+        and relation.reverse_label == reverse_label
+        and (relation.description or "") == normalized_description
+        and dict(relation.metadata_ or {}) == normalized_metadata
+    ):
+        return relation
 
     await _claim_lock_version(db, ElementRelation, relation, expected_version)
 
     relation.forward_label = forward_label
     relation.reverse_label = reverse_label
-    relation.description = description
-    relation.metadata_ = dict(metadata or {})
+    relation.description = normalized_description
+    relation.metadata_ = normalized_metadata
     relation.version_no += 1
     _add_relation_snapshot(db, relation, user_id, "编辑关系")
     return relation

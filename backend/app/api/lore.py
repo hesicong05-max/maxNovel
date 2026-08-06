@@ -25,6 +25,7 @@ from app.core.lore_migration import (
     type_field_definitions,
     validate_projection,
 )
+from app.core.lore_relation_types import RELATION_TYPES, resolve_relation_type
 from app.core.lore_write import (
     LoreStaleVersionError,
     LoreWriteError,
@@ -48,6 +49,7 @@ from app.models.lore import (
     ElementSource,
     ElementVersion,
     LoreElementCreateOperation,
+    LoreRelationCreateOperation,
     SettingElement,
     SettingType,
 )
@@ -66,10 +68,13 @@ from app.schemas.lore import (
     LoreListResponse,
     LoreMigrationStatus,
     LoreRelationCreate,
+    LoreRelationCreateResponse,
     LoreRelationEndpoint,
     LoreRelationListResponse,
     LoreRelationResponse,
     LoreRelationStateInput,
+    LoreRelationTypeResponse,
+    LoreRelationTypesResponse,
     LoreRelationUpdate,
     LoreRelationVersionSummary,
     LoreRelationVersionsResponse,
@@ -91,6 +96,7 @@ router = APIRouter(prefix="/api/projects/{project_id}/lore", tags=["lore"])
 _CURSOR_VERSION = 1
 _CURSOR_SECRET = (settings.JWT_SECRET or "development-lore-cursor-secret").encode()
 _CREATE_FINGERPRINT_VERSION = "lore-element-create:v1"
+_RELATION_CREATE_FINGERPRINT_VERSION = "lore-relation-create:v1"
 
 _CONFIRMATION_LABELS = {
     "candidate": "待确认",
@@ -1511,6 +1517,85 @@ async def _build_relation_response(
     )
 
 
+async def _build_relation_create_response(
+    relation: ElementRelation,
+    db: AsyncSession,
+    *,
+    replayed: bool,
+) -> LoreRelationCreateResponse:
+    response = await _build_relation_response(relation, db)
+    return LoreRelationCreateResponse(
+        **response.model_dump(),
+        replayed=replayed,
+    )
+
+
+def _relation_create_request_fingerprint(
+    source_element_id: str,
+    body: LoreRelationCreate,
+) -> str:
+    canonical = json.dumps(
+        {
+            "source_element_id": source_element_id,
+            "body": body.model_dump(mode="json", exclude={"operation_key"}),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(
+        f"{_RELATION_CREATE_FINGERPRINT_VERSION}\n{canonical}".encode("utf-8")
+    ).hexdigest()
+
+
+async def _find_relation_create_operation(
+    project_id: str,
+    user_id: str,
+    operation_key: str,
+    db: AsyncSession,
+) -> LoreRelationCreateOperation | None:
+    return await db.scalar(
+        select(LoreRelationCreateOperation).where(
+            LoreRelationCreateOperation.project_id == project_id,
+            LoreRelationCreateOperation.requested_by == user_id,
+            LoreRelationCreateOperation.operation_key == operation_key,
+        )
+    )
+
+
+async def _replay_relation_create_operation(
+    operation: LoreRelationCreateOperation,
+    request_fingerprint: str,
+    db: AsyncSession,
+) -> LoreRelationCreateResponse:
+    if operation.request_fingerprint != request_fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "LORE_RELATION_CREATE_IDEMPOTENCY_CONFLICT",
+                "message": "这次创建与先前请求内容不一致，为避免重复，系统没有再次创建关系",
+                "retryable": False,
+            },
+        )
+    relation = await db.scalar(
+        select(ElementRelation).where(
+            ElementRelation.project_id == operation.project_id,
+            ElementRelation.id == operation.relation_id,
+        )
+    )
+    if relation is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "LORE_RELATION_CREATE_OPERATION_CORRUPT",
+                "message": "创建记录与关系不一致，已停止自动处理",
+                "retryable": False,
+            },
+        )
+    return await _build_relation_create_response(relation, db, replayed=True)
+
+
 # ─── Write endpoints ──────────────────────────────────────────────
 
 
@@ -1542,6 +1627,30 @@ async def list_lore_types(
         items=response_items,
         total=len(response_items),
     )
+
+
+@router.get("/relation-types", response_model=LoreRelationTypesResponse)
+async def list_lore_relation_types(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    project = await get_project_for_owner(project_id, current_user, db)
+    _require_relational_mode(project)
+    items = [
+        LoreRelationTypeResponse(key=key, **definition)
+        for key, definition in RELATION_TYPES.items()
+    ]
+    items.append(
+        LoreRelationTypeResponse(
+            key="custom",
+            display_name="自定义关系",
+            forward_label="",
+            reverse_label="",
+            symmetric=False,
+        )
+    )
+    return LoreRelationTypesResponse(items=items)
 
 
 @router.post(
@@ -2037,7 +2146,7 @@ async def list_lore_relations(
 
 @router.post(
     "/elements/{element_id}/relations",
-    response_model=LoreRelationResponse,
+    response_model=LoreRelationCreateResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_lore_relation(
@@ -2049,6 +2158,38 @@ async def create_lore_relation(
 ):
     project = await get_project_for_owner(project_id, current_user, db)
     _require_relational_mode(project)
+    user_id = current_user.id
+    request_fingerprint = _relation_create_request_fingerprint(element_id, body)
+    existing_operation = await _find_relation_create_operation(
+        project_id,
+        user_id,
+        body.operation_key,
+        db,
+    )
+    if existing_operation is not None:
+        return await _replay_relation_create_operation(
+            existing_operation,
+            request_fingerprint,
+            db,
+        )
+    try:
+        relation_key, forward_label, reverse_label, symmetric = (
+            resolve_relation_type(
+                body.relation_type,
+                body.custom_forward_label,
+                body.custom_reverse_label,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "LORE_RELATION_TYPE_INVALID",
+                "message": str(exc),
+            },
+        ) from exc
+
+    check_writes_available()
     endpoint_ids = sorted({element_id, body.target_element_id})
     result = await db.execute(
         select(SettingElement)
@@ -2085,26 +2226,71 @@ async def create_lore_relation(
             },
         )
     try:
+        existing_operation = await _find_relation_create_operation(
+            project_id,
+            user_id,
+            body.operation_key,
+            db,
+        )
+        if existing_operation is not None:
+            replay = await _replay_relation_create_operation(
+                existing_operation,
+                request_fingerprint,
+                db,
+            )
+            await db.rollback()
+            return replay
+        relation_source = source
+        relation_target = target
+        if symmetric and source.id > target.id:
+            relation_source, relation_target = target, source
         relation = await create_relation(
             db=db,
             project_id=project_id,
-            source=source,
-            target=target,
-            user_id=current_user.id,
-            relation_key=body.relation_key,
-            forward_label=body.forward_label,
-            reverse_label=body.reverse_label,
+            source=relation_source,
+            target=relation_target,
+            user_id=user_id,
+            relation_key=relation_key,
+            forward_label=forward_label,
+            reverse_label=reverse_label,
             description=body.description,
-            metadata=body.metadata,
+            metadata={},
         )
+        db.add(
+            LoreRelationCreateOperation(
+                project_id=project_id,
+                requested_by=user_id,
+                operation_key=body.operation_key,
+                request_fingerprint=request_fingerprint,
+                relation_id=relation.id,
+            )
+        )
+        await db.flush()
+        check_writes_available()
         await db.commit()
         await db.refresh(relation)
-        return await _build_relation_response(relation, db)
+        return await _build_relation_create_response(
+            relation,
+            db,
+            replayed=False,
+        )
     except LoreWriteError as exc:
         await db.rollback()
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
     except IntegrityError as exc:
         await db.rollback()
+        existing_operation = await _find_relation_create_operation(
+            project_id,
+            user_id,
+            body.operation_key,
+            db,
+        )
+        if existing_operation is not None:
+            return await _replay_relation_create_operation(
+                existing_operation,
+                request_fingerprint,
+                db,
+            )
         raise HTTPException(
             status_code=409,
             detail={
@@ -2112,6 +2298,23 @@ async def create_lore_relation(
                 "message": "关系保存冲突，请重新加载后重试",
             },
         ) from exc
+
+
+@router.get("/relations/{relation_id}", response_model=LoreRelationResponse)
+async def get_lore_relation(
+    project_id: str,
+    relation_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    relation = await _load_relational_relation(
+        project_id,
+        relation_id,
+        db,
+        current_user,
+        for_update=False,
+    )
+    return await _build_relation_response(relation, db)
 
 
 @router.patch("/relations/{relation_id}", response_model=LoreRelationResponse)

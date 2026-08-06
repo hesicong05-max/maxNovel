@@ -5,6 +5,7 @@ import LoreCreateForm, {
   isLoreCreateStoredPayload,
   type LoreCreateStoredPayload,
 } from "@/components/LoreCreateForm";
+import LoreRelationsPanel from "@/components/LoreRelationsPanel";
 import { ApiError, api } from "@/services/api";
 import { clearDraft, loadDraft, type DraftScope } from "@/services/maintenanceDrafts";
 import type {
@@ -797,6 +798,7 @@ export default function LoreRepositoryPage() {
             onDirtyChange={setFormalDirty}
             onBusyChange={setFormalMutationBusy}
             onMutationComplete={finishFormalMutation}
+            onOpenElement={selectFormal}
           />}
           {creating && createDraftScope && (
             <LoreCreateForm
@@ -965,12 +967,14 @@ function FormalDetail({
   onDirtyChange,
   onBusyChange,
   onMutationComplete,
+  onOpenElement,
 }: {
   projectId: string;
   detail: LoreElementDetail;
   onDirtyChange: (dirty: boolean) => void;
   onBusyChange: (busy: boolean) => void;
   onMutationComplete: (elementId: string, notice: string) => void;
+  onOpenElement: (elementId: string) => void;
 }) {
   const definitions = [...detail.field_definitions].sort((left, right) => left.order - right.order);
   const [baseDetail, setBaseDetail] = useState(detail);
@@ -985,6 +989,8 @@ function FormalDetail({
   const [pendingIntent, setPendingIntent] = useState<FormalPendingIntent | null>(null);
   const [serverLatest, setServerLatest] = useState<LoreElementDetail | null>(null);
   const [preservedDraft, setPreservedDraft] = useState("");
+  const [relationDirty, setRelationDirty] = useState(false);
+  const [relationBusy, setRelationBusy] = useState(false);
   const nameRef = useRef<HTMLInputElement | null>(null);
   const errorRef = useRef<HTMLDivElement | null>(null);
   const confirmRef = useRef<HTMLDivElement | null>(null);
@@ -995,8 +1001,8 @@ function FormalDetail({
   const hasSemanticChanges = !detailMatchesDraft(baseDetail, draft);
   const writable = !baseDetail.read_only && baseDetail.lifecycle_status !== "merged";
 
-  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
-  useEffect(() => onBusyChange(busyAction !== null), [busyAction, onBusyChange]);
+  useEffect(() => onDirtyChange(dirty || relationDirty), [dirty, onDirtyChange, relationDirty]);
+  useEffect(() => onBusyChange(busyAction !== null || relationBusy), [busyAction, onBusyChange, relationBusy]);
   useEffect(() => () => {
     onDirtyChange(false);
     onBusyChange(false);
@@ -1009,6 +1015,7 @@ function FormalDetail({
   }, [confirmAction]);
 
   function beginEdit() {
+    if (relationDirty || relationBusy) return;
     setOperationError("");
     setConflict(false);
     setOutcomeUnknown(false);
@@ -1112,6 +1119,7 @@ function FormalDetail({
   }
 
   function openStateConfirm(action: FormalStateAction, trigger: HTMLButtonElement) {
+    if (relationDirty || relationBusy) return;
     setOperationError("");
     setReason("");
     stateTriggerRef.current = trigger;
@@ -1141,7 +1149,7 @@ function FormalDetail({
     } catch (error) {
       if (error instanceof ApiError) {
         if (error.code === "LORE_ELEMENT_ACTIVE_RELATIONS") {
-          setOperationError("该设定刚刚出现了启用关系。关系管理将在后续里程碑开放；当前暂不能归档此设定。");
+          setOperationError("该设定刚刚出现了使用中的关系。请先在下方“设定关系”中归档相关关系，再归档此设定。");
           try {
             const latest = await api.getLoreElement(projectId, baseDetail.id);
             setBaseDetail(latest);
@@ -1233,14 +1241,24 @@ function FormalDetail({
         <>
           <dl className="lore-fields">{definitions.map((definition) => <div key={definition.key}><dt>{definition.label}<span>{FIELD_STATE[baseDetail.field_states[definition.key]] || "状态待确认"}</span></dt><dd>{valueText(baseDetail.payload[definition.key])}</dd></div>)}</dl>
           <section className="lore-sources"><h3>原始出处</h3>{baseDetail.sources.length ? baseDetail.sources.map((source, index) => <article key={source.id ?? `${source.kind}-${index}`}><strong>{SOURCE_KIND[source.kind] || "其他来源"}{source.is_primary ? " · 主要来源" : ""}</strong><p>{source.excerpt || "未提供原文摘录"}</p>{source.reference && <small>{source.reference}</small>}</article>) : <p>暂无来源记录</p>}</section>
+          <LoreRelationsPanel
+            projectId={projectId}
+            element={baseDetail}
+            writable={writable}
+            onDirtyChange={setRelationDirty}
+            onBusyChange={setRelationBusy}
+            onMutationComplete={(notice) => onMutationComplete(baseDetail.id, notice)}
+            onOpenElement={onOpenElement}
+            interactionLocked={busyAction !== null || confirmAction !== null || conflict || outcomeUnknown}
+          />
           {writable ? <section className="lore-candidate-action-panel">
             <h3>管理正式设定</h3>
             <p>内容编辑会生成新版本；暂停或归档不会删除内容、来源、版本或关系。</p>
             <div className="lore-candidate-actions">
-              <button ref={editButtonRef} className="btn btn-primary" type="button" disabled={busyAction !== null || conflict || outcomeUnknown} onClick={beginEdit}>编辑内容</button>
-              {stateActions.map((action) => <button key={action} className="btn btn-secondary" type="button" disabled={busyAction !== null || conflict || outcomeUnknown} onClick={(event) => openStateConfirm(action, event.currentTarget)}>{FORMAL_ACTION[action].title}</button>)}
+              <button ref={editButtonRef} className="btn btn-primary" type="button" disabled={busyAction !== null || relationBusy || relationDirty || conflict || outcomeUnknown} onClick={beginEdit}>编辑内容</button>
+              {stateActions.map((action) => <button key={action} className="btn btn-secondary" type="button" disabled={busyAction !== null || relationBusy || relationDirty || conflict || outcomeUnknown} onClick={(event) => openStateConfirm(action, event.currentTarget)}>{FORMAL_ACTION[action].title}</button>)}
             </div>
-            {baseDetail.lifecycle_status === "active" && baseDetail.relation_count > 0 && <p className="lore-action-reasons">该设定有 {baseDetail.relation_count} 条启用关系；关系管理将在后续里程碑开放，归档关系前暂不能归档此设定。</p>}
+            {baseDetail.lifecycle_status === "active" && baseDetail.relation_count > 0 && <p className="lore-action-reasons">该设定有 {baseDetail.relation_count} 条使用中的关系；请先在“设定关系”中归档它们，再归档此设定。</p>}
           </section> : <div className="lore-note">当前资料为只读或已合并，不能在这里修改。</div>}
         </>
       )}

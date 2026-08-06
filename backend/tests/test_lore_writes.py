@@ -12,7 +12,7 @@ import copy
 import uuid
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.models.lore import (
     ElementRelation,
@@ -21,6 +21,7 @@ from app.models.lore import (
     ElementStateEvent,
     ElementVersion,
     LoreElementCreateOperation,
+    LoreRelationCreateOperation,
     SettingElement,
     SettingType,
     SettingTypeRevision,
@@ -97,14 +98,15 @@ async def _create_relation(
     **overrides,
 ):
     body = {
+        "operation_key": overrides.get("operation_key", uuid.uuid4().hex),
         "target_element_id": target_id,
         "source_expected_version": overrides.get("source_expected_version", 1),
         "target_expected_version": overrides.get("target_expected_version", 1),
-        "relation_key": overrides.get("relation_key", "ally"),
-        "forward_label": overrides.get("forward_label", "盟友"),
-        "reverse_label": overrides.get("reverse_label", "盟友"),
+        "relation_type": overrides.get(
+            "relation_type",
+            overrides.get("relation_key", "ally"),
+        ),
         "description": overrides.get("description", "共同目标"),
-        "metadata": overrides.get("metadata", {}),
     }
     response = await client.post(
         f"/api/projects/{project_id}/lore/elements/{source_id}/relations",
@@ -1747,6 +1749,16 @@ async def test_write_blocked_when_maintenance_frozen(client, auth_headers):
     relation_target = await _create_relational_element(
         client, auth_headers, project_id, name="冻结关系目标",
     )
+    replay_relation_operation_key = "maintenance-relation-replay-0001"
+    completed_relation = await _create_relation(
+        client,
+        auth_headers,
+        project_id,
+        element_id,
+        relation_target["id"],
+        operation_key=replay_relation_operation_key,
+        relation_type="member_of",
+    )
 
     # Capture counts before freeze
     async with TestSessionLocal() as session:
@@ -1773,6 +1785,9 @@ async def test_write_blocked_when_maintenance_frozen(client, auth_headers):
         )
         before_relation_versions = await session.scalar(
             select(func.count()).select_from(ElementRelationVersion)
+        )
+        before_relation_operations = await session.scalar(
+            select(func.count()).select_from(LoreRelationCreateOperation)
         )
 
     # Freeze
@@ -1837,15 +1852,30 @@ async def test_write_blocked_when_maintenance_frozen(client, auth_headers):
             f"/api/projects/{project_id}/lore/elements/{element_id}/relations",
             headers=auth_headers,
             json={
+                "operation_key": "maintenance-relation-create-001",
                 "target_element_id": relation_target["id"],
                 "source_expected_version": 1,
                 "target_expected_version": 1,
-                "relation_key": "ally",
-                "forward_label": "盟友",
-                "reverse_label": "盟友",
+                "relation_type": "ally",
             },
         )
         assert freeze_relation.status_code == 503
+
+        replay_relation_during_freeze = await client.post(
+            f"/api/projects/{project_id}/lore/elements/{element_id}/relations",
+            headers=auth_headers,
+            json={
+                "operation_key": replay_relation_operation_key,
+                "target_element_id": relation_target["id"],
+                "source_expected_version": 1,
+                "target_expected_version": 1,
+                "relation_type": "member_of",
+                "description": "共同目标",
+            },
+        )
+        assert replay_relation_during_freeze.status_code == 201
+        assert replay_relation_during_freeze.json()["id"] == completed_relation["id"]
+        assert replay_relation_during_freeze.json()["replayed"] is True
 
         freeze_type = await client.post(
             f"/api/projects/{project_id}/lore/types",
@@ -1882,6 +1912,9 @@ async def test_write_blocked_when_maintenance_frozen(client, auth_headers):
         assert await session.scalar(
             select(func.count()).select_from(ElementRelationVersion)
         ) == before_relation_versions
+        assert await session.scalar(
+            select(func.count()).select_from(LoreRelationCreateOperation)
+        ) == before_relation_operations
 
 
 # ─── excerpt storage (item 4) ────────────────────────────────────
@@ -2440,6 +2473,285 @@ async def test_relation_api_create_list_and_initial_version(client, auth_headers
 
 
 @pytest.mark.usefixtures("clean_db")
+async def test_relation_type_catalog_exposes_author_labels(client, auth_headers):
+    project_id = await _create_project(client, auth_headers)
+    await _make_relational(client, auth_headers, project_id)
+
+    response = await client.get(
+        f"/api/projects/{project_id}/lore/relation-types",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert {item["key"] for item in items} >= {
+        "ally", "member_of", "located_in", "custom",
+    }
+    member_of = next(item for item in items if item["key"] == "member_of")
+    assert member_of == {
+        "key": "member_of",
+        "display_name": "隶属",
+        "forward_label": "隶属于",
+        "reverse_label": "成员包括",
+        "symmetric": False,
+    }
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_relation_create_replays_same_operation_exactly_once(
+    client, auth_headers,
+):
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _create_project(client, auth_headers)
+    source = await _create_relational_element(
+        client, auth_headers, project_id, name="角色 A",
+    )
+    target = await _create_relational_element(
+        client, auth_headers, project_id, name="角色 B",
+    )
+    operation_key = "relation-create-replay-0001"
+    first = await _create_relation(
+        client,
+        auth_headers,
+        project_id,
+        source["id"],
+        target["id"],
+        operation_key=operation_key,
+    )
+    replay = await _create_relation(
+        client,
+        auth_headers,
+        project_id,
+        source["id"],
+        target["id"],
+        operation_key=operation_key,
+    )
+
+    assert first["id"] == replay["id"]
+    assert first["replayed"] is False
+    assert replay["replayed"] is True
+    assert replay["version_no"] == replay["lock_version"] == 1
+    async with TestSessionLocal() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(ElementRelation).where(
+                ElementRelation.project_id == project_id,
+            )
+        ) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(ElementRelationVersion).where(
+                ElementRelationVersion.relation_id == first["id"],
+            )
+        ) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(LoreRelationCreateOperation).where(
+                LoreRelationCreateOperation.project_id == project_id,
+                LoreRelationCreateOperation.operation_key == operation_key,
+            )
+        ) == 1
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_postgres_concurrent_same_relation_operation_returns_one_relation(
+    client, auth_headers,
+):
+    from tests.conftest import TEST_DATABASE_BACKEND, TestSessionLocal
+
+    if TEST_DATABASE_BACKEND == "sqlite":
+        pytest.skip("Concurrent receipt serialization is exercised by PostgreSQL CI")
+
+    project_id = await _create_project(client, auth_headers)
+    source = await _create_relational_element(
+        client, auth_headers, project_id, name="并发角色 A",
+    )
+    target = await _create_relational_element(
+        client, auth_headers, project_id, name="并发角色 B",
+    )
+    body = {
+        "operation_key": "relation-create-concurrent-0001",
+        "target_element_id": target["id"],
+        "source_expected_version": 1,
+        "target_expected_version": 1,
+        "relation_type": "ally",
+        "description": "并发只创建一次",
+    }
+    first, second = await asyncio.gather(
+        client.post(
+            f"/api/projects/{project_id}/lore/elements/{source['id']}/relations",
+            headers=auth_headers,
+            json=body,
+        ),
+        client.post(
+            f"/api/projects/{project_id}/lore/elements/{source['id']}/relations",
+            headers=auth_headers,
+            json=body,
+        ),
+    )
+
+    assert first.status_code == second.status_code == 201
+    assert first.json()["id"] == second.json()["id"]
+    assert sorted([first.json()["replayed"], second.json()["replayed"]]) == [
+        False,
+        True,
+    ]
+    async with TestSessionLocal() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(ElementRelation).where(
+                ElementRelation.project_id == project_id,
+            )
+        ) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(LoreRelationCreateOperation).where(
+                LoreRelationCreateOperation.project_id == project_id,
+                LoreRelationCreateOperation.operation_key
+                == "relation-create-concurrent-0001",
+            )
+        ) == 1
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_relation_create_operation_rejects_changed_source_or_payload(
+    client, auth_headers,
+):
+    project_id = await _create_project(client, auth_headers)
+    source = await _create_relational_element(
+        client, auth_headers, project_id, name="角色 A",
+    )
+    other_source = await _create_relational_element(
+        client, auth_headers, project_id, name="角色 C",
+    )
+    target = await _create_relational_element(
+        client, auth_headers, project_id, name="角色 B",
+    )
+    operation_key = "relation-create-conflict-0001"
+    await _create_relation(
+        client, auth_headers, project_id, source["id"], target["id"],
+        operation_key=operation_key,
+    )
+
+    changed_payload = await client.post(
+        f"/api/projects/{project_id}/lore/elements/{source['id']}/relations",
+        headers=auth_headers,
+        json={
+            "operation_key": operation_key,
+            "target_element_id": target["id"],
+            "source_expected_version": 1,
+            "target_expected_version": 1,
+            "relation_type": "enemy",
+        },
+    )
+    changed_source = await client.post(
+        f"/api/projects/{project_id}/lore/elements/{other_source['id']}/relations",
+        headers=auth_headers,
+        json={
+            "operation_key": operation_key,
+            "target_element_id": target["id"],
+            "source_expected_version": 1,
+            "target_expected_version": 1,
+            "relation_type": "ally",
+            "description": "共同目标",
+        },
+    )
+
+    assert changed_payload.status_code == 409
+    assert changed_source.status_code == 409
+    assert changed_payload.json()["detail"]["code"] == (
+        "LORE_RELATION_CREATE_IDEMPOTENCY_CONFLICT"
+    )
+    assert changed_source.json()["detail"]["code"] == (
+        "LORE_RELATION_CREATE_IDEMPOTENCY_CONFLICT"
+    )
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_symmetric_relation_normalizes_reverse_endpoints(client, auth_headers):
+    project_id = await _create_project(client, auth_headers)
+    source = await _create_relational_element(
+        client, auth_headers, project_id, name="角色 A",
+    )
+    target = await _create_relational_element(
+        client, auth_headers, project_id, name="角色 B",
+    )
+    relation = await _create_relation(
+        client, auth_headers, project_id, source["id"], target["id"],
+        operation_key="symmetric-forward-create-0001",
+    )
+
+    reverse = await client.post(
+        f"/api/projects/{project_id}/lore/elements/{target['id']}/relations",
+        headers=auth_headers,
+        json={
+            "operation_key": "symmetric-reverse-create-0001",
+            "target_element_id": source["id"],
+            "source_expected_version": 1,
+            "target_expected_version": 1,
+            "relation_type": "ally",
+        },
+    )
+
+    assert reverse.status_code == 409
+    assert reverse.json()["detail"]["code"] == "LORE_RELATION_DUPLICATE"
+    direct = await client.get(
+        f"/api/projects/{project_id}/lore/relations/{relation['id']}",
+        headers=auth_headers,
+    )
+    assert direct.status_code == 200
+    assert direct.json()["id"] == relation["id"]
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_relation_receipts_cascade_only_with_their_test_project(
+    client, auth_headers,
+):
+    from tests.conftest import TestSessionLocal
+
+    first_project = await _create_project(client, auth_headers, title="待清理测试项目")
+    second_project = await _create_project(client, auth_headers, title="保留测试项目")
+    created = []
+    for index, project_id in enumerate((first_project, second_project), start=1):
+        source = await _create_relational_element(
+            client, auth_headers, project_id, name=f"角色 {index}A",
+        )
+        target = await _create_relational_element(
+            client, auth_headers, project_id, name=f"角色 {index}B",
+        )
+        created.append(await _create_relation(
+            client,
+            auth_headers,
+            project_id,
+            source["id"],
+            target["id"],
+            operation_key=f"relation-cascade-project-{index:04d}",
+        ))
+
+    async with TestSessionLocal() as session:
+        await session.execute(delete(Project).where(Project.id == first_project))
+        await session.commit()
+
+    async with TestSessionLocal() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(ElementRelation).where(
+                ElementRelation.project_id == first_project,
+            )
+        ) == 0
+        assert await session.scalar(
+            select(func.count()).select_from(LoreRelationCreateOperation).where(
+                LoreRelationCreateOperation.project_id == first_project,
+            )
+        ) == 0
+        assert await session.scalar(
+            select(func.count()).select_from(ElementRelation).where(
+                ElementRelation.id == created[1]["id"],
+            )
+        ) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(LoreRelationCreateOperation).where(
+                LoreRelationCreateOperation.project_id == second_project,
+            )
+        ) == 1
+
+
+@pytest.mark.usefixtures("clean_db")
 async def test_repository_relation_filter_facets_and_overview(client, auth_headers):
     project_id = await _create_project(client, auth_headers)
     source = await _create_relational_element(
@@ -2552,12 +2864,11 @@ async def test_relation_create_rejects_stale_endpoint_versions(
         f"/api/projects/{project_id}/lore/elements/{source['id']}/relations",
         headers=auth_headers,
         json={
+            "operation_key": "stale-relation-endpoints-001",
             "target_element_id": target["id"],
             "source_expected_version": 1,
             "target_expected_version": 1,
-            "relation_key": "ally",
-            "forward_label": "盟友",
-            "reverse_label": "盟友",
+            "relation_type": "ally",
         },
     )
     assert response.status_code == 409
@@ -2585,12 +2896,11 @@ async def test_relation_duplicate_and_self_loop_are_rejected(client, auth_header
         f"/api/projects/{project_id}/lore/elements/{source['id']}/relations",
         headers=auth_headers,
         json={
+            "operation_key": "duplicate-relation-second-attempt-001",
             "target_element_id": target["id"],
             "source_expected_version": 1,
             "target_expected_version": 1,
-            "relation_key": "ally",
-            "forward_label": "盟友",
-            "reverse_label": "盟友",
+            "relation_type": "ally",
         },
     )
     assert duplicate.status_code == 409
@@ -2600,12 +2910,11 @@ async def test_relation_duplicate_and_self_loop_are_rejected(client, auth_header
         f"/api/projects/{project_id}/lore/elements/{source['id']}/relations",
         headers=auth_headers,
         json={
+            "operation_key": "self-loop-relation-attempt-001",
             "target_element_id": source["id"],
             "source_expected_version": 1,
             "target_expected_version": 1,
-            "relation_key": "ally",
-            "forward_label": "盟友",
-            "reverse_label": "盟友",
+            "relation_type": "ally",
         },
     )
     assert self_loop.status_code == 422
@@ -2625,12 +2934,11 @@ async def test_relation_rejects_cross_project_target(client, auth_headers):
         f"/api/projects/{project_a}/lore/elements/{source['id']}/relations",
         headers=auth_headers,
         json={
+            "operation_key": "cross-project-relation-attempt-001",
             "target_element_id": target["id"],
             "source_expected_version": 1,
             "target_expected_version": 1,
-            "relation_key": "ally",
-            "forward_label": "盟友",
-            "reverse_label": "盟友",
+            "relation_type": "ally",
         },
     )
     assert response.status_code == 404
@@ -2703,6 +3011,42 @@ async def test_relation_edit_archive_restore_and_versions(client, auth_headers):
 
 
 @pytest.mark.usefixtures("clean_db")
+async def test_relation_noop_edit_does_not_create_a_version(client, auth_headers):
+    project_id = await _create_project(client, auth_headers)
+    source = await _create_relational_element(
+        client, auth_headers, project_id, name="角色 A",
+    )
+    target = await _create_relational_element(
+        client, auth_headers, project_id, name="角色 B",
+    )
+    relation = await _create_relation(
+        client, auth_headers, project_id, source["id"], target["id"],
+    )
+
+    response = await client.patch(
+        f"/api/projects/{project_id}/lore/relations/{relation['id']}",
+        headers=auth_headers,
+        json={
+            "expected_version": 1,
+            "forward_label": relation["forward_label"],
+            "reverse_label": relation["reverse_label"],
+            "description": relation["description"],
+            "metadata": relation["metadata"],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["lock_version"] == 1
+    assert response.json()["version_no"] == 1
+    versions = await client.get(
+        f"/api/projects/{project_id}/lore/relations/{relation['id']}/versions",
+        headers=auth_headers,
+    )
+    assert versions.status_code == 200
+    assert versions.json()["total"] == 1
+
+
+@pytest.mark.usefixtures("clean_db")
 async def test_archived_duplicate_requires_explicit_restore(client, auth_headers):
     project_id = await _create_project(client, auth_headers)
     source = await _create_relational_element(
@@ -2725,12 +3069,11 @@ async def test_archived_duplicate_requires_explicit_restore(client, auth_headers
         f"/api/projects/{project_id}/lore/elements/{source['id']}/relations",
         headers=auth_headers,
         json={
+            "operation_key": "duplicate-relation-preserve-001",
             "target_element_id": target["id"],
             "source_expected_version": 1,
             "target_expected_version": 1,
-            "relation_key": "ally",
-            "forward_label": "盟友",
-            "reverse_label": "盟友",
+            "relation_type": "ally",
             "description": "不得静默覆盖",
         },
     )

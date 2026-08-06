@@ -120,6 +120,74 @@ export interface LoreElementCreateResponse extends LoreElementWriteResponse {
   replayed: boolean;
 }
 
+export interface LoreRelationType {
+  key: string;
+  display_name: string;
+  forward_label: string;
+  reverse_label: string;
+  symmetric: boolean;
+}
+
+export interface LoreRelationEndpoint {
+  id: string;
+  name: string;
+  type: { key: string; display_name: string };
+  summary: string;
+  lifecycle_status: string;
+  enabled: boolean;
+}
+
+export interface LoreRelation {
+  id: string;
+  source: LoreRelationEndpoint;
+  target: LoreRelationEndpoint;
+  relation_key: string;
+  forward_label: string;
+  reverse_label: string;
+  description: string;
+  metadata: Record<string, unknown>;
+  status: "active" | "archived";
+  version_no: number;
+  lock_version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LoreRelationListResponse {
+  items: LoreRelation[];
+  next_cursor: string | null;
+  has_more: boolean;
+  total: number;
+}
+
+export interface LoreRelationCreateInput {
+  operation_key: string;
+  target_element_id: string;
+  source_expected_version: number;
+  target_expected_version: number;
+  relation_type: string;
+  custom_forward_label?: string | null;
+  custom_reverse_label?: string | null;
+  description: string;
+}
+
+export interface LoreRelationCreateResponse extends LoreRelation {
+  replayed: boolean;
+}
+
+export interface LoreRelationUpdateInput {
+  expected_version: number;
+  forward_label: string;
+  reverse_label: string;
+  description: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface LoreRelationStateInput {
+  expected_version: number;
+  reason?: string;
+}
+
 export interface LoreFieldDefinition {
   key: string;
   label: string;
