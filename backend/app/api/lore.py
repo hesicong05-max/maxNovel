@@ -1296,21 +1296,48 @@ async def _load_relational_relation(
     relation_id: str,
     db: AsyncSession,
     current_user: User,
+    *,
+    for_update: bool = True,
 ) -> ElementRelation:
     project = await get_project_for_owner(project_id, current_user, db)
     _require_relational_mode(project)
-    result = await db.execute(
+    statement = (
         select(ElementRelation)
         .where(
             ElementRelation.id == relation_id,
             ElementRelation.project_id == project_id,
         )
-        .with_for_update()
     )
+    if for_update:
+        statement = statement.with_for_update()
+    result = await db.execute(statement)
     relation = result.scalar_one_or_none()
     if relation is None:
         raise HTTPException(status_code=404, detail="关系不存在")
     return relation
+
+
+async def _lock_relation_endpoints(
+    relation: ElementRelation,
+    db: AsyncSession,
+) -> None:
+    """Lock relation endpoints before the relation using a stable global order.
+
+    Element archival already locks an endpoint before its incident relations.
+    Relation state changes must use the same order, otherwise a concurrent
+    restore can deadlock with archival and surface an avoidable HTTP 500.
+    """
+    await db.execute(
+        select(SettingElement.id)
+        .where(
+            SettingElement.project_id == relation.project_id,
+            SettingElement.id.in_(
+                [relation.source_element_id, relation.target_element_id]
+            ),
+        )
+        .order_by(SettingElement.id.asc())
+        .with_for_update()
+    )
 
 
 async def _build_relation_response(
@@ -1965,6 +1992,11 @@ async def _set_lore_relation_status(
     db: AsyncSession,
     current_user: User,
 ) -> LoreRelationResponse:
+    check_writes_available()
+    relation = await _load_relational_relation(
+        project_id, relation_id, db, current_user, for_update=False
+    )
+    await _lock_relation_endpoints(relation, db)
     relation = await _load_relational_relation(
         project_id, relation_id, db, current_user
     )
