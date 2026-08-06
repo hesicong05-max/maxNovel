@@ -27,6 +27,8 @@ const overview: LoreOverview = {
     candidate_accept: false,
     formal_create: false,
     formal_conflict_tracking: false,
+    formal_merge_preview: false,
+    formal_merge_commit: false,
     search_fields: ["name", "summary"],
   },
   count_definitions: {},

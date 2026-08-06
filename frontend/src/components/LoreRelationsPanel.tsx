@@ -516,7 +516,10 @@ export default function LoreRelationsPanel({
             <label><span>从当前设定看，关系是</span><input className="form-input" maxLength={100} value={stored.draft.customForwardLabel} onChange={(event) => updateDraft((draft) => ({ ...draft, customForwardLabel: event.target.value }))} /></label>
             <label><span>从对方看，关系是</span><input className="form-input" maxLength={100} value={stored.draft.customReverseLabel} onChange={(event) => updateDraft((draft) => ({ ...draft, customReverseLabel: event.target.value }))} /></label>
           </div>}
-          <label><span>搜索目标设定</span><input type="search" className="form-input" value={stored.draft.targetQuery} placeholder="输入名称或摘要" onChange={(event) => updateDraft((draft) => ({ ...draft, targetQuery: event.target.value, target: null }))} /></label>
+          <label><span>搜索目标设定</span><input type="search" className="form-input" value={stored.draft.targetQuery} placeholder="输入名称或摘要" onChange={(event) => {
+            const targetQuery = event.currentTarget.value;
+            updateDraft((draft) => ({ ...draft, targetQuery, target: null }));
+          }} /></label>
           <div className="lore-relation-targets" aria-label="目标设定搜索结果">{targetLoading ? <p>搜索中…</p> : targetResults.map((item) => <button type="button" aria-pressed={stored.draft.target?.id === item.id} key={item.id} onClick={() => updateDraft((draft) => ({ ...draft, target: item, targetQuery: item.name }))}><strong>{item.name}</strong><span>{item.type.display_name} · {item.summary || "暂无摘要"} · {item.source_summary}</span></button>)}</div>
           <label><span>关系说明（可选）</span><textarea className="form-textarea" maxLength={2000} value={stored.draft.description} onChange={(event) => updateDraft((draft) => ({ ...draft, description: event.target.value }))} /></label>
         </fieldset>

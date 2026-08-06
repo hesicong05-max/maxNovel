@@ -24,6 +24,8 @@ export interface LoreOverview {
     candidate_accept: boolean;
     formal_create: boolean;
     formal_conflict_tracking: boolean;
+    formal_merge_preview: boolean;
+    formal_merge_commit: boolean;
     search_fields: string[];
   };
   count_definitions: Record<string, Record<string, unknown>>;
@@ -467,4 +469,60 @@ export interface LoreReviewDecisionResponse {
   replayed: boolean;
   applied: boolean;
   next_pending_id: string | null;
+}
+
+export type LoreMergeChoice = "survivor" | "merged" | "manual";
+
+export interface LoreMergePreviewInput {
+  suggestion_expected_version: number;
+  expected_evidence_revision: number;
+  survivor_element_id: string;
+  merged_element_id: string;
+  survivor_expected_lock_version: number;
+  survivor_expected_content_version: number;
+  merged_expected_lock_version: number;
+  merged_expected_content_version: number;
+  name_choice: LoreMergeChoice;
+  summary_choice: LoreMergeChoice;
+  field_choices: Record<string, LoreMergeChoice>;
+  final_name: string;
+  final_summary: string;
+  final_payload: Record<string, unknown>;
+  final_field_states: Record<string, LoreFieldState>;
+}
+
+export interface LoreMergeRelationPlan {
+  relation_id: string;
+  action: "rewire" | "exact_duplicate_archive" | "self_loop_archive" | "blocker";
+  current_source_element_id: string;
+  current_target_element_id: string;
+  planned_source_element_id: string;
+  planned_target_element_id: string;
+  relation_key: string;
+  retained_relation_id: string | null;
+  reason: string;
+}
+
+export interface LoreMergePreviewResponse {
+  suggestion_id: string;
+  survivor: LoreReviewEndpoint;
+  merged: LoreReviewEndpoint;
+  final_name: string;
+  final_summary: string;
+  final_payload: Record<string, unknown>;
+  final_field_states: Record<string, LoreFieldState>;
+  selection_snapshot: Record<string, unknown>;
+  source_impact: {
+    survivor_source_count: number;
+    merged_source_count: number;
+    preserved_total: number;
+    exact_duplicate_pairs: number;
+    strategy: "preserve_in_place";
+  };
+  relation_plan: LoreMergeRelationPlan[];
+  blockers: string[];
+  would_be_generation_eligible: boolean;
+  preview_token: string;
+  expires_at: string;
+  commit_available: false;
 }

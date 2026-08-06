@@ -38,6 +38,8 @@ import type {
   LoreElementUpdateInput,
   LoreElementWriteResponse,
   LoreListResponse,
+  LoreMergePreviewInput,
+  LoreMergePreviewResponse,
   LoreOverview,
   LoreRelation,
   LoreRelationCreateInput,
@@ -422,6 +424,14 @@ export const api = {
     data: LoreReviewDecisionInput
   ) => fetchJSON<LoreReviewDecisionResponse>(
     `/projects/${projectId}/lore/reviews/${suggestionId}/decide`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
+  previewLoreMerge: (
+    projectId: string,
+    suggestionId: string,
+    data: LoreMergePreviewInput
+  ) => fetchJSON<LoreMergePreviewResponse>(
+    `/projects/${projectId}/lore/reviews/${suggestionId}/merge-preview`,
     { method: "POST", body: JSON.stringify(data) }
   ),
   getLoreCandidate: (

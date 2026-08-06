@@ -112,6 +112,7 @@ jobs:
           tests/test_lore_writes.py
           tests/test_lore_extraction.py
           tests/test_lore_reviews.py
+          tests/test_lore_merge_preview.py
           tests/test_json_preflight_postgres.py
           tests/test_legacy_json_maintenance.py
           -v --tb=short

@@ -197,11 +197,18 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
             "lore_relation_create_operations",
             "lore_review_suggestions",
             "lore_review_suggestion_events",
+            "lore_merge_operations",
+            "lore_merge_relation_actions",
         }.issubset(tables)
         project_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(projects)")
         }
         assert {"lore_storage_mode", "lore_migration_version"}.issubset(project_columns)
+        element_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(setting_elements)")
+        }
+        assert "merged_into_element_id" in element_columns
 
         table_sql = {
             name: sql or ""
@@ -290,6 +297,36 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
             "fk_lore_review_event_suggestion"
             in table_sql["lore_review_suggestion_events"]
         )
+        assert "fk_setting_element_merged_into" in table_sql["setting_elements"]
+        assert "uq_lore_merge_operation_key" in table_sql["lore_merge_operations"]
+        assert (
+            "fk_lore_merge_operation_survivor"
+            in table_sql["lore_merge_operations"]
+        )
+        assert (
+            "fk_lore_merge_operation_suggestion"
+            in table_sql["lore_merge_operations"]
+        )
+        assert (
+            "ck_lore_merge_operation_suggestion_scope"
+            in table_sql["lore_merge_operations"]
+        )
+        assert (
+            "fk_lore_merge_relation_action_operation"
+            in table_sql["lore_merge_relation_actions"]
+        )
+        assert (
+            "ck_lore_merge_relation_action"
+            in table_sql["lore_merge_relation_actions"]
+        )
+        assert (
+            "fk_lore_merge_relation_action_relation"
+            in table_sql["lore_merge_relation_actions"]
+        )
+        assert (
+            "fk_lore_merge_relation_action_retained_relation"
+            in table_sql["lore_merge_relation_actions"]
+        )
         indexes = {
             row[0]
             for row in connection.execute(
@@ -301,6 +338,9 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
         assert "ix_lore_relation_create_operations_project_created" in indexes
         assert "ix_lore_review_suggestions_project_status_updated" in indexes
         assert "ix_lore_review_events_suggestion_created" in indexes
+        assert "ix_setting_elements_merged_into_element_id" in indexes
+        assert "ix_lore_merge_operations_project_created" in indexes
+        assert "ix_lore_merge_relation_actions_operation" in indexes
 
     _run_alembic(backend_dir, database_url, "downgrade", "a1d3c7e9f002")
     with sqlite3.connect(database_path) as connection:
@@ -317,6 +357,8 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
         assert "lore_relation_create_operations" not in tables
         assert "lore_review_suggestions" not in tables
         assert "lore_review_suggestion_events" not in tables
+        assert "lore_merge_operations" not in tables
+        assert "lore_merge_relation_actions" not in tables
         table_sql = {
             name: sql or ""
             for name, sql in connection.execute(
@@ -324,6 +366,11 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
             )
         }
         assert "fk_setting_element_project_type" not in table_sql["setting_elements"]
+        element_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(setting_elements)")
+        }
+        assert "merged_into_element_id" not in element_columns
         assert "fk_element_source_project_element" not in table_sql["element_sources"]
         assert (
             "fk_legacy_element_map_project_element"

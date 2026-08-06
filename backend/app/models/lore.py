@@ -86,6 +86,13 @@ class SettingElement(Base):
             name="fk_setting_element_project_type",
             ondelete="CASCADE",
         ),
+        ForeignKeyConstraint(
+            ["project_id", "merged_into_element_id"],
+            ["setting_elements.project_id", "setting_elements.id"],
+            name="fk_setting_element_merged_into",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         CheckConstraint(
             "confirmation_status IN ('candidate', 'confirmed', 'rejected')",
             name="ck_setting_element_confirmation",
@@ -144,6 +151,7 @@ class SettingElement(Base):
     field_states = Column(JSON, nullable=False, default=dict)
     confirmation_status = Column(String(20), nullable=False, default="confirmed")
     lifecycle_status = Column(String(20), nullable=False, default="active")
+    merged_into_element_id = Column(String(32), nullable=True, index=True)
     enabled = Column(Boolean, nullable=False, default=True)
     content_version = Column(Integer, nullable=False, default=1)
     lock_version = Column(Integer, nullable=False, default=1)
@@ -664,4 +672,155 @@ class LoreReviewSuggestionEvent(Base):
     new_lock_version = Column(Integer, nullable=False)
     note = Column(Text, nullable=False, default="")
     applied = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+
+class LoreMergeOperation(Base):
+    """Completed non-destructive merge audit and durable idempotency receipt."""
+
+    __tablename__ = "lore_merge_operations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["suggestion_project_id", "suggestion_id"],
+            ["lore_review_suggestions.project_id", "lore_review_suggestions.id"],
+            name="fk_lore_merge_operation_suggestion",
+            ondelete="SET NULL",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "survivor_element_id"],
+            ["setting_elements.project_id", "setting_elements.id"],
+            name="fk_lore_merge_operation_survivor",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "merged_element_id"],
+            ["setting_elements.project_id", "setting_elements.id"],
+            name="fk_lore_merge_operation_merged",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "project_id", "performed_by", "operation_key",
+            name="uq_lore_merge_operation_key",
+        ),
+        UniqueConstraint(
+            "project_id", "merged_element_id",
+            name="uq_lore_merge_operation_merged_element",
+        ),
+        UniqueConstraint(
+            "project_id", "id", name="uq_lore_merge_operation_project_id_id",
+        ),
+        CheckConstraint(
+            "survivor_element_id <> merged_element_id",
+            name="ck_lore_merge_operation_distinct_elements",
+        ),
+        CheckConstraint(
+            "(suggestion_project_id IS NULL AND suggestion_id IS NULL) OR "
+            "(suggestion_project_id IS NOT NULL AND suggestion_id IS NOT NULL "
+            "AND suggestion_project_id = project_id)",
+            name="ck_lore_merge_operation_suggestion_scope",
+        ),
+        Index(
+            "ix_lore_merge_operations_project_created",
+            "project_id", "created_at", "id",
+        ),
+    )
+
+    id = Column(String(32), primary_key=True, default=gen_id)
+    project_id = Column(
+        String(32), ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    performed_by = Column(
+        String(32), ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    operation_key = Column(String(128), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    suggestion_project_id = Column(String(32), nullable=True)
+    suggestion_id = Column(String(32), nullable=True, index=True)
+    evidence_revision = Column(Integer, nullable=False)
+    survivor_element_id = Column(String(32), nullable=False, index=True)
+    merged_element_id = Column(String(32), nullable=False, index=True)
+    survivor_before_content_version = Column(Integer, nullable=False)
+    survivor_before_lock_version = Column(Integer, nullable=False)
+    merged_before_content_version = Column(Integer, nullable=False)
+    merged_before_lock_version = Column(Integer, nullable=False)
+    source_fingerprint = Column(String(64), nullable=False)
+    relation_fingerprint = Column(String(64), nullable=False)
+    selection_snapshot = Column(JSON, nullable=False, default=dict)
+    plan_fingerprint = Column(String(64), nullable=False)
+    impact_summary = Column(JSON, nullable=False, default=dict)
+    survivor_after_content_version = Column(Integer, nullable=False)
+    survivor_after_lock_version = Column(Integer, nullable=False)
+    merged_after_lock_version = Column(Integer, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+
+class LoreMergeRelationAction(Base):
+    """Per-relation before/after audit for a completed merge operation."""
+
+    __tablename__ = "lore_merge_relation_actions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "merge_operation_id"],
+            ["lore_merge_operations.project_id", "lore_merge_operations.id"],
+            name="fk_lore_merge_relation_action_operation",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["relation_project_id", "relation_id"],
+            ["element_relations.project_id", "element_relations.id"],
+            name="fk_lore_merge_relation_action_relation",
+            ondelete="SET NULL",
+        ),
+        ForeignKeyConstraint(
+            ["retained_relation_project_id", "retained_relation_id"],
+            ["element_relations.project_id", "element_relations.id"],
+            name="fk_lore_merge_relation_action_retained_relation",
+            ondelete="SET NULL",
+        ),
+        CheckConstraint(
+            "action IN ('rewired', 'exact_duplicate_archived', "
+            "'self_loop_archived')",
+            name="ck_lore_merge_relation_action",
+        ),
+        CheckConstraint(
+            "(relation_project_id IS NULL AND relation_id IS NULL) OR "
+            "(relation_project_id IS NOT NULL AND relation_id IS NOT NULL "
+            "AND relation_project_id = project_id)",
+            name="ck_lore_merge_relation_action_relation_scope",
+        ),
+        CheckConstraint(
+            "(retained_relation_project_id IS NULL AND "
+            "retained_relation_id IS NULL) OR "
+            "(retained_relation_project_id IS NOT NULL AND "
+            "retained_relation_id IS NOT NULL AND "
+            "retained_relation_project_id = project_id)",
+            name="ck_lore_merge_relation_action_retained_scope",
+        ),
+        UniqueConstraint(
+            "merge_operation_id", "relation_id",
+            name="uq_lore_merge_relation_action_relation",
+        ),
+        Index(
+            "ix_lore_merge_relation_actions_operation",
+            "merge_operation_id", "id",
+        ),
+    )
+
+    id = Column(String(32), primary_key=True, default=gen_id)
+    project_id = Column(
+        String(32), ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    merge_operation_id = Column(String(32), nullable=False, index=True)
+    relation_project_id = Column(String(32), nullable=True)
+    relation_id = Column(String(32), nullable=True, index=True)
+    retained_relation_project_id = Column(String(32), nullable=True)
+    retained_relation_id = Column(String(32), nullable=True)
+    action = Column(String(40), nullable=False)
+    before_snapshot = Column(JSON, nullable=False, default=dict)
+    after_snapshot = Column(JSON, nullable=False, default=dict)
+    previous_lock_version = Column(Integer, nullable=False)
+    new_lock_version = Column(Integer, nullable=False)
     created_at = Column(DateTime, nullable=False, default=_utcnow)

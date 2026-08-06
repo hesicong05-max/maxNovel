@@ -550,6 +550,24 @@ describe("API - lore repository", () => {
     });
     await api.getLoreReview("project-1", "review-1");
     await api.decideLoreReview("project-1", "review-1", decision);
+    const preview = {
+      suggestion_expected_version: 3,
+      expected_evidence_revision: 2,
+      survivor_element_id: "left-1",
+      merged_element_id: "right-1",
+      survivor_expected_lock_version: 1,
+      survivor_expected_content_version: 1,
+      merged_expected_lock_version: 1,
+      merged_expected_content_version: 1,
+      name_choice: "survivor" as const,
+      summary_choice: "survivor" as const,
+      field_choices: { personality: "survivor" as const },
+      final_name: "林岚",
+      final_summary: "",
+      final_payload: { personality: "谨慎" },
+      final_field_states: { personality: "provided" as const },
+    };
+    await api.previewLoreMerge("project-1", "review-1", preview);
 
     expect(fetchSpy).toHaveBeenNthCalledWith(1,
       "/api/projects/project-1/lore/reviews/scan",
@@ -565,6 +583,10 @@ describe("API - lore repository", () => {
     expect(fetchSpy).toHaveBeenNthCalledWith(4,
       "/api/projects/project-1/lore/reviews/review-1/decide",
       expect.objectContaining({ method: "POST", body: JSON.stringify(decision) })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(5,
+      "/api/projects/project-1/lore/reviews/review-1/merge-preview",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(preview) })
     );
   });
 });

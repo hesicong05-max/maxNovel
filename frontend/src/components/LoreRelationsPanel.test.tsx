@@ -194,6 +194,7 @@ describe("LoreRelationsPanel", () => {
   });
 
   it("refreshes stale endpoint versions before allowing the same operation to retry", async () => {
+    const user = userEvent.setup();
     const create = vi.fn()
       .mockRejectedValueOnce(new apiModule.ApiError(409, {
         detail: "关系端点已变化",
@@ -210,15 +211,17 @@ describe("LoreRelationsPanel", () => {
     });
     renderPanel();
 
-    await userEvent.click(await screen.findByRole("button", { name: "添加关系" }));
-    await userEvent.type(screen.getByRole("searchbox", { name: "搜索目标设定" }), "星盟");
-    await userEvent.click(await screen.findByRole("button", { name: /星盟.*阵营/ }));
-    await userEvent.click(screen.getByRole("button", { name: "创建关系" }));
+    await user.click(await screen.findByRole("button", { name: "添加关系" }));
+    const searchbox = screen.getByRole("searchbox", { name: "搜索目标设定" });
+    await user.type(searchbox, "星盟");
+    await waitFor(() => expect(searchbox).toHaveValue("星盟"));
+    await user.click(await screen.findByRole("button", { name: /星盟.*阵营/ }));
+    await user.click(screen.getByRole("button", { name: "创建关系" }));
     const refresh = await screen.findByRole("button", { name: "载入最新端点版本" });
     const firstInput = create.mock.calls[0][2] as LoreRelationCreateInput;
 
-    await userEvent.click(refresh);
-    await userEvent.click(await screen.findByRole("button", { name: "使用相同内容安全重试" }));
+    await user.click(refresh);
+    await user.click(await screen.findByRole("button", { name: "使用相同内容安全重试" }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
     const secondInput = create.mock.calls[1][2] as LoreRelationCreateInput;
     expect(secondInput.operation_key).toBe(firstInput.operation_key);

@@ -79,6 +79,8 @@ class LoreRepositoryCapabilities(BaseModel):
     candidate_accept: bool
     formal_create: bool = False
     formal_conflict_tracking: bool = False
+    formal_merge_preview: bool = False
+    formal_merge_commit: bool = False
     search_fields: list[str] = Field(default_factory=lambda: ["name", "summary"])
 
 
@@ -552,3 +554,77 @@ class LoreReviewDecisionResponse(BaseModel):
     replayed: bool = False
     applied: bool = True
     next_pending_id: str | None = None
+
+
+LoreMergeChoice = Literal["survivor", "merged", "manual"]
+
+
+class LoreMergePreviewInput(BaseModel):
+    suggestion_expected_version: int = Field(..., ge=1)
+    expected_evidence_revision: int = Field(..., ge=1)
+    survivor_element_id: str = Field(..., min_length=1, max_length=32)
+    merged_element_id: str = Field(..., min_length=1, max_length=32)
+    survivor_expected_lock_version: int = Field(..., ge=1)
+    survivor_expected_content_version: int = Field(..., ge=1)
+    merged_expected_lock_version: int = Field(..., ge=1)
+    merged_expected_content_version: int = Field(..., ge=1)
+    name_choice: LoreMergeChoice
+    summary_choice: LoreMergeChoice
+    field_choices: dict[str, LoreMergeChoice] = Field(default_factory=dict)
+    final_name: str = Field(..., min_length=1, max_length=200)
+    final_summary: str = Field(default="", max_length=2000)
+    final_payload: dict[str, Any] = Field(default_factory=dict)
+    final_field_states: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("final_field_states")
+    @classmethod
+    def _valid_merge_states(cls, value: dict[str, str]) -> dict[str, str]:
+        for key, state in value.items():
+            if state not in ("provided", "unknown", "needs_confirmation"):
+                raise ValueError(
+                    f"field {key}: state must be provided/unknown/needs_confirmation"
+                )
+        return value
+
+
+class LoreMergeRelationPlan(BaseModel):
+    relation_id: str
+    action: Literal[
+        "rewire",
+        "exact_duplicate_archive",
+        "self_loop_archive",
+        "blocker",
+    ]
+    current_source_element_id: str
+    current_target_element_id: str
+    planned_source_element_id: str
+    planned_target_element_id: str
+    relation_key: str
+    retained_relation_id: str | None = None
+    reason: str
+
+
+class LoreMergeSourceImpact(BaseModel):
+    survivor_source_count: int
+    merged_source_count: int
+    preserved_total: int
+    exact_duplicate_pairs: int
+    strategy: Literal["preserve_in_place"] = "preserve_in_place"
+
+
+class LoreMergePreviewResponse(BaseModel):
+    suggestion_id: str
+    survivor: LoreReviewEndpoint
+    merged: LoreReviewEndpoint
+    final_name: str
+    final_summary: str
+    final_payload: dict[str, Any]
+    final_field_states: dict[str, str]
+    selection_snapshot: dict[str, Any]
+    source_impact: LoreMergeSourceImpact
+    relation_plan: list[LoreMergeRelationPlan]
+    blockers: list[str] = Field(default_factory=list)
+    would_be_generation_eligible: bool
+    preview_token: str
+    expires_at: datetime
+    commit_available: bool = False

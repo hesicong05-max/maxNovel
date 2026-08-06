@@ -26,6 +26,7 @@ from app.core.lore_migration import (
     type_field_definitions,
     validate_projection,
 )
+from app.core.lore_merge_preview import build_merge_preview
 from app.core.lore_relation_types import RELATION_TYPES, resolve_relation_type
 from app.core.lore_review import scan_lore_review_suggestions
 from app.core.lore_write import (
@@ -71,6 +72,8 @@ from app.schemas.lore import (
     LoreFieldDefinition,
     LoreListResponse,
     LoreMigrationStatus,
+    LoreMergePreviewInput,
+    LoreMergePreviewResponse,
     LoreRelationCreate,
     LoreRelationCreateResponse,
     LoreRelationEndpoint,
@@ -861,6 +864,11 @@ async def get_lore_repository_overview(
                 and not migration_status.read_only
             ),
             formal_conflict_tracking=(project.lore_storage_mode == "relational"),
+            formal_merge_preview=(
+                project.lore_storage_mode == "relational"
+                and not migration_status.read_only
+            ),
+            formal_merge_commit=False,
         ),
         count_definitions={
             "formal_total": {"entity": "formal_lore"},
@@ -1390,7 +1398,9 @@ async def _build_relational_element_detail(
         sources=response.sources,
         created_at=response.created_at,
         version_count=version_count or 0,
-        merged_to=None,
+        merged_to=element.merged_into_element_id,
+        # A survivor can receive multiple merges. C5A keeps the legacy scalar
+        # projection disabled rather than returning one misleading loser.
         redirected_from=None,
         read_only=False,
         migration_status=_relational_migration_status(),
@@ -2051,6 +2061,31 @@ async def get_lore_review(
     _require_relational_mode(project)
     suggestion = await _get_review_row(project_id, suggestion_id, db)
     return await _build_review_detail(suggestion, db)
+
+
+@router.post(
+    "/reviews/{suggestion_id}/merge-preview",
+    response_model=LoreMergePreviewResponse,
+)
+async def preview_lore_merge(
+    project_id: str,
+    suggestion_id: str,
+    body: LoreMergePreviewInput,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    project = await get_project_for_owner(project_id, current_user, db)
+    _require_relational_mode(project)
+    try:
+        return await build_merge_preview(
+            db,
+            project_id=project_id,
+            user_id=current_user.id,
+            suggestion_id=suggestion_id,
+            body=body,
+        )
+    except LoreWriteError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @router.post(

@@ -249,6 +249,24 @@ def _derive_field_states(
     return result
 
 
+def validate_element_content(
+    setting_type: SettingType,
+    payload: dict[str, Any],
+    field_states: dict[str, str] | None,
+) -> dict[str, str]:
+    """Validate element content without mutating persistence state.
+
+    Merge preview and ordinary writes intentionally share this contract so a
+    preview can never approve content that the eventual write path rejects.
+    """
+    field_schema = field_schema_for_type(setting_type)
+    _validate_payload_keys(payload, field_schema)
+    _validate_payload_values(payload, field_schema)
+    if field_states:
+        _validate_field_states(field_states, payload, field_schema)
+    return _derive_field_states(payload, field_schema, field_states)
+
+
 async def _resolve_type(
     db: AsyncSession,
     project_id: str,
@@ -382,16 +400,10 @@ async def create_element(
     check_writes_available()
 
     setting_type = await _resolve_type(db, project_id, type_key)
-    field_schema = field_schema_for_type(setting_type)
-    _validate_payload_keys(payload, field_schema)
-    _validate_payload_values(payload, field_schema)
-    if field_states:
-        _validate_field_states(field_states, payload, field_schema)
-
     type_id = setting_type.id
     normalized_name = name.strip().casefold()
 
-    derived_states = _derive_field_states(payload, field_schema, field_states)
+    derived_states = validate_element_content(setting_type, payload, field_states)
     element = SettingElement(
         project_id=project_id,
         type_id=type_id,
@@ -484,14 +496,7 @@ async def update_element_content(
     )
     if setting_type is None or setting_type.status != "active":
         raise LoreWriteError("设定类型不存在或已停用", status_code=409)
-    field_schema = field_schema_for_type(setting_type)
-
-    _validate_payload_keys(payload, field_schema)
-    _validate_payload_values(payload, field_schema)
-    if field_states:
-        _validate_field_states(field_states, payload, field_schema)
-
-    derived_states = _derive_field_states(payload, field_schema, field_states)
+    derived_states = validate_element_content(setting_type, payload, field_states)
 
     new_content_version = element.content_version + 1
     element.name = name
