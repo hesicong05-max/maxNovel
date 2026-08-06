@@ -65,6 +65,34 @@ export interface LoreElementDetail extends LoreElementListItem {
   read_only: boolean;
 }
 
+export interface LoreFieldDefinition {
+  key: string;
+  label: string;
+  control: string;
+  value_type: string;
+  help: string;
+  order: number;
+  required: boolean;
+}
+
+export interface LoreTypeDefinition {
+  id: string;
+  key: string;
+  display_name: string;
+  description: string;
+  field_schema: LoreFieldDefinition[];
+  is_builtin: boolean;
+  schema_revision: number;
+  status: "active" | "archived";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LoreTypesResponse {
+  items: LoreTypeDefinition[];
+  total: number;
+}
+
 export interface LoreListResponse {
   items: LoreElementListItem[];
   next_cursor: string | null;
@@ -84,23 +112,97 @@ export interface LoreListResponse {
 export interface LoreCandidate {
   id: string;
   batch_id: string;
+  ordinal: number;
   type_key: string | null;
   type_display_name: string | null;
   name: string | null;
   summary: string;
+  payload: Record<string, string | null>;
+  field_states: Record<string, LoreFieldState>;
+  relation_suggestions: Array<Record<string, unknown>>;
+  duplicate_conflict_suggestions: LoreCandidateSuggestion[];
+  suggestion_resolutions: Record<string, LoreSuggestionResolution>;
+  user_overrides: Record<string, unknown>;
   status: "pending_review" | "accepted" | "rejected" | "failed";
   needs_attention: boolean;
   disabled_reasons: string[];
   revision: number;
+  accepted_element_id: string | null;
+  error_code: string | null;
+  can_accept: boolean;
+  actions: LoreCandidateActions;
+  created_at: string;
+  updated_at: string;
   evidence: Array<{
     id: string;
     field_key: string;
     label: string;
+    value: string | null;
+    extracted_value: string | null;
     current_value: string | null;
-    current_state: "provided" | "unknown" | "needs_confirmation";
+    current_state: LoreFieldState;
     value_origin: "ai_extraction" | "user_override" | "user_cleared";
+    state: LoreFieldState;
     excerpt: string | null;
+    locator: Record<string, unknown>;
+    excerpt_hash: string | null;
+    source_hash: string;
+    is_name: boolean;
   }>;
+}
+
+export type LoreFieldState = "provided" | "unknown" | "needs_confirmation";
+
+export type LoreSuggestionResolution =
+  | "accept_as_new"
+  | "dismissed"
+  | "deferred";
+
+export interface LoreCandidateSuggestion {
+  suggestion_id: string;
+  kind: "possible_duplicate" | "possible_conflict" | string;
+  target_element_id?: string;
+  target_candidate_ordinal?: number;
+  target_name?: string;
+  target_type_key?: string;
+  differing_fields?: string[];
+  resolution_status?: string;
+}
+
+export interface LoreCandidateActions {
+  can_edit: boolean;
+  can_accept: boolean;
+  can_reject: boolean;
+  can_open_element: boolean;
+  disabled_reasons: Record<string, string[]>;
+}
+
+export interface LoreCandidateEditInput {
+  expected_version: number;
+  type_key: string;
+  name: string | null;
+  summary: string;
+  payload: Record<string, string | null>;
+  field_states: Record<string, LoreFieldState>;
+  suggestion_resolutions: Record<string, LoreSuggestionResolution>;
+}
+
+export interface LoreCandidateActionInput {
+  expected_version: number;
+  suggestion_resolutions: Record<string, LoreSuggestionResolution>;
+}
+
+export interface LoreCandidateActionResponse {
+  candidate: LoreCandidate;
+  action_result:
+    | "accepted"
+    | "already_accepted"
+    | "rejected"
+    | "already_rejected";
+  replayed: boolean;
+  accepted_element_id: string | null;
+  remaining_pending_count: number;
+  next_pending_candidate_id: string | null;
 }
 
 export interface LoreCandidateInboxResponse {

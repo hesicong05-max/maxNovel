@@ -24,12 +24,17 @@ import type {
   WorldviewImportResult,
 } from "@/types";
 import type {
+  LoreCandidate,
+  LoreCandidateActionInput,
+  LoreCandidateActionResponse,
+  LoreCandidateEditInput,
   LoreCandidateFilters,
   LoreCandidateInboxResponse,
   LoreElementDetail,
   LoreElementFilters,
   LoreListResponse,
   LoreOverview,
+  LoreTypesResponse,
 } from "@/types/lore";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
@@ -299,6 +304,48 @@ export const api = {
     fetchJSON<LoreCandidateInboxResponse>(
       withQuery(`/projects/${projectId}/lore/extractions/candidates`, filters),
       { signal }
+    ),
+  listLoreTypes: (projectId: string, signal?: AbortSignal) =>
+    fetchJSON<LoreTypesResponse>(`/projects/${projectId}/lore/types`, { signal }),
+  getLoreCandidate: (
+    projectId: string,
+    batchId: string,
+    candidateId: string,
+    signal?: AbortSignal
+  ) =>
+    fetchJSON<LoreCandidate>(
+      `/projects/${projectId}/lore/extractions/${batchId}/candidates/${candidateId}`,
+      { signal }
+    ),
+  editLoreCandidate: (
+    projectId: string,
+    batchId: string,
+    candidateId: string,
+    data: LoreCandidateEditInput
+  ) =>
+    fetchJSON<LoreCandidate>(
+      `/projects/${projectId}/lore/extractions/${batchId}/candidates/${candidateId}`,
+      { method: "PATCH", body: JSON.stringify(data) }
+    ),
+  acceptLoreCandidate: (
+    projectId: string,
+    batchId: string,
+    candidateId: string,
+    data: LoreCandidateActionInput
+  ) =>
+    fetchJSON<LoreCandidateActionResponse>(
+      `/projects/${projectId}/lore/extractions/${batchId}/candidates/${candidateId}/accept`,
+      { method: "POST", body: JSON.stringify(data) }
+    ),
+  rejectLoreCandidate: (
+    projectId: string,
+    batchId: string,
+    candidateId: string,
+    data: LoreCandidateActionInput
+  ) =>
+    fetchJSON<LoreCandidateActionResponse>(
+      `/projects/${projectId}/lore/extractions/${batchId}/candidates/${candidateId}/reject`,
+      { method: "POST", body: JSON.stringify(data) }
     ),
 
   // Outline

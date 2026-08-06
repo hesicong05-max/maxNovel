@@ -1365,6 +1365,136 @@ input, select, textarea { font-family: inherit; }
   color: var(--red-dark);
 }
 
+.lore-candidate-review h3,
+.lore-edit-fields h3,
+.lore-suggestions h3 {
+  margin-bottom: 0.625rem;
+  color: var(--text-1);
+  font-size: 14px;
+}
+
+.lore-candidate-fields,
+.lore-candidate-action-panel,
+.lore-edit-fields,
+.lore-suggestions,
+.lore-confirm,
+.lore-preserved-draft {
+  margin-top: 1rem;
+}
+
+.lore-candidate-form fieldset {
+  display: grid;
+  gap: 0.875rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.lore-candidate-form legend {
+  margin-bottom: 0.75rem;
+  color: var(--text-1);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.lore-candidate-form label,
+.lore-edit-field label,
+.lore-suggestions label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.lore-candidate-form label > span,
+.lore-edit-field label > span,
+.lore-suggestions label > span {
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.lore-candidate-form textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.lore-edit-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 0.32fr);
+  gap: 0.625rem;
+  margin-bottom: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+
+.lore-edit-field > small {
+  grid-column: 1 / -1;
+  color: var(--text-3);
+}
+
+.lore-suggestions article,
+.lore-suggestions label {
+  margin-bottom: 0.625rem;
+  padding: 0.75rem;
+  border: 1px solid var(--gold-border);
+  border-radius: var(--r-md);
+  background: var(--gold-light);
+}
+
+.lore-suggestions article {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.lore-suggestions article span {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.lore-candidate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.625rem;
+  margin-top: 0.875rem;
+}
+
+.lore-action-reasons {
+  margin-top: 0.75rem;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.lore-confirm {
+  padding: 0.875rem;
+  border: 1px solid var(--gold-border);
+  border-radius: var(--r-md);
+  background: var(--gold-light);
+}
+
+.lore-confirm p {
+  margin-top: 0.4rem;
+  color: var(--text-2);
+}
+
+.lore-preserved-draft summary {
+  min-height: 44px;
+  color: var(--gold-dark);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.lore-preserved-draft textarea {
+  min-height: 180px;
+  font-family: var(--font-mono);
+}
+
+.lore-operation-message span {
+  min-width: 0;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -1431,6 +1561,27 @@ input, select, textarea { font-family: inherit; }
   .lore-card,
   .lore-scope-tabs button {
     min-height: 44px;
+  }
+
+  .lore-edit-field {
+    grid-template-columns: 1fr;
+  }
+
+  .lore-edit-field > small {
+    grid-column: auto;
+  }
+
+  .lore-candidate-actions {
+    flex-direction: column;
+  }
+
+  .lore-candidate-actions .btn {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .lore-suggestions article {
+    flex-direction: column;
   }
 
   .draft-notice {

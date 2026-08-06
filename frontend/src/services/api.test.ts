@@ -390,6 +390,46 @@ describe("API - lore repository", () => {
       reloadRequired: true,
     });
   });
+
+  it("sends candidate mutations to the scoped endpoints with expected_version", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const edit = {
+      expected_version: 7,
+      type_key: "character",
+      name: "林渊",
+      summary: "",
+      payload: { personality: "谨慎" },
+      field_states: { personality: "provided" as const },
+      suggestion_resolutions: {},
+    };
+    await api.editLoreCandidate("project-1", "batch-1", "candidate-1", edit);
+    await api.acceptLoreCandidate("project-1", "batch-1", "candidate-1", {
+      expected_version: 8,
+      suggestion_resolutions: {},
+    });
+    await api.rejectLoreCandidate("project-1", "batch-1", "candidate-1", {
+      expected_version: 8,
+      suggestion_resolutions: {},
+    });
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(1,
+      "/api/projects/project-1/lore/extractions/batch-1/candidates/candidate-1",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify(edit) })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(2,
+      "/api/projects/project-1/lore/extractions/batch-1/candidates/candidate-1/accept",
+      expect.objectContaining({ method: "POST", body: expect.stringContaining('"expected_version":8') })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(3,
+      "/api/projects/project-1/lore/extractions/batch-1/candidates/candidate-1/reject",
+      expect.objectContaining({ method: "POST", body: expect.stringContaining('"expected_version":8') })
+    );
+  });
 });
 
 describe("API - Projects", () => {

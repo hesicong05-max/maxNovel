@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "@/services/api";
-import type { LoreListResponse, LoreOverview } from "@/types/lore";
+import type { LoreCandidateInboxResponse, LoreListResponse, LoreOverview } from "@/types/lore";
 import LoreRepositoryPage from "./LoreRepositoryPage";
 
 const overview: LoreOverview = {
@@ -56,26 +56,52 @@ function formalResponse(name = "林渊"): LoreListResponse {
   };
 }
 
-const candidateResponse = {
+const candidateResponse: LoreCandidateInboxResponse = {
   items: [{
     id: "candidate-1",
     batch_id: "batch-1",
+    ordinal: 1,
     type_key: "location",
     type_display_name: "地点",
     name: "寒川城",
     summary: "北境城邦",
+    payload: { description: "北境城邦", significance: null, geography: null },
+    field_states: { description: "provided", significance: "needs_confirmation", geography: "unknown" },
+    relation_suggestions: [],
+    duplicate_conflict_suggestions: [],
+    suggestion_resolutions: {},
+    user_overrides: {},
     status: "pending_review",
     needs_attention: true,
     disabled_reasons: ["fields_need_confirmation"],
     revision: 1,
+    accepted_element_id: null,
+    error_code: null,
+    can_accept: false,
+    actions: {
+      can_edit: true,
+      can_accept: false,
+      can_reject: true,
+      can_open_element: false,
+      disabled_reasons: { edit: [], accept: ["fields_need_confirmation"], reject: [] },
+    },
+    created_at: "2026-08-03T00:00:00Z",
+    updated_at: "2026-08-03T00:00:00Z",
     evidence: [{
       id: "evidence-1",
       field_key: "name",
       label: "名称",
+      value: "寒川城",
+      extracted_value: "寒川城",
       current_value: "寒川城",
       current_state: "provided" as const,
       value_origin: "ai_extraction" as const,
+      state: "provided" as const,
       excerpt: "林渊进入寒川城。",
+      locator: {},
+      excerpt_hash: "hash",
+      source_hash: "source-hash",
+      is_name: true,
     }],
   }],
   next_cursor: null,
@@ -84,6 +110,64 @@ const candidateResponse = {
   applied_filters: {},
   query_signature: "sig-1",
 };
+
+const writableOverview: LoreOverview = {
+  ...overview,
+  migration_status: { storage_mode: "relational", state: "ready", read_only: false },
+  capabilities: { ...overview.capabilities, candidate_accept: true },
+};
+
+const loreTypesResponse = {
+  items: [{
+    id: "type-location",
+    key: "location",
+    display_name: "地点",
+    description: "地点设定",
+    is_builtin: true,
+    schema_revision: 1,
+    status: "active" as const,
+    field_schema: [
+      { key: "description", label: "描述", control: "textarea", value_type: "text", help: "地点描述", order: 10, required: false },
+      { key: "significance", label: "重要性", control: "textarea", value_type: "text", help: "故事中的作用", order: 20, required: false },
+      { key: "geography", label: "地理特征", control: "textarea", value_type: "text", help: "地理信息", order: 30, required: false },
+    ],
+    created_at: "2026-08-03T00:00:00Z",
+    updated_at: "2026-08-03T00:00:00Z",
+  }, {
+    id: "type-custom",
+    key: "custom_secret",
+    display_name: "自定义秘密",
+    description: "暂不支持候选编辑",
+    is_builtin: false,
+    schema_revision: 1,
+    status: "active" as const,
+    field_schema: [],
+    created_at: "2026-08-03T00:00:00Z",
+    updated_at: "2026-08-03T00:00:00Z",
+  }],
+  total: 2,
+};
+
+function readyCandidateResponse(): LoreCandidateInboxResponse {
+  const candidate = candidateResponse.items[0];
+  return {
+    ...candidateResponse,
+    items: [{
+      ...candidate,
+      needs_attention: false,
+      disabled_reasons: [],
+      field_states: { description: "provided", significance: "unknown", geography: "unknown" },
+      actions: {
+        can_edit: true,
+        can_accept: true,
+        can_reject: true,
+        can_open_element: false,
+        disabled_reasons: { edit: [], accept: [], reject: [] },
+      },
+      can_accept: true,
+    }],
+  };
+}
 
 function renderPage(entry = "/project/project-1/lore") {
   return render(
@@ -111,6 +195,7 @@ describe("LoreRepositoryPage", () => {
         read_only: true,
       }),
       listLoreCandidates: vi.fn().mockResolvedValue(candidateResponse),
+      listLoreTypes: vi.fn().mockResolvedValue({ items: [], total: 0 }),
     });
   });
 
@@ -118,7 +203,7 @@ describe("LoreRepositoryPage", () => {
     renderPage();
 
     expect(await screen.findByText("林渊")).toBeInTheDocument();
-    expect(screen.getByText(/正式接纳功能将在后续安全写入阶段开放/)).toBeInTheDocument();
+    expect(screen.getByText(/兼容资料模式/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /林渊/ }));
 
     expect(await screen.findByText("黑发")).toBeInTheDocument();
@@ -333,5 +418,401 @@ describe("LoreRepositoryPage", () => {
     await act(async () => rejectDetail(new Error("过期详情错误")));
     await waitFor(() => expect(screen.queryByText("过期详情错误")).not.toBeInTheDocument());
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("edits a candidate with the authoritative schema and current revision", async () => {
+    const updated = {
+      ...readyCandidateResponse().items[0],
+      name: "新寒川城",
+      revision: 2,
+    };
+    const edit = vi.fn().mockResolvedValue(updated);
+    const list = vi.fn()
+      .mockResolvedValueOnce(readyCandidateResponse())
+      .mockResolvedValue({ ...readyCandidateResponse(), items: [updated] });
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn(),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: list,
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+      editLoreCandidate: edit,
+    });
+    renderPage("/project/project-1/lore?scope=review");
+    await userEvent.click(await screen.findByRole("button", { name: /寒川城/ }));
+    await waitFor(() => expect(apiModule.api.listLoreTypes).toHaveBeenCalled());
+    await userEvent.click(screen.getByRole("button", { name: "编辑候选" }));
+    expect(screen.queryByRole("option", { name: "自定义秘密" })).not.toBeInTheDocument();
+    const name = screen.getByLabelText("名称");
+    await userEvent.clear(name);
+    await userEvent.type(name, "新寒川城");
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+
+    await waitFor(() => expect(edit).toHaveBeenCalledWith(
+      "project-1",
+      "batch-1",
+      "candidate-1",
+      expect.objectContaining({
+        expected_version: 1,
+        type_key: "location",
+        name: "新寒川城",
+      })
+    ));
+    expect(await screen.findByText(/当前修订为 2/)).toBeInTheDocument();
+  });
+
+  it("keeps the local draft on a version conflict and reloads only after confirmation", async () => {
+    const edit = vi.fn().mockRejectedValue(new apiModule.ApiError(409, {
+      detail: "候选已被更新。",
+      code: "LORE_CANDIDATE_VERSION_CONFLICT",
+      reload_required: true,
+    }));
+    const latest = { ...readyCandidateResponse().items[0], name: "服务端寒川城", revision: 2 };
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn(),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: vi.fn().mockResolvedValue(readyCandidateResponse()),
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+      editLoreCandidate: edit,
+      getLoreCandidate: vi.fn().mockResolvedValue(latest),
+    });
+    renderPage("/project/project-1/lore?scope=review");
+    await userEvent.click(await screen.findByRole("button", { name: /寒川城/ }));
+    await waitFor(() => expect(apiModule.api.listLoreTypes).toHaveBeenCalled());
+    await userEvent.click(screen.getByRole("button", { name: "编辑候选" }));
+    const name = screen.getByLabelText("名称");
+    await userEvent.clear(name);
+    await userEvent.type(name, "本地寒川城");
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("当前输入仍保留");
+    expect(screen.getByLabelText("名称")).toHaveValue("本地寒川城");
+    await userEvent.click(screen.getByRole("button", { name: "核对最新状态" }));
+    expect(await screen.findByText(/仍为待审核状态/)).toBeInTheDocument();
+    expect(screen.getByText("查看冲突前保留的本地草稿")).toBeInTheDocument();
+  });
+
+  it("retains candidate input while project writes are frozen", async () => {
+    const edit = vi.fn().mockRejectedValue(new apiModule.ApiError(503, {
+      detail: "项目资料正在升级。",
+      code: "PROJECT_WRITE_FROZEN",
+      maintenance_state: "write_frozen",
+      retryable: true,
+    }));
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn(),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: vi.fn().mockResolvedValue(readyCandidateResponse()),
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+      editLoreCandidate: edit,
+    });
+    renderPage("/project/project-1/lore?scope=review");
+    await userEvent.click(await screen.findByRole("button", { name: /寒川城/ }));
+    await waitFor(() => expect(apiModule.api.listLoreTypes).toHaveBeenCalled());
+    await userEvent.click(screen.getByRole("button", { name: "编辑候选" }));
+    const name = screen.getByLabelText("名称");
+    await userEvent.clear(name);
+    await userEvent.type(name, "维护中的本地草稿");
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("正在维护");
+    expect(screen.getByLabelText("名称")).toHaveValue("维护中的本地草稿");
+    expect(screen.getByRole("button", { name: "保存修改" })).toBeEnabled();
+  });
+
+  it("does not discard an unsaved candidate when scope navigation is cancelled", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn(),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: vi.fn().mockResolvedValue(readyCandidateResponse()),
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+    });
+    renderPage("/project/project-1/lore?scope=review");
+    await userEvent.click(await screen.findByRole("button", { name: /寒川城/ }));
+    await waitFor(() => expect(apiModule.api.listLoreTypes).toHaveBeenCalled());
+    await userEvent.click(screen.getByRole("button", { name: "编辑候选" }));
+    await userEvent.type(screen.getByLabelText("名称"), "草稿");
+    await userEvent.click(within(screen.getByRole("navigation", { name: "设定范围" })).getByRole("button", { name: "正式设定" }));
+
+    expect(confirm).toHaveBeenCalled();
+    expect(screen.getByLabelText("名称")).toHaveValue("寒川城草稿");
+    expect(screen.getByRole("button", { name: "保存修改" })).toBeInTheDocument();
+  });
+
+  it("labels a user override as an artificial revision instead of original text", async () => {
+    const ready = readyCandidateResponse();
+    const revised = {
+      ...ready.items[0],
+      evidence: [{
+        ...ready.items[0].evidence[0],
+        value_origin: "user_override" as const,
+        current_value: "用户补充的名称",
+      }],
+    };
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn(),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: vi.fn().mockResolvedValue({ ...ready, items: [revised] }),
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+    });
+    const { container } = renderPage("/project/project-1/lore?scope=review");
+    await userEvent.click(await screen.findByRole("button", { name: /寒川城/ }));
+
+    expect(await screen.findByText(/名称 · 用户已补充/)).toBeInTheDocument();
+    expect(screen.getByText(/当前人工确认值：用户补充的名称/)).toBeInTheDocument();
+    expect(container).not.toHaveTextContent("原文已提供");
+  });
+
+  it("disables editing for a legacy candidate whose type cannot be safely repaired", async () => {
+    const invalid = {
+      ...candidateResponse.items[0],
+      type_key: null,
+      type_display_name: null,
+      actions: { ...candidateResponse.items[0].actions, can_edit: true },
+    };
+    const legacyOverview = {
+      ...overview,
+      migration_status: { storage_mode: "legacy", state: "not_started", read_only: true },
+    } satisfies LoreOverview;
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(legacyOverview),
+      listLoreElements: vi.fn(),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: vi.fn().mockResolvedValue({ ...candidateResponse, items: [invalid] }),
+      listLoreTypes: vi.fn(),
+    });
+    renderPage("/project/project-1/lore?scope=review");
+    await userEvent.click(await screen.findByRole("button", { name: /寒川城/ }));
+
+    expect(screen.getByRole("button", { name: "编辑候选" })).toBeDisabled();
+    expect(screen.getByText(/无法安全修正缺失或无效类型/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "拒绝并保留记录" })).toBeEnabled();
+  });
+
+  it("reapplies the active attention filter after an edit", async () => {
+    const updated = {
+      ...candidateResponse.items[0],
+      name: "已确认寒川城",
+      revision: 2,
+      needs_attention: false,
+      disabled_reasons: [],
+    };
+    const list = vi.fn()
+      .mockResolvedValueOnce(candidateResponse)
+      .mockResolvedValue({ ...candidateResponse, items: [], total: 0 });
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn(),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: list,
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+      editLoreCandidate: vi.fn().mockResolvedValue(updated),
+    });
+    renderPage("/project/project-1/lore?scope=review&needs_attention=true");
+    await userEvent.click(await screen.findByRole("button", { name: /寒川城/ }));
+    await waitFor(() => expect(apiModule.api.listLoreTypes).toHaveBeenCalled());
+    await userEvent.click(screen.getByRole("button", { name: "编辑候选" }));
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("没有匹配的设定")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /寒川城/ })).not.toBeInTheDocument();
+  });
+
+  it("persists an explicit duplicate decision before acceptance becomes available", async () => {
+    const ready = readyCandidateResponse();
+    const suggestion = {
+      suggestion_id: "suggestion-1",
+      kind: "possible_duplicate",
+      target_element_id: "element-old",
+      target_name: "旧寒川城",
+      target_type_key: "location",
+      differing_fields: [],
+      resolution_status: "unresolved",
+    };
+    const unresolved = {
+      ...ready.items[0],
+      needs_attention: true,
+      disabled_reasons: ["suggestions_unresolved"],
+      duplicate_conflict_suggestions: [suggestion],
+      actions: {
+        ...ready.items[0].actions,
+        can_accept: false,
+        disabled_reasons: { edit: [], accept: ["suggestions_unresolved"], reject: [] },
+      },
+    };
+    const updated = {
+      ...unresolved,
+      revision: 2,
+      needs_attention: false,
+      disabled_reasons: [],
+      suggestion_resolutions: { "suggestion-1": "accept_as_new" as const },
+      actions: ready.items[0].actions,
+    };
+    const edit = vi.fn().mockResolvedValue(updated);
+    const list = vi.fn()
+      .mockResolvedValueOnce({ ...ready, items: [unresolved] })
+      .mockResolvedValue({ ...ready, items: [updated] });
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn(),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: list,
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+      editLoreCandidate: edit,
+    });
+    renderPage("/project/project-1/lore?scope=review");
+    await userEvent.click(await screen.findByRole("button", { name: /寒川城/ }));
+    await waitFor(() => expect(apiModule.api.listLoreTypes).toHaveBeenCalled());
+    expect(screen.getByRole("button", { name: "接纳为正式设定" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "编辑候选" }));
+    await userEvent.selectOptions(screen.getByLabelText(/可能与已有设定重复：旧寒川城/), "accept_as_new");
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+
+    await waitFor(() => expect(edit).toHaveBeenCalledWith(
+      "project-1",
+      "batch-1",
+      "candidate-1",
+      expect.objectContaining({ suggestion_resolutions: { "suggestion-1": "accept_as_new" } })
+    ));
+    expect(await screen.findByRole("button", { name: "接纳为正式设定" })).toBeEnabled();
+  });
+
+  it("returns focus to the action trigger when confirmation is cancelled", async () => {
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn(),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: vi.fn().mockResolvedValue(readyCandidateResponse()),
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+    });
+    renderPage("/project/project-1/lore?scope=review");
+    await userEvent.click(await screen.findByRole("button", { name: /寒川城/ }));
+    const acceptButton = screen.getByRole("button", { name: "接纳为正式设定" });
+    await userEvent.click(acceptButton);
+    await waitFor(() => expect(screen.getByRole("alertdialog")).toHaveFocus());
+    await userEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(acceptButton).toHaveFocus());
+  });
+
+  it("does not carry a preserved conflict draft into another candidate", async () => {
+    const ready = readyCandidateResponse();
+    const second = { ...ready.items[0], id: "candidate-2", name: "北境雪原", ordinal: 2 };
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn(),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: vi.fn().mockResolvedValue({ ...ready, items: [ready.items[0], second], total: 2 }),
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+      editLoreCandidate: vi.fn().mockRejectedValue(new apiModule.ApiError(409, {
+        detail: "候选已被更新。",
+        code: "LORE_CANDIDATE_VERSION_CONFLICT",
+        reload_required: true,
+      })),
+    });
+    renderPage("/project/project-1/lore?scope=review");
+    await userEvent.click(await screen.findByRole("button", { name: /寒川城/ }));
+    await waitFor(() => expect(apiModule.api.listLoreTypes).toHaveBeenCalled());
+    await userEvent.click(screen.getByRole("button", { name: "编辑候选" }));
+    await userEvent.type(screen.getByLabelText("名称"), "本地草稿");
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    expect(await screen.findByText("查看冲突前保留的本地草稿")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /北境雪原/ }));
+    expect(screen.queryByText("查看冲突前保留的本地草稿")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "北境雪原" })).toBeInTheDocument();
+  });
+
+  it("accepts a candidate once, sends expected_version, and refreshes the inbox", async () => {
+    const ready = readyCandidateResponse();
+    const empty = { ...ready, items: [], total: 0 };
+    const list = vi.fn().mockResolvedValueOnce(ready).mockResolvedValue(empty);
+    const accept = vi.fn().mockResolvedValue({
+      candidate: { ...ready.items[0], status: "accepted", revision: 2, accepted_element_id: "element-1" },
+      action_result: "accepted",
+      replayed: false,
+      accepted_element_id: "element-1",
+      remaining_pending_count: 0,
+      next_pending_candidate_id: null,
+    });
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn(),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: list,
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+      acceptLoreCandidate: accept,
+    });
+    renderPage("/project/project-1/lore?scope=review");
+    await userEvent.click(await screen.findByRole("button", { name: /寒川城/ }));
+    await userEvent.click(screen.getByRole("button", { name: "接纳为正式设定" }));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("关系建议不会自动建立");
+    await userEvent.click(screen.getByRole("button", { name: "确认接纳" }));
+
+    await waitFor(() => expect(accept).toHaveBeenCalledWith(
+      "project-1",
+      "batch-1",
+      "candidate-1",
+      { expected_version: 1, suggestion_resolutions: {} }
+    ));
+    expect(await screen.findByRole("status")).toHaveTextContent("已接纳为正式设定");
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "待审核提取" })).toHaveFocus());
+  });
+
+  it("keeps legacy acceptance unavailable while allowing audited rejection", async () => {
+    const legacyOverview = {
+      ...overview,
+      migration_status: { storage_mode: "legacy", state: "not_started", read_only: true },
+    } satisfies LoreOverview;
+    const reject = vi.fn().mockResolvedValue({
+      candidate: { ...candidateResponse.items[0], status: "rejected", revision: 2 },
+      action_result: "already_rejected",
+      replayed: true,
+      accepted_element_id: null,
+      remaining_pending_count: 0,
+      next_pending_candidate_id: null,
+    });
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(legacyOverview),
+      listLoreElements: vi.fn(),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: vi.fn().mockResolvedValue(candidateResponse),
+      listLoreTypes: vi.fn(),
+      rejectLoreCandidate: reject,
+    });
+    renderPage("/project/project-1/lore?scope=review");
+    await userEvent.click(await screen.findByRole("button", { name: /寒川城/ }));
+
+    expect(screen.queryByRole("button", { name: "接纳为正式设定" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "拒绝并保留记录" }));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("不支持撤销拒绝");
+    await userEvent.click(screen.getByRole("button", { name: "确认拒绝" }));
+    await waitFor(() => expect(reject).toHaveBeenCalledWith(
+      "project-1",
+      "batch-1",
+      "candidate-1",
+      { expected_version: 1, suggestion_resolutions: {} }
+    ));
+    expect(apiModule.api.listLoreTypes).not.toHaveBeenCalled();
   });
 });
