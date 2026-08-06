@@ -9,6 +9,7 @@ Alembic upgrade-downgrade-upgrade.
 
 import asyncio
 import copy
+import uuid
 
 import pytest
 from sqlalchemy import func, select
@@ -19,6 +20,7 @@ from app.models.lore import (
     ElementSource,
     ElementStateEvent,
     ElementVersion,
+    LoreElementCreateOperation,
     SettingElement,
     SettingType,
     SettingTypeRevision,
@@ -66,6 +68,7 @@ async def _create_relational_element(
     """Create an element in a relational project. Returns response json."""
     await _make_relational(client, headers, project_id)
     body = {
+        "operation_key": kwargs.get("operation_key", uuid.uuid4().hex),
         "type_key": kwargs.get("type_key", "character"),
         "name": kwargs.get("name", "测试角色"),
         "payload": kwargs.get("payload", {}),
@@ -138,6 +141,7 @@ async def test_create_requires_project_ownership(
         f"/api/projects/{project_id}/lore/elements",
         headers=second_auth_headers,
         json={
+            "operation_key": uuid.uuid4().hex,
             "type_key": "character",
             "name": "越权创建",
             "payload": {},
@@ -154,6 +158,7 @@ async def test_create_returns_404_for_missing_project(
         "/api/projects/nonexistent-id/lore/elements",
         headers=auth_headers,
         json={
+            "operation_key": uuid.uuid4().hex,
             "type_key": "character",
             "name": "幽灵",
             "payload": {},
@@ -184,6 +189,7 @@ async def test_legacy_project_writes_return_409(client, auth_headers):
         f"/api/projects/{project_id}/lore/elements",
         headers=auth_headers,
         json={
+            "operation_key": uuid.uuid4().hex,
             "type_key": "character",
             "name": "不应创建",
             "payload": {},
@@ -248,12 +254,16 @@ async def test_legacy_write_does_not_mutate_worldview(client, auth_headers):
         old_events = await session.scalar(
             select(func.count()).select_from(ElementStateEvent)
         )
+        old_operations = await session.scalar(
+            select(func.count()).select_from(LoreElementCreateOperation)
+        )
 
     # Attempt relational write (should fail with 409)
     response = await client.post(
         f"/api/projects/{project_id}/lore/elements",
         headers=auth_headers,
         json={
+            "operation_key": uuid.uuid4().hex,
             "type_key": "character",
             "name": "新角色",
             "payload": {},
@@ -283,6 +293,9 @@ async def test_legacy_write_does_not_mutate_worldview(client, auth_headers):
         assert await session.scalar(
             select(func.count()).select_from(ElementStateEvent)
         ) == old_events
+        assert await session.scalar(
+            select(func.count()).select_from(LoreElementCreateOperation)
+        ) == old_operations
 
 
 # ─── relational create ────────────────────────────────────────────
@@ -408,6 +421,279 @@ async def test_relational_element_round_trip_reads_written_data(
     )
     assert version.status_code == 200
     assert version.json()["created_by"]
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_create_element_replays_same_operation_without_duplicate_rows(
+    client, auth_headers,
+):
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _create_project(client, auth_headers)
+    await _make_relational(client, auth_headers, project_id)
+    operation_key = "manual-create-replay-0001"
+    first_body = {
+        "operation_key": operation_key,
+        "type_key": "character",
+        "name": "幂等角色",
+        "summary": "只应创建一次",
+        "payload": {"personality": "沉稳", "appearance": "黑发"},
+        "field_states": {"personality": "provided", "appearance": "provided"},
+        "sources": [{
+            "kind": "manual",
+            "reference": "用户手动创建",
+            "excerpt": "幂等角色性格沉稳，黑发。",
+            "is_primary": True,
+        }],
+    }
+    first = await client.post(
+        f"/api/projects/{project_id}/lore/elements",
+        headers=auth_headers,
+        json=first_body,
+    )
+    replay = await client.post(
+        f"/api/projects/{project_id}/lore/elements",
+        headers=auth_headers,
+        json={
+            **first_body,
+            "payload": {"appearance": "黑发", "personality": "沉稳"},
+            "field_states": {"appearance": "provided", "personality": "provided"},
+        },
+    )
+
+    assert first.status_code == 201
+    assert first.json()["replayed"] is False
+    assert replay.status_code == 201
+    assert replay.json()["replayed"] is True
+    assert replay.json()["id"] == first.json()["id"]
+    async with TestSessionLocal() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(SettingElement)
+        ) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(ElementVersion)
+        ) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(ElementSource)
+        ) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(ElementStateEvent)
+        ) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(LoreElementCreateOperation)
+        ) == 1
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_create_element_same_operation_with_changed_source_returns_409(
+    client, auth_headers,
+):
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _create_project(client, auth_headers)
+    await _make_relational(client, auth_headers, project_id)
+    body = {
+        "operation_key": "manual-create-conflict-0001",
+        "type_key": "character",
+        "name": "来源冲突角色",
+        "payload": {},
+        "sources": [{
+            "kind": "manual",
+            "reference": "来源甲",
+            "excerpt": "原文甲",
+            "is_primary": True,
+        }],
+    }
+    created = await client.post(
+        f"/api/projects/{project_id}/lore/elements",
+        headers=auth_headers,
+        json=body,
+    )
+    conflict = await client.post(
+        f"/api/projects/{project_id}/lore/elements",
+        headers=auth_headers,
+        json={
+            **body,
+            "sources": [{
+                "kind": "manual",
+                "reference": "来源乙",
+                "excerpt": "原文乙",
+                "is_primary": True,
+            }],
+        },
+    )
+
+    assert created.status_code == 201
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "LORE_CREATE_IDEMPOTENCY_CONFLICT"
+    async with TestSessionLocal() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(SettingElement)
+        ) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(LoreElementCreateOperation)
+        ) == 1
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_failed_create_leaves_no_operation_and_same_key_can_retry(
+    client, auth_headers,
+):
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _create_project(client, auth_headers)
+    await _make_relational(client, auth_headers, project_id)
+    operation_key = "manual-create-retry-000001"
+    failed = await client.post(
+        f"/api/projects/{project_id}/lore/elements",
+        headers=auth_headers,
+        json={
+            "operation_key": operation_key,
+            "type_key": "character",
+            "name": "可修正角色",
+            "payload": {"not_a_character_field": "错误"},
+        },
+    )
+    assert failed.status_code == 422
+    async with TestSessionLocal() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(LoreElementCreateOperation)
+        ) == 0
+
+    retried = await client.post(
+        f"/api/projects/{project_id}/lore/elements",
+        headers=auth_headers,
+        json={
+            "operation_key": operation_key,
+            "type_key": "character",
+            "name": "可修正角色",
+            "payload": {"personality": "谨慎"},
+        },
+    )
+    assert retried.status_code == 201
+    assert retried.json()["replayed"] is False
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_project_delete_cascades_lore_create_operation(
+    client, auth_headers, tmp_path, monkeypatch,
+):
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _create_project(client, auth_headers)
+    created = await _create_relational_element(
+        client,
+        auth_headers,
+        project_id,
+        name="随项目删除的测试设定",
+        operation_key="manual-create-project-delete-01",
+    )
+    projects_dir = tmp_path / "projects"
+    staging_dir = tmp_path / "project-delete-staging"
+    (projects_dir / project_id).mkdir(parents=True)
+    monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", projects_dir)
+    monkeypatch.setattr(
+        "app.core.project_files.PROJECT_DELETE_STAGING_DIR",
+        staging_dir,
+    )
+
+    deleted = await client.delete(
+        f"/api/projects/{project_id}",
+        headers=auth_headers,
+    )
+    assert deleted.status_code == 200, deleted.text
+    async with TestSessionLocal() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(LoreElementCreateOperation).where(
+                LoreElementCreateOperation.project_id == project_id
+            )
+        ) == 0
+        assert await session.scalar(
+            select(func.count()).select_from(SettingElement).where(
+                SettingElement.id == created["id"]
+            )
+        ) == 0
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_create_operation_key_is_isolated_by_project(client, auth_headers):
+    operation_key = "manual-create-project-scope-001"
+    first_project = await _create_project(client, auth_headers, title="项目甲")
+    second_project = await _create_project(client, auth_headers, title="项目乙")
+
+    first = await _create_relational_element(
+        client,
+        auth_headers,
+        first_project,
+        name="项目甲角色",
+        operation_key=operation_key,
+    )
+    second = await _create_relational_element(
+        client,
+        auth_headers,
+        second_project,
+        name="项目乙角色",
+        operation_key=operation_key,
+    )
+
+    assert first["id"] != second["id"]
+    assert first["replayed"] is False
+    assert second["replayed"] is False
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_postgres_concurrent_same_create_operation_returns_one_element(
+    client, auth_headers,
+):
+    from tests.conftest import TEST_DATABASE_BACKEND, TestSessionLocal
+
+    if TEST_DATABASE_BACKEND == "sqlite":
+        pytest.skip("Concurrent unique-key serialization is exercised by PostgreSQL CI")
+
+    project_id = await _create_project(client, auth_headers)
+    await _create_relational_element(
+        client,
+        auth_headers,
+        project_id,
+        name="类型初始化",
+        operation_key="manual-create-seed-000001",
+    )
+    body = {
+        "operation_key": "manual-create-concurrent-001",
+        "type_key": "character",
+        "name": "并发只创建一次",
+        "payload": {"personality": "冷静"},
+    }
+    first, second = await asyncio.gather(
+        client.post(
+            f"/api/projects/{project_id}/lore/elements",
+            headers=auth_headers,
+            json=body,
+        ),
+        client.post(
+            f"/api/projects/{project_id}/lore/elements",
+            headers=auth_headers,
+            json=body,
+        ),
+    )
+
+    assert first.status_code == second.status_code == 201
+    assert first.json()["id"] == second.json()["id"]
+    assert sorted([first.json()["replayed"], second.json()["replayed"]]) == [False, True]
+    async with TestSessionLocal() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(SettingElement).where(
+                SettingElement.project_id == project_id,
+                SettingElement.name == "并发只创建一次",
+            )
+        ) == 1
+        assert await session.scalar(
+            select(func.count()).select_from(LoreElementCreateOperation).where(
+                LoreElementCreateOperation.project_id == project_id,
+                LoreElementCreateOperation.operation_key
+                == "manual-create-concurrent-001",
+            )
+        ) == 1
 
 
 @pytest.mark.usefixtures("clean_db")
@@ -1028,6 +1314,7 @@ async def test_create_rejects_missing_name(client, auth_headers):
         f"/api/projects/{project_id}/lore/elements",
         headers=auth_headers,
         json={
+            "operation_key": uuid.uuid4().hex,
             "type_key": "character",
             "payload": {"personality": "无名称"},
         },
@@ -1043,6 +1330,7 @@ async def test_create_rejects_missing_type_key(client, auth_headers):
         f"/api/projects/{project_id}/lore/elements",
         headers=auth_headers,
         json={
+            "operation_key": uuid.uuid4().hex,
             "name": "缺类型",
             "payload": {},
         },
@@ -1059,6 +1347,7 @@ async def test_create_rejects_unknown_type_key(client, auth_headers):
         f"/api/projects/{project_id}/lore/elements",
         headers=auth_headers,
         json={
+            "operation_key": uuid.uuid4().hex,
             "type_key": "totally_made_up_type",
             "name": "未知类型",
             "payload": {},
@@ -1076,6 +1365,7 @@ async def test_create_rejects_payload_with_unknown_keys(client, auth_headers):
         f"/api/projects/{project_id}/lore/elements",
         headers=auth_headers,
         json={
+            "operation_key": uuid.uuid4().hex,
             "type_key": "character",
             "name": "未知字段",
             "payload": {"totally_unknown_field": "value"},
@@ -1093,6 +1383,7 @@ async def test_provided_state_requires_non_empty_payload(client, auth_headers):
         f"/api/projects/{project_id}/lore/elements",
         headers=auth_headers,
         json={
+            "operation_key": uuid.uuid4().hex,
             "type_key": "character",
             "name": "空值测试",
             "payload": {"personality": ""},
@@ -1134,6 +1425,7 @@ async def test_create_with_new_builtin_type(client, auth_headers):
         f"/api/projects/{project_id}/lore/elements",
         headers=auth_headers,
         json={
+            "operation_key": uuid.uuid4().hex,
             "type_key": "ability_system",
             "name": "魔法体系",
             "payload": {"description": "基于元素的法术系统"},
@@ -1152,6 +1444,7 @@ async def test_create_with_race_type(client, auth_headers):
         f"/api/projects/{project_id}/lore/elements",
         headers=auth_headers,
         json={
+            "operation_key": uuid.uuid4().hex,
             "type_key": "race",
             "name": "精灵族",
             "payload": {"description": "森林居民"},
@@ -1200,7 +1493,55 @@ async def test_no_required_fields_besides_name(client, auth_headers):
 
 
 @pytest.mark.usefixtures("clean_db")
+async def test_type_catalog_returns_virtual_builtins_without_writing(
+    client, auth_headers,
+):
+    from app.core.lore_migration import TYPE_DISPLAY_NAMES
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _create_project(client, auth_headers)
+    await _make_relational(client, auth_headers, project_id)
+    async with TestSessionLocal() as session:
+        before = await session.scalar(
+            select(func.count()).select_from(SettingType).where(
+                SettingType.project_id == project_id
+            )
+        )
+
+    response = await client.get(
+        f"/api/projects/{project_id}/lore/types",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert response.json()["total"] == len(TYPE_DISPLAY_NAMES)
+    assert [item["key"] for item in items] == list(TYPE_DISPLAY_NAMES)
+    assert len({item["key"] for item in items}) == len(items)
+    character = next(item for item in items if item["key"] == "character")
+    assert character["is_builtin"] is True
+    assert {field["key"] for field in character["field_schema"]} >= {
+        "identity",
+        "appearance",
+        "personality",
+        "background",
+        "abilities",
+        "limitations",
+        "goals",
+        "motivations",
+        "possible_plots",
+    }
+    async with TestSessionLocal() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(SettingType).where(
+                SettingType.project_id == project_id
+            )
+        ) == before == 0
+
+
+@pytest.mark.usefixtures("clean_db")
 async def test_custom_type_can_create_structured_elements(client, auth_headers):
+    from app.core.lore_migration import TYPE_DISPLAY_NAMES
     from tests.conftest import TestSessionLocal
 
     project_id = await _create_project(client, auth_headers)
@@ -1258,8 +1599,11 @@ async def test_custom_type_can_create_structured_elements(client, auth_headers):
         headers=auth_headers,
     )
     assert listed.status_code == 200
-    assert listed.json()["total"] == 1
-    assert listed.json()["items"][0]["key"] == "vehicle"
+    assert listed.json()["total"] == len(TYPE_DISPLAY_NAMES) + 1
+    listed_vehicle = next(
+        item for item in listed.json()["items"] if item["key"] == "vehicle"
+    )
+    assert listed_vehicle["is_builtin"] is False
 
     async with TestSessionLocal() as session:
         revision_count = await session.scalar(
@@ -1322,6 +1666,7 @@ async def test_custom_type_validation_and_duplicates(client, auth_headers):
         f"/api/projects/{project_id}/lore/elements",
         headers=auth_headers,
         json={
+            "operation_key": uuid.uuid4().hex,
             "type_key": "vehicle",
             "name": "错误载具",
             "payload": {"invented": "不在定义中"},
@@ -1343,8 +1688,10 @@ async def test_write_blocked_when_maintenance_frozen(client, auth_headers):
     await _make_relational(client, auth_headers, project_id)
 
     # Create an element before freeze
+    replay_operation_key = "manual-create-before-freeze-001"
     created = await _create_relational_element(
         client, auth_headers, project_id, name="冻结前",
+        operation_key=replay_operation_key,
     )
     element_id = created["id"]
     relation_target = await _create_relational_element(
@@ -1368,6 +1715,9 @@ async def test_write_blocked_when_maintenance_frozen(client, auth_headers):
         before_events = await session.scalar(
             select(func.count()).select_from(ElementStateEvent)
         )
+        before_create_operations = await session.scalar(
+            select(func.count()).select_from(LoreElementCreateOperation)
+        )
         before_relations = await session.scalar(
             select(func.count()).select_from(ElementRelation)
         )
@@ -1384,6 +1734,7 @@ async def test_write_blocked_when_maintenance_frozen(client, auth_headers):
             f"/api/projects/{project_id}/lore/elements",
             headers=auth_headers,
             json={
+                "operation_key": uuid.uuid4().hex,
                 "type_key": "character",
                 "name": "冻结中",
                 "payload": {},
@@ -1396,6 +1747,20 @@ async def test_write_blocked_when_maintenance_frozen(client, auth_headers):
         assert freeze_create.headers["retry-after"] == str(
             freeze_data["retry_after_seconds"]
         )
+
+        replay_during_freeze = await client.post(
+            f"/api/projects/{project_id}/lore/elements",
+            headers=auth_headers,
+            json={
+                "operation_key": replay_operation_key,
+                "type_key": "character",
+                "name": "冻结前",
+                "payload": {},
+            },
+        )
+        assert replay_during_freeze.status_code == 201
+        assert replay_during_freeze.json()["id"] == element_id
+        assert replay_during_freeze.json()["replayed"] is True
 
         # Edit during freeze
         freeze_edit = await client.patch(
@@ -1458,6 +1823,9 @@ async def test_write_blocked_when_maintenance_frozen(client, auth_headers):
         assert await session.scalar(
             select(func.count()).select_from(ElementStateEvent)
         ) == before_events
+        assert await session.scalar(
+            select(func.count()).select_from(LoreElementCreateOperation)
+        ) == before_create_operations
         assert await session.scalar(
             select(func.count()).select_from(ElementRelation)
         ) == before_relations
@@ -1579,6 +1947,7 @@ async def test_successful_create_commits_all_dependent_rows(client, auth_headers
         f"/api/projects/{project_id}/lore/elements",
         headers=auth_headers,
         json={
+            "operation_key": uuid.uuid4().hex,
             "type_key": "character",
             "name": "确保无残留",
             "payload": {"personality": "测试"},
@@ -1632,6 +2001,7 @@ async def test_late_commit_failure_rolls_back_flushed_rows(
                 f"/api/projects/{project_id}/lore/elements",
                 headers=auth_headers,
                 json={
+                    "operation_key": uuid.uuid4().hex,
                     "type_key": "character",
                     "name": "不得残留",
                     "payload": {"personality": "只存在于失败事务"},
@@ -1669,6 +2039,7 @@ async def test_payload_validation_rollback(client, auth_headers):
         f"/api/projects/{project_id}/lore/elements",
         headers=auth_headers,
         json={
+            "operation_key": uuid.uuid4().hex,
             "type_key": "character",
             "name": "回滚测试",
             "payload": {"unknown_field": "value"},
@@ -1796,6 +2167,7 @@ async def test_unknown_field_state_rejects_nonempty_value(client, auth_headers):
         f"/api/projects/{project_id}/lore/elements",
         headers=auth_headers,
         json={
+            "operation_key": uuid.uuid4().hex,
             "type_key": "character",
             "name": "未知字段错误",
             "payload": {"personality": "不应作为未知值保存"},
@@ -1868,7 +2240,12 @@ async def test_element_create_integrity_race_returns_retryable_409(
     response = await client.post(
         f"/api/projects/{project_id}/lore/elements",
         headers=auth_headers,
-        json={"type_key": "character", "name": "并发创建", "payload": {}},
+        json={
+            "operation_key": uuid.uuid4().hex,
+            "type_key": "character",
+            "name": "并发创建",
+            "payload": {},
+        },
     )
     assert response.status_code == 409
     assert response.json()["detail"] == {
@@ -2100,6 +2477,7 @@ async def test_repository_relation_filter_facets_and_overview(client, auth_heade
     assert overview.json()["disabled"] == 0
     assert overview.json()["archived"] == 0
     assert overview.json()["capabilities"]["candidate_accept"] is True
+    assert overview.json()["capabilities"]["formal_create"] is True
 
 
 @pytest.mark.usefixtures("clean_db")

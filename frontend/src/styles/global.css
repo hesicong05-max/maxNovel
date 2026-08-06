@@ -993,6 +993,12 @@ input, select, textarea { font-family: inherit; }
   gap: 1rem;
 }
 
+.lore-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
 .lore-overview {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1435,6 +1441,23 @@ input, select, textarea { font-family: inherit; }
   resize: vertical;
 }
 
+.lore-create-source {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.lore-create-source h3 {
+  color: var(--text-1);
+  font-size: 14px;
+}
+
+.lore-create-source > small {
+  color: var(--text-3);
+}
+
 .lore-edit-field {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(150px, 0.32fr);
@@ -1554,6 +1577,11 @@ input, select, textarea { font-family: inherit; }
 @media (max-width: 480px) {
   .lore-header {
     flex-direction: column;
+  }
+
+  .lore-header-actions,
+  .lore-header-actions .btn {
+    width: 100%;
   }
 
   .lore-overview {

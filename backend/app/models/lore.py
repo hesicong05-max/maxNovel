@@ -151,6 +151,60 @@ class SettingElement(Base):
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
 
 
+class LoreElementCreateOperation(Base):
+    """Durable exactly-once receipt for a manual lore element creation."""
+
+    __tablename__ = "lore_element_create_operations"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "requested_by",
+            "operation_key",
+            name="uq_lore_element_create_operation_key",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "element_id",
+            name="uq_lore_element_create_operation_element",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "element_id"],
+            ["setting_elements.project_id", "setting_elements.id"],
+            name="fk_lore_element_create_operation_element",
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "ix_lore_element_create_operations_project_created",
+            "project_id",
+            "created_at",
+            "id",
+        ),
+    )
+
+    id = Column(String(32), primary_key=True, default=gen_id)
+    project_id = Column(
+        String(32),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    requested_by = Column(
+        String(32),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    operation_key = Column(String(128), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    element_id = Column(
+        String(32),
+        ForeignKey("setting_elements.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+
 class ElementSource(Base):
     __tablename__ = "element_sources"
     __table_args__ = (

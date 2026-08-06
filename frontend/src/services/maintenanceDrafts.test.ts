@@ -37,6 +37,7 @@ describe("maintenance draft store", () => {
       { ...SCOPE, userId: "other-user" },
       { ...SCOPE, projectId: "other-project" },
       { ...SCOPE, kind: "outline" as const },
+      { ...SCOPE, kind: "lore-create" as const },
       { ...SCOPE, objectId: "2" },
     ];
     expect(new Set(scopes.map(draftStorageKey)).size).toBe(scopes.length);

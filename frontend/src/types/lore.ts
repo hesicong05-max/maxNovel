@@ -21,6 +21,7 @@ export interface LoreOverview {
   capabilities: {
     candidate_review: boolean;
     candidate_accept: boolean;
+    formal_create: boolean;
     formal_conflict_tracking: boolean;
     search_fields: string[];
   };
@@ -94,6 +95,29 @@ export interface LoreElementWriteResponse {
   binding_count: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface LoreSourceInput {
+  kind: string;
+  reference?: string | null;
+  locator?: Record<string, unknown>;
+  excerpt?: string | null;
+  is_primary?: boolean;
+  confirmation_status?: "provided" | "needs_confirmation";
+}
+
+export interface LoreElementCreateInput {
+  operation_key: string;
+  type_key: string;
+  name: string;
+  summary: string;
+  payload: Record<string, string | null>;
+  field_states: Record<string, LoreFieldState>;
+  sources: LoreSourceInput[];
+}
+
+export interface LoreElementCreateResponse extends LoreElementWriteResponse {
+  replayed: boolean;
 }
 
 export interface LoreFieldDefinition {

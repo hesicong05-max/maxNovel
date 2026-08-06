@@ -1249,6 +1249,7 @@ async def test_project_candidate_inbox_filters_pages_and_reports_overview(
     assert overview.json()["pending_review"] == 3
     assert overview.json()["needs_attention"] == attention.json()["total"]
     assert overview.json()["capabilities"]["candidate_accept"] is False
+    assert overview.json()["capabilities"]["formal_create"] is False
     assert overview.json()["capabilities"]["formal_conflict_tracking"] is False
 
     other_project = await _create_project(client, auth_headers, title="其他候选项目")

@@ -1,11 +1,18 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useAuth } from "@/components/AuthContext";
+import LoreCreateForm, {
+  isLoreCreateStoredPayload,
+  type LoreCreateStoredPayload,
+} from "@/components/LoreCreateForm";
 import { ApiError, api } from "@/services/api";
+import { clearDraft, loadDraft, type DraftScope } from "@/services/maintenanceDrafts";
 import type {
   LoreCandidate,
   LoreCandidateActionResponse,
   LoreCandidateEditInput,
   LoreElementDetail,
+  LoreElementCreateResponse,
   LoreElementListItem,
   LoreElementUpdateInput,
   LoreFieldDefinition,
@@ -122,6 +129,7 @@ function actionReasons(candidate: LoreCandidate, action: "edit" | "accept" | "re
 
 export default function LoreRepositoryPage() {
   const { id } = useParams<{ id: string }>();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryKey = searchParams.toString();
@@ -155,6 +163,8 @@ export default function LoreRepositoryPage() {
   const [formalDirty, setFormalDirty] = useState(false);
   const [formalMutationBusy, setFormalMutationBusy] = useState(false);
   const [actionNotice, setActionNotice] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [initialCreateStored, setInitialCreateStored] = useState<LoreCreateStoredPayload | null>(null);
   const [preservedCandidateDrafts, setPreservedCandidateDrafts] = useState<Record<string, CandidateDraft>>({});
   const requestSequence = useRef(0);
   const overviewSequence = useRef(0);
@@ -168,6 +178,9 @@ export default function LoreRepositoryPage() {
   const focusAfterMutation = useRef(false);
   const nextFormalAfterMutation = useRef<string | null>(null);
   const focusFormalAfterMutation = useRef(false);
+  const createButtonRef = useRef<HTMLButtonElement | null>(null);
+  const createTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const restoredCreateScopeRef = useRef("");
   const contextKey = `${id ?? ""}?${queryKey}`;
   const contextKeyRef = useRef(contextKey);
   contextKeyRef.current = contextKey;
@@ -176,11 +189,30 @@ export default function LoreRepositoryPage() {
     () => candidates.find((item) => item.id === selectedCandidateId) ?? null,
     [candidates, selectedCandidateId]
   );
+  const createDraftScope = useMemo<DraftScope | null>(() => (
+    id && user ? { userId: user.id, projectId: id, kind: "lore-create", objectId: "new" } : null
+  ), [id, user?.id]);
 
   function confirmDiscardDrafts(): boolean {
     if (candidateMutationBusy || formalMutationBusy) {
       setActionNotice("设定操作正在提交，请等待结果后再切换页面或筛选。");
       return false;
+    }
+    if (creating) {
+      if (formalDirty && !window.confirm("确定放弃这份新建设定草稿吗？草稿会从本机移除。")) {
+        return false;
+      }
+      if (createDraftScope) {
+        const result = clearDraft(createDraftScope);
+        if (result.status === "unavailable") {
+          setActionNotice("无法从浏览器安全清除新建草稿，已停止离开当前页面；请检查浏览器存储设置后重试。");
+          return false;
+        }
+      }
+      setCreating(false);
+      setInitialCreateStored(null);
+      setFormalDirty(false);
+      return true;
     }
     if (!candidateDirty && !formalDirty) return true;
     if (!window.confirm("当前设定有尚未保存的修改，确定放弃这些修改吗？")) {
@@ -226,7 +258,7 @@ export default function LoreRepositoryPage() {
   useEffect(() => {
     if (
       !id ||
-      !selectedCandidate ||
+      (!selectedCandidate && !creating) ||
       overview?.migration_status.storage_mode !== "relational" ||
       typesProjectId === id
     ) return;
@@ -238,7 +270,7 @@ export default function LoreRepositoryPage() {
     api.listLoreTypes(id, controller.signal)
       .then((data) => {
         if (sequence === typesSequence.current) {
-          setLoreTypes(data.items.filter((item) => item.status === "active" && item.is_builtin));
+          setLoreTypes(data.items.filter((item) => item.status === "active"));
           setTypesProjectId(id);
         }
       })
@@ -251,7 +283,35 @@ export default function LoreRepositoryPage() {
         if (sequence === typesSequence.current) setTypesLoading(false);
       });
     return () => controller.abort();
-  }, [id, overview?.migration_status.storage_mode, selectedCandidate?.id, typesProjectId]);
+  }, [creating, id, overview?.migration_status.storage_mode, selectedCandidate?.id, typesProjectId]);
+
+  useEffect(() => {
+    if (!createDraftScope || loading || overview?.capabilities.formal_create !== true) return;
+    const scopeKey = `${createDraftScope.userId}:${createDraftScope.projectId}`;
+    if (restoredCreateScopeRef.current === scopeKey) return;
+    restoredCreateScopeRef.current = scopeKey;
+    const result = loadDraft<unknown>(createDraftScope);
+    if (
+      (result.status === "available" || result.status === "expired") &&
+      isLoreCreateStoredPayload(result.draft.payload)
+    ) {
+      setInitialCreateStored(result.draft.payload);
+      setSelectedFormalId(null);
+      setSelectedCandidateId(null);
+      setCreating(true);
+      setActionNotice(result.status === "expired"
+        ? "已恢复一份超过七天的未完成新建草稿；原创建依据仍保留，系统没有自动提交。"
+        : "已恢复这台设备上的未完成新建设定草稿；系统没有自动提交。");
+    } else if (
+      result.status === "corrupt" ||
+      ((result.status === "available" || result.status === "expired") &&
+        !isLoreCreateStoredPayload(result.draft.payload))
+    ) {
+      setActionNotice("检测到无法校验的新建设定草稿；原记录仍保留在本机。需要新建时，系统会先请你确认清除这条损坏记录。");
+    } else if (result.status === "unavailable") {
+      setActionNotice("浏览器草稿存储不可用；新建设定会在提交前执行安全检查。");
+    }
+  }, [createDraftScope, loading, overview?.capabilities.formal_create]);
 
   useEffect(() => {
     if (!id) return;
@@ -385,10 +445,10 @@ export default function LoreRepositoryPage() {
   }, [detailReloadToken, id, selectedFormalId]);
 
   useEffect(() => {
-    if (!selectedFormalId && !selectedCandidateId) return;
+    if (!selectedFormalId && !selectedCandidateId && !creating) return;
     if (!window.matchMedia("(max-width: 480px)").matches) return;
     requestAnimationFrame(() => detailRef.current?.focus());
-  }, [selectedCandidateId, selectedFormalId]);
+  }, [creating, selectedCandidateId, selectedFormalId]);
 
   function submitSearch(event: FormEvent) {
     event.preventDefault();
@@ -481,6 +541,8 @@ export default function LoreRepositoryPage() {
     detailSequence.current += 1;
     setSelectedFormalId(null);
     setSelectedCandidateId(null);
+    setCreating(false);
+    setInitialCreateStored(null);
     setDetail(null);
     setDetailError("");
     setDetailLoading(false);
@@ -489,12 +551,18 @@ export default function LoreRepositoryPage() {
     return true;
   }
 
+  function returnToList() {
+    if (!clearSelection()) return;
+    requestAnimationFrame(() => listHeadingRef.current?.focus());
+  }
+
   function selectFormal(elementId: string) {
     if (formalMutationBusy) return;
     if (elementId !== selectedFormalId && !confirmDiscardDrafts()) return;
     setFormalDirty(false);
     setActionNotice("");
     setSelectedCandidateId(null);
+    setCreating(false);
     setSelectedFormalId(elementId);
   }
 
@@ -504,6 +572,7 @@ export default function LoreRepositoryPage() {
     setCandidateDirty(false);
     setActionNotice("");
     setSelectedFormalId(null);
+    setCreating(false);
     setSelectedCandidateId(candidateId);
   }
 
@@ -513,6 +582,66 @@ export default function LoreRepositoryPage() {
     nextFormalAfterMutation.current = elementId;
     focusFormalAfterMutation.current = true;
     setReloadToken((value) => value + 1);
+  }
+
+  function startCreating(event: ReactMouseEvent<HTMLButtonElement>) {
+    if (!createDraftScope || overview?.capabilities.formal_create !== true) return;
+    if (!confirmDiscardDrafts()) return;
+    createTriggerRef.current = event.currentTarget;
+    const saved = loadDraft<unknown>(createDraftScope);
+    let restored: LoreCreateStoredPayload | null = null;
+    if (
+      (saved.status === "available" || saved.status === "expired") &&
+      isLoreCreateStoredPayload(saved.draft.payload)
+    ) {
+      restored = saved.draft.payload;
+    } else if (
+      saved.status === "corrupt" ||
+      ((saved.status === "available" || saved.status === "expired") &&
+        !isLoreCreateStoredPayload(saved.draft.payload))
+    ) {
+      if (!window.confirm("本机保存的新建设定草稿已经损坏，无法安全恢复。是否清除这条损坏记录并开始一份新草稿？")) {
+        setActionNotice("损坏的本机草稿仍然保留；系统没有覆盖它，也没有开始新的创建。");
+        return;
+      }
+      const cleared = clearDraft(createDraftScope);
+      if (cleared.status === "unavailable") {
+        setActionNotice("无法从浏览器安全清除损坏草稿，系统没有开始新的创建。");
+        return;
+      }
+    } else if (saved.status === "unavailable") {
+      setActionNotice("浏览器草稿存储不可用；为避免刷新后重复创建，系统没有打开新建表单。");
+      return;
+    }
+    setActionNotice("");
+    setSelectedFormalId(null);
+    setSelectedCandidateId(null);
+    setInitialCreateStored(restored);
+    setFormalDirty(false);
+    setCreating(true);
+  }
+
+  function finishCreate(response: LoreElementCreateResponse) {
+    setCreating(false);
+    setInitialCreateStored(null);
+    setFormalDirty(false);
+    setActionNotice(response.replayed ? "该设定此前已经创建，已安全载入原结果。" : "正式设定已创建并保存来源记录。");
+    nextFormalAfterMutation.current = response.id;
+    focusFormalAfterMutation.current = true;
+    setSearchDraft("");
+    setSearchParams(new URLSearchParams({ scope: "formal" }));
+    setReloadToken((value) => value + 1);
+  }
+
+  function cancelCreate() {
+    setCreating(false);
+    setInitialCreateStored(null);
+    setFormalDirty(false);
+    requestAnimationFrame(() => {
+      const trigger = createTriggerRef.current;
+      if (trigger?.isConnected) trigger.focus();
+      else createButtonRef.current?.focus();
+    });
   }
 
   function updateCandidate(updated: LoreCandidate, notice = "已载入最新候选内容。") {
@@ -558,11 +687,16 @@ export default function LoreRepositoryPage() {
           <h1>世界观设定仓库</h1>
           <p>集中管理正式设定，并逐项审核 AI 从用户原文提取的候选。</p>
         </div>
-        {overview?.migration_status.read_only && (
-          <span className="lore-badge lore-badge--muted">
-            {overview.migration_status.storage_mode === "legacy" ? "兼容资料 · 只读" : "当前仓库 · 只读"}
-          </span>
-        )}
+        <div className="lore-header-actions">
+          {scope === "formal" && overview?.capabilities.formal_create && (
+            <button ref={createButtonRef} className="btn btn-primary" type="button" disabled={formalMutationBusy || creating} onClick={startCreating}>新建设定</button>
+          )}
+          {overview?.migration_status.read_only && (
+            <span className="lore-badge lore-badge--muted">
+              {overview.migration_status.storage_mode === "legacy" ? "兼容资料 · 只读" : "当前仓库 · 只读"}
+            </span>
+          )}
+        </div>
       </header>
 
       {overviewError && (
@@ -591,6 +725,9 @@ export default function LoreRepositoryPage() {
 
       {overview && !overview.capabilities.candidate_accept && (
         <div className="lore-note">当前项目仍使用兼容资料模式：候选可审阅或拒绝，但不能接纳为正式设定。</div>
+      )}
+      {overview && !overview.capabilities.formal_create && scope === "formal" && (
+        <div className="lore-note">当前项目尚未开放安全新建入口；已有设定和世界观保存仍可按当前能力使用。</div>
       )}
 
       {actionNotice && <div className="lore-note" role="status">{actionNotice}</div>}
@@ -630,11 +767,11 @@ export default function LoreRepositoryPage() {
       {listError && <div className="lore-alert" role="alert">{listError}<button type="button" onClick={() => setReloadToken((value) => value + 1)}>重试</button></div>}
       {recoveryNotice && <div className="lore-note" role="status">{recoveryNotice}</div>}
 
-      <div className={`lore-workspace ${selectedFormalId || selectedCandidateId ? "has-selection" : ""}`}>
+      <div className={`lore-workspace ${selectedFormalId || selectedCandidateId || creating ? "has-selection" : ""}`}>
         <section className="lore-list" aria-busy={loading} aria-label={scope === "formal" ? "正式设定列表" : "待审核提取列表"}>
           <div className="lore-list-heading"><h2 tabIndex={-1} ref={listHeadingRef}>{scope === "formal" ? "正式设定" : "待审核提取"}</h2><span aria-live="polite">{loading ? "加载中…" : `共 ${total} 项`}</span></div>
           {!loading && !listError && total === 0 && (
-            <div className="lore-empty"><strong>{activeFilters ? "没有匹配的设定" : "这里还没有内容"}</strong><span>{activeFilters ? "可清除筛选后重新查看。" : scope === "formal" ? "完成提取审核后，正式设定会显示在这里。" : "导入世界观文本后，提取结果会显示在这里。"}</span></div>
+            <div className="lore-empty"><strong>{activeFilters ? "没有匹配的设定" : "这里还没有内容"}</strong><span>{activeFilters ? "可清除筛选后重新查看。" : scope === "formal" ? "可手动创建设定，或完成提取审核后在这里管理。" : "导入世界观文本后，提取结果会显示在这里。"}</span>{!activeFilters && scope === "formal" && overview?.capabilities.formal_create && <button className="btn btn-primary" type="button" onClick={startCreating}>创建第一项设定</button>}</div>
           )}
           {scope === "formal" && formalItems.map((item) => (
             <FormalCard key={item.id} item={item} selected={selectedFormalId === item.id} disabled={formalMutationBusy} onSelect={() => selectFormal(item.id)} />
@@ -649,8 +786,8 @@ export default function LoreRepositoryPage() {
         </section>
 
         <aside className="lore-detail" aria-label="设定详情" tabIndex={-1} ref={detailRef}>
-          {(selectedFormalId || selectedCandidate) && <button className="btn btn-secondary lore-detail-back" type="button" onClick={() => clearSelection()}>← 返回设定列表</button>}
-          {!selectedFormalId && !selectedCandidate && <div className="lore-empty"><strong>选择一项查看详情</strong><span>可核对字段、关联数量和原始文本出处。</span></div>}
+          {(selectedFormalId || selectedCandidate || creating) && <button className="btn btn-secondary lore-detail-back" type="button" onClick={returnToList}>← 返回设定列表</button>}
+          {!selectedFormalId && !selectedCandidate && !creating && <div className="lore-empty"><strong>选择一项查看详情</strong><span>可核对字段、关联数量和原始文本出处。</span></div>}
           {detailLoading && <div className="lore-empty">详情加载中…</div>}
           {detailError && <div className="lore-alert" role="alert">{detailError}<button type="button" onClick={() => setDetailReloadToken((value) => value + 1)}>重试</button></div>}
           {detail && <FormalDetail
@@ -661,6 +798,21 @@ export default function LoreRepositoryPage() {
             onBusyChange={setFormalMutationBusy}
             onMutationComplete={finishFormalMutation}
           />}
+          {creating && createDraftScope && (
+            <LoreCreateForm
+              key={`${createDraftScope.userId}:${createDraftScope.projectId}`}
+              projectId={id}
+              scope={createDraftScope}
+              loreTypes={typesProjectId === id ? loreTypes : []}
+              typesLoading={typesLoading}
+              typesError={typesError}
+              initialStored={initialCreateStored}
+              onDirtyChange={setFormalDirty}
+              onBusyChange={setFormalMutationBusy}
+              onComplete={finishCreate}
+              onCancel={cancelCreate}
+            />
+          )}
           {selectedCandidate && (
             <CandidateDetail
               key={selectedCandidate.id}
@@ -668,7 +820,7 @@ export default function LoreRepositoryPage() {
               candidate={selectedCandidate}
               candidateAcceptEnabled={overview?.capabilities.candidate_accept === true}
               relationalMode={overview?.migration_status.storage_mode === "relational"}
-              loreTypes={typesProjectId === id ? loreTypes : []}
+              loreTypes={typesProjectId === id ? loreTypes.filter((item) => item.is_builtin) : []}
               typesLoading={typesLoading}
               typesError={typesError}
               onDirtyChange={setCandidateDirty}
@@ -1080,7 +1232,7 @@ function FormalDetail({
       ) : (
         <>
           <dl className="lore-fields">{definitions.map((definition) => <div key={definition.key}><dt>{definition.label}<span>{FIELD_STATE[baseDetail.field_states[definition.key]] || "状态待确认"}</span></dt><dd>{valueText(baseDetail.payload[definition.key])}</dd></div>)}</dl>
-          <section className="lore-sources"><h3>原始出处</h3>{baseDetail.sources.length ? baseDetail.sources.map((source, index) => <article key={source.id ?? `${source.kind}-${index}`}><strong>{SOURCE_KIND[source.kind] || "其他来源"}{source.is_primary ? " · 主要来源" : ""}</strong><p>{source.excerpt || "暂无可展示的原文摘录"}</p>{source.reference && <small>{source.reference}</small>}</article>) : <p>暂无来源记录</p>}</section>
+          <section className="lore-sources"><h3>原始出处</h3>{baseDetail.sources.length ? baseDetail.sources.map((source, index) => <article key={source.id ?? `${source.kind}-${index}`}><strong>{SOURCE_KIND[source.kind] || "其他来源"}{source.is_primary ? " · 主要来源" : ""}</strong><p>{source.excerpt || "未提供原文摘录"}</p>{source.reference && <small>{source.reference}</small>}</article>) : <p>暂无来源记录</p>}</section>
           {writable ? <section className="lore-candidate-action-panel">
             <h3>管理正式设定</h3>
             <p>内容编辑会生成新版本；暂停或归档不会删除内容、来源、版本或关系。</p>

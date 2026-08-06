@@ -173,6 +173,7 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
             "lore_extraction_candidates",
             "lore_candidate_field_evidence",
             "lore_candidate_revisions",
+            "lore_element_create_operations",
         }.issubset(tables)
         project_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(projects)")
@@ -229,6 +230,14 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
             in table_sql["lore_extraction_candidates"]
         )
         assert "uq_lore_candidate_revision" in table_sql["lore_candidate_revisions"]
+        assert (
+            "uq_lore_element_create_operation_key"
+            in table_sql["lore_element_create_operations"]
+        )
+        assert (
+            "fk_lore_element_create_operation_element"
+            in table_sql["lore_element_create_operations"]
+        )
         indexes = {
             row[0]
             for row in connection.execute(
@@ -236,6 +245,7 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
             )
         }
         assert "ix_lore_candidate_project_attention_updated" in indexes
+        assert "ix_lore_element_create_operations_project_created" in indexes
 
     _run_alembic(backend_dir, database_url, "downgrade", "a1d3c7e9f002")
     with sqlite3.connect(database_path) as connection:
@@ -248,6 +258,7 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
         assert "element_state_events" not in tables
         assert "element_relations" not in tables
         assert "element_relation_versions" not in tables
+        assert "lore_element_create_operations" not in tables
         table_sql = {
             name: sql or ""
             for name, sql in connection.execute(

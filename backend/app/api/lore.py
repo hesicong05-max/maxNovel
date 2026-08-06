@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 from collections import Counter
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -18,6 +19,7 @@ from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.lore_migration import (
     LoreProjection,
     ProjectedLoreElement,
+    TYPE_DISPLAY_NAMES,
     normalize_lore_name,
     project_legacy_worldview,
     type_field_definitions,
@@ -45,12 +47,14 @@ from app.models.lore import (
     ElementRelationVersion,
     ElementSource,
     ElementVersion,
+    LoreElementCreateOperation,
     SettingElement,
     SettingType,
 )
 from app.models.project import Worldview
 from app.schemas.lore import (
     LoreElementCreate,
+    LoreElementCreateResponse,
     LoreElementDetail,
     LoreElementListItem,
     LoreElementResponse,
@@ -86,6 +90,7 @@ router = APIRouter(prefix="/api/projects/{project_id}/lore", tags=["lore"])
 
 _CURSOR_VERSION = 1
 _CURSOR_SECRET = (settings.JWT_SECRET or "development-lore-cursor-secret").encode()
+_CREATE_FINGERPRINT_VERSION = "lore-element-create:v1"
 
 _CONFIRMATION_LABELS = {
     "candidate": "待确认",
@@ -814,7 +819,11 @@ async def get_lore_repository_overview(
         archived=int(archived or 0),
         migration_status=migration_status,
         capabilities=LoreRepositoryCapabilities(
-            candidate_accept=(project.lore_storage_mode == "relational")
+            candidate_accept=(project.lore_storage_mode == "relational"),
+            formal_create=(
+                project.lore_storage_mode == "relational"
+                and not migration_status.read_only
+            ),
         ),
         count_definitions={
             "formal_total": {"entity": "formal_lore"},
@@ -1223,6 +1232,89 @@ async def _build_element_response(
     )
 
 
+async def _build_create_response(
+    element: SettingElement,
+    db: AsyncSession,
+    *,
+    replayed: bool,
+) -> LoreElementCreateResponse:
+    response = await _build_element_response(element, db)
+    return LoreElementCreateResponse(
+        **response.model_dump(),
+        replayed=replayed,
+    )
+
+
+def _create_request_fingerprint(body: LoreElementCreate) -> str:
+    payload = body.model_dump(mode="json", exclude={"operation_key"})
+    try:
+        canonical = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "LORE_CREATE_PAYLOAD_INVALID",
+                "message": "设定内容无法生成稳定请求指纹",
+            },
+        ) from exc
+    return hashlib.sha256(
+        f"{_CREATE_FINGERPRINT_VERSION}\n{canonical}".encode("utf-8")
+    ).hexdigest()
+
+
+async def _find_create_operation(
+    project_id: str,
+    user_id: str,
+    operation_key: str,
+    db: AsyncSession,
+) -> LoreElementCreateOperation | None:
+    return await db.scalar(
+        select(LoreElementCreateOperation).where(
+            LoreElementCreateOperation.project_id == project_id,
+            LoreElementCreateOperation.requested_by == user_id,
+            LoreElementCreateOperation.operation_key == operation_key,
+        )
+    )
+
+
+async def _replay_create_operation(
+    operation: LoreElementCreateOperation,
+    request_fingerprint: str,
+    db: AsyncSession,
+) -> LoreElementCreateResponse:
+    if operation.request_fingerprint != request_fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "LORE_CREATE_IDEMPOTENCY_CONFLICT",
+                "message": "这次创建与先前请求内容不一致，为避免重复，系统没有再次创建",
+                "retryable": False,
+            },
+        )
+    element = await db.scalar(
+        select(SettingElement).where(
+            SettingElement.project_id == operation.project_id,
+            SettingElement.id == operation.element_id,
+        )
+    )
+    if element is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "LORE_CREATE_OPERATION_CORRUPT",
+                "message": "创建记录与设定不一致，已停止自动处理",
+                "retryable": False,
+            },
+        )
+    return await _build_create_response(element, db, replayed=True)
+
+
 async def _build_relational_element_detail(
     element: SettingElement,
     db: AsyncSession,
@@ -1288,6 +1380,25 @@ def _build_type_response(setting_type: SettingType) -> LoreTypeResponse:
         status=setting_type.status,
         created_at=setting_type.created_at,
         updated_at=setting_type.updated_at,
+    )
+
+
+def _build_virtual_builtin_type_response(type_key: str) -> LoreTypeResponse:
+    epoch = datetime(1970, 1, 1)
+    return LoreTypeResponse(
+        id=f"builtin:{type_key}",
+        key=type_key,
+        display_name=TYPE_DISPLAY_NAMES[type_key],
+        description="平台内建设定类型",
+        is_builtin=True,
+        schema_revision=1,
+        field_schema=[
+            LoreFieldDefinition(**field)
+            for field in type_field_definitions(type_key)
+        ],
+        status="active",
+        created_at=epoch,
+        updated_at=epoch,
     )
 
 
@@ -1417,9 +1528,19 @@ async def list_lore_types(
         .order_by(SettingType.is_builtin.desc(), SettingType.display_name.asc())
     )
     items = list(result.scalars().all())
+    by_key = {item.key: _build_type_response(item) for item in items}
+    builtin_items = [
+        by_key.pop(type_key, None) or _build_virtual_builtin_type_response(type_key)
+        for type_key in TYPE_DISPLAY_NAMES
+    ]
+    custom_items = sorted(
+        by_key.values(),
+        key=lambda item: (item.display_name, item.key),
+    )
+    response_items = [*builtin_items, *custom_items]
     return LoreTypesResponse(
-        items=[_build_type_response(item) for item in items],
-        total=len(items),
+        items=response_items,
+        total=len(response_items),
     )
 
 
@@ -1462,7 +1583,11 @@ async def create_lore_type(
         ) from exc
 
 
-@router.post("/elements", response_model=LoreElementResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/elements",
+    response_model=LoreElementCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_lore_element(
     project_id: str,
     body: LoreElementCreate,
@@ -1471,11 +1596,26 @@ async def create_lore_element(
 ):
     project = await get_project_for_owner(project_id, current_user, db)
     _require_relational_mode(project)
+    user_id = current_user.id
+    request_fingerprint = _create_request_fingerprint(body)
+    existing_operation = await _find_create_operation(
+        project_id,
+        user_id,
+        body.operation_key,
+        db,
+    )
+    if existing_operation is not None:
+        return await _replay_create_operation(
+            existing_operation,
+            request_fingerprint,
+            db,
+        )
     try:
+        check_writes_available()
         element = await create_element(
             db=db,
             project_id=project_id,
-            user_id=current_user.id,
+            user_id=user_id,
             type_key=body.type_key,
             name=body.name,
             summary=body.summary,
@@ -1483,9 +1623,20 @@ async def create_lore_element(
             field_states=body.field_states,
             sources_input=[s.model_dump() for s in body.sources],
         )
+        db.add(
+            LoreElementCreateOperation(
+                project_id=project_id,
+                requested_by=user_id,
+                operation_key=body.operation_key,
+                request_fingerprint=request_fingerprint,
+                element_id=element.id,
+            )
+        )
+        await db.flush()
+        check_writes_available()
         await db.commit()
         await db.refresh(element)
-        return await _build_element_response(element, db)
+        return await _build_create_response(element, db, replayed=False)
     except LoreStaleVersionError as exc:
         await db.rollback()
         raise _stale_version_response(exc)
@@ -1494,6 +1645,18 @@ async def create_lore_element(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
     except IntegrityError as exc:
         await db.rollback()
+        existing_operation = await _find_create_operation(
+            project_id,
+            user_id,
+            body.operation_key,
+            db,
+        )
+        if existing_operation is not None:
+            return await _replay_create_operation(
+                existing_operation,
+                request_fingerprint,
+                db,
+            )
         raise HTTPException(
             status_code=409,
             detail={

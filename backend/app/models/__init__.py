@@ -20,6 +20,7 @@ from app.models.lore import (  # noqa: F401
     ElementStateEvent,
     ElementVersion,
     LegacyElementMap,
+    LoreElementCreateOperation,
     ProjectLoreMigration,
     SettingElement,
     SettingType,

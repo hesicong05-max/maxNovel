@@ -3,8 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "@/services/api";
+import { draftStorageKey, saveDraft, type DraftScope } from "@/services/maintenanceDrafts";
 import type { LoreCandidateInboxResponse, LoreElementDetail, LoreListResponse, LoreOverview } from "@/types/lore";
 import LoreRepositoryPage from "./LoreRepositoryPage";
+
+vi.mock("@/components/AuthContext", () => ({
+  useAuth: () => ({
+    user: { id: "user-1", email: "user@example.com", username: "tester", is_admin: false, created_at: "2026-08-03T00:00:00Z" },
+  }),
+}));
 
 const overview: LoreOverview = {
   formal_total: 1,
@@ -17,6 +24,7 @@ const overview: LoreOverview = {
   capabilities: {
     candidate_review: true,
     candidate_accept: false,
+    formal_create: false,
     formal_conflict_tracking: false,
     search_fields: ["name", "summary"],
   },
@@ -136,7 +144,7 @@ const candidateResponse: LoreCandidateInboxResponse = {
 const writableOverview: LoreOverview = {
   ...overview,
   migration_status: { storage_mode: "relational", state: "ready", read_only: false },
-  capabilities: { ...overview.capabilities, candidate_accept: true },
+  capabilities: { ...overview.capabilities, candidate_accept: true, formal_create: true },
 };
 
 const loreTypesResponse = {
@@ -203,6 +211,7 @@ function renderPage(entry = "/project/project-1/lore") {
 
 describe("LoreRepositoryPage", () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.spyOn(apiModule, "api", "get").mockReturnValue({
       ...apiModule.api,
       getLoreOverview: vi.fn().mockResolvedValue(overview),
@@ -219,6 +228,126 @@ describe("LoreRepositoryPage", () => {
       listLoreCandidates: vi.fn().mockResolvedValue(candidateResponse),
       listLoreTypes: vi.fn().mockResolvedValue({ items: [], total: 0 }),
     });
+  });
+
+  it("does not expose manual creation when the capability is closed", async () => {
+    renderPage();
+    await screen.findByText("林渊");
+
+    expect(screen.queryByRole("button", { name: "新建设定" })).not.toBeInTheDocument();
+    expect(screen.getByText(/尚未开放安全新建入口/)).toBeInTheDocument();
+  });
+
+  it("returns focus to the empty-state trigger after cancelling creation", async () => {
+    const empty = { ...formalResponse(), items: [], total: 0 };
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue({ ...writableOverview, formal_total: 0 }),
+      listLoreElements: vi.fn().mockResolvedValue(empty),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: vi.fn(),
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+    });
+    renderPage();
+    const trigger = await screen.findByRole("button", { name: "创建第一项设定" });
+    await userEvent.click(trigger);
+    expect(await screen.findByRole("heading", { name: "新建设定模块" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "放弃草稿" }));
+
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("clears the local create draft before leaving through the mobile back action", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn().mockResolvedValue(formalResponse()),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: vi.fn(),
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+    });
+    renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "新建设定" }));
+    const createPanel = (await screen.findByRole("heading", { name: "新建设定模块" })).closest<HTMLElement>(".lore-candidate-review")!;
+    await waitFor(() => expect(within(createPanel).getByRole("combobox", { name: "类型" })).toHaveValue("location"));
+    await userEvent.type(await screen.findByRole("textbox", { name: "名称" }), "待放弃角色");
+    const scope: DraftScope = { userId: "user-1", projectId: "project-1", kind: "lore-create", objectId: "new" };
+    await waitFor(() => expect(
+      JSON.parse(localStorage.getItem(draftStorageKey(scope))!).payload.draft.name
+    ).not.toBe(""));
+    await userEvent.click(screen.getByRole("button", { name: /返回设定列表/ }));
+
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("从本机移除"));
+    expect(localStorage.getItem(draftStorageKey(scope))).toBeNull();
+    expect(screen.getByText("选择一项查看详情")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("heading", { name: "正式设定" })).toHaveFocus());
+  });
+
+  it("does not overwrite a corrupt create record unless the user confirms clearing it", async () => {
+    const scope: DraftScope = { userId: "user-1", projectId: "project-1", kind: "lore-create", objectId: "new" };
+    localStorage.setItem(draftStorageKey(scope), "{broken draft");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn().mockResolvedValue(formalResponse()),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: vi.fn(),
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+    });
+    renderPage();
+    expect(await screen.findByRole("status")).toHaveTextContent("无法校验");
+    await userEvent.click(screen.getByRole("button", { name: "新建设定" }));
+
+    expect(confirm).toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "新建设定模块" })).not.toBeInTheDocument();
+    expect(localStorage.getItem(draftStorageKey(scope))).toBe("{broken draft");
+  });
+
+  it("restores an expired unknown outcome with the original key and never auto-posts", async () => {
+    const scope: DraftScope = { userId: "user-1", projectId: "project-1", kind: "lore-create", objectId: "new" };
+    const operationKey = "lore-create:expired123456789";
+    saveDraft(scope, {
+      operationKey,
+      phase: "outcome_unknown",
+      draft: {
+        typeKey: "location",
+        name: "过期但待核对",
+        summary: "",
+        payload: { description: "" },
+        fieldStates: { description: "unknown" },
+        sourceReference: "",
+        sourceExcerpt: "",
+      },
+      frozenInput: {
+        operation_key: operationKey,
+        type_key: "location",
+        name: "过期但待核对",
+        summary: "",
+        payload: { description: null },
+        field_states: { description: "unknown" },
+        sources: [{ kind: "manual", reference: null, is_primary: true }],
+      },
+    }, null, { now: 100, ttlMs: 50 });
+    const create = vi.fn();
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn().mockResolvedValue(formalResponse()),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: vi.fn(),
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+      createLoreElement: create,
+    });
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "新建设定模块" })).toBeInTheDocument();
+    expect(screen.getByText(/已恢复一份超过七天/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "核对上次创建结果" })).toBeInTheDocument();
+    expect(create).not.toHaveBeenCalled();
+    const restored = JSON.parse(localStorage.getItem(draftStorageKey(scope))!);
+    expect(restored.payload.operationKey).toBe(operationKey);
   });
 
   it("shows formal lore, source detail, and the read-only capability boundary", async () => {

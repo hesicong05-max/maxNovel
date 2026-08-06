@@ -30,6 +30,8 @@ import type {
   LoreCandidateEditInput,
   LoreCandidateFilters,
   LoreCandidateInboxResponse,
+  LoreElementCreateInput,
+  LoreElementCreateResponse,
   LoreElementDetail,
   LoreElementFilters,
   LoreElementStateInput,
@@ -101,7 +103,7 @@ async function responseApiError(response: Response): Promise<ApiError> {
         : `HTTP ${response.status}`),
     code: optionalString(payload.code) || optionalString(nestedDetail.code),
     maintenance_state: optionalString(payload.maintenance_state),
-    retryable: payload.retryable === true,
+    retryable: payload.retryable === true || nestedDetail.retryable === true,
     retry_after_seconds:
       optionalPositiveNumber(payload.retry_after_seconds) ||
       (Number.isFinite(retryHeader) && retryHeader > 0
@@ -298,6 +300,11 @@ export const api = {
     fetchJSON<LoreElementDetail>(
       `/projects/${projectId}/lore/elements/${elementId}`,
       { signal }
+    ),
+  createLoreElement: (projectId: string, data: LoreElementCreateInput) =>
+    fetchJSON<LoreElementCreateResponse>(
+      `/projects/${projectId}/lore/elements`,
+      { method: "POST", body: JSON.stringify(data) }
     ),
   updateLoreElement: (
     projectId: string,

@@ -122,6 +122,7 @@ async def test_lore_list_is_authenticated_read_only_projection(
     assert overview.json()["count_definitions"]["formal_total"] == {
         "entity": "formal_lore"
     }
+    assert overview.json()["capabilities"]["formal_create"] is False
 
 
 @pytest.mark.usefixtures("clean_db")

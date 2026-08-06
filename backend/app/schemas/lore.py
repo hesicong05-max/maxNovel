@@ -77,6 +77,7 @@ class LoreListResponse(BaseModel):
 class LoreRepositoryCapabilities(BaseModel):
     candidate_review: bool = True
     candidate_accept: bool
+    formal_create: bool = False
     formal_conflict_tracking: bool = False
     search_fields: list[str] = Field(default_factory=lambda: ["name", "summary"])
 
@@ -156,6 +157,12 @@ class LoreSourceInput(BaseModel):
 
 
 class LoreElementCreate(BaseModel):
+    operation_key: str = Field(
+        ...,
+        min_length=16,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
     type_key: str = Field(..., max_length=50)
     name: str = Field(..., min_length=1, max_length=200)
     summary: str = Field(default="", max_length=2000)
@@ -294,6 +301,10 @@ class LoreElementResponse(BaseModel):
     binding_count: int = 0
     created_at: datetime
     updated_at: datetime
+
+
+class LoreElementCreateResponse(LoreElementResponse):
+    replayed: bool = False
 
 
 class LoreFieldValidationError(BaseModel):
