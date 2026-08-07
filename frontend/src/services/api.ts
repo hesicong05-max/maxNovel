@@ -43,6 +43,7 @@ import type {
   LoreMergeCommitInput,
   LoreMergeOperation,
   LoreMergeOperationsResponse,
+  LoreMigrationPreviewResponse,
   LoreOverview,
   LoreRelation,
   LoreRelationCreateInput,
@@ -304,6 +305,11 @@ export const api = {
   // Unified lore repository (read-only first slice)
   getLoreOverview: (projectId: string, signal?: AbortSignal) =>
     fetchJSON<LoreOverview>(`/projects/${projectId}/lore/overview`, { signal }),
+  getLoreMigrationPreview: (projectId: string, signal?: AbortSignal) =>
+    fetchJSON<LoreMigrationPreviewResponse>(
+      `/projects/${projectId}/lore/migration-preview`,
+      { signal }
+    ),
   listLoreElements: (
     projectId: string,
     filters: LoreElementFilters = {},

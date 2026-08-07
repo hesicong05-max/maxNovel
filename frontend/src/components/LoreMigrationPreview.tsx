@@ -1,0 +1,197 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ApiError, api } from "@/services/api";
+import type {
+  LoreMigrationPreviewClassification,
+  LoreMigrationPreviewResponse,
+} from "@/types/lore";
+
+type Filter = "all" | LoreMigrationPreviewClassification;
+
+const STATUS: Record<LoreMigrationPreviewClassification, string> = {
+  mappable: "可迁移",
+  review_required: "待确认",
+  possible_conflict: "可能冲突",
+  blocked: "阻塞",
+};
+
+const CATEGORY: Record<string, string> = {
+  characters: "角色",
+  geography: "地点",
+  factions: "阵营",
+  power_system: "能力体系",
+  history: "历史事件",
+  conflicts: "冲突",
+  special_settings: "其他重要设定",
+};
+
+const TYPE: Record<string, string> = {
+  character: "角色",
+  location: "地点",
+  faction: "阵营",
+  ability_system: "能力体系",
+  historical_event: "历史事件",
+  conflict: "冲突",
+};
+
+const REASON: Record<string, string> = {
+  worldview_missing: "没有可检查的旧世界观资料",
+  invalid_collection: "旧资料结构无法安全读取",
+  missing_name: "缺少明确名称",
+  non_object_entry: "该项不是可映射的结构化对象",
+  source_missing: "数据来源需要确认",
+  source_unknown: "数据来源类型无法识别",
+  type_confirmation_required: "模块类型需要作者确认",
+  parsed_name_mismatch: "结构化名称与旧解析记录不一致",
+  duplicate_legacy_id: "旧解析编号重复",
+  raw_text_excerpt_unverified: "尚未建立精确原文段落定位",
+  unmapped_fields: "存在不能静默映射的字段",
+  duplicate_name_same_type: "同类型中存在同名资料",
+  duplicate_name_cross_type: "不同类型中存在同名资料",
+  existing_formal_elements: "兼容项目中已存在正式设定",
+  existing_element_name_collision: "与现有正式设定名称碰撞",
+  existing_legacy_map: "检测到既有旧资料映射",
+  existing_migration_state: "检测到既有迁移状态",
+  project_not_legacy: "当前项目不是兼容资料模式",
+};
+
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 409) return "旧资料在检查期间发生变化，当前结果已失效，请重新检查。";
+    if (error.status === 503) return "服务暂不可用，预检未执行，旧资料未更改。请稍后重试。";
+    return `${error.detail} 旧资料未受影响。`;
+  }
+  return "预检未完成，旧资料未受影响。请检查网络后重试。";
+}
+
+export default function LoreMigrationPreview({
+  projectId,
+  onBack,
+}: {
+  projectId: string;
+  onBack: () => void;
+}) {
+  const [report, setReport] = useState<LoreMigrationPreviewResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [filter, setFilter] = useState<Filter>("all");
+  const [reloadToken, setReloadToken] = useState(0);
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError("");
+    api.getLoreMigrationPreview(projectId, controller.signal)
+      .then((data) => {
+        setReport(data);
+        setFilter("all");
+      })
+      .catch((reason) => {
+        if (!controller.signal.aborted) setError(errorMessage(reason));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [projectId, reloadToken]);
+
+  const visibleItems = useMemo(() => (
+    report?.items.filter((item) => filter === "all" || item.classification === filter) ?? []
+  ), [report, filter]);
+
+  const filters: Array<[Filter, string, number]> = report ? [
+    ["all", "全部旧资料", report.counts.legacy_total],
+    ["mappable", "可迁移", report.counts.mappable],
+    ["review_required", "待确认", report.counts.review_required],
+    ["possible_conflict", "可能冲突", report.counts.possible_conflict],
+    ["blocked", "阻塞", report.counts.blocked],
+  ] : [];
+
+  return (
+    <section className="lore-migration-preview" aria-busy={loading} aria-labelledby="lore-migration-preview-title">
+      <button className="btn-back" type="button" onClick={onBack}>← 返回设定仓库</button>
+      <header className="page-header">
+        <div>
+          <h1 id="lore-migration-preview-title" ref={headingRef} tabIndex={-1}>旧资料迁移预检</h1>
+          <p>检查旧世界观资料能否安全转换为独立设定模块。</p>
+        </div>
+      </header>
+
+      <div className="lore-migration-preview__notice" role="note">
+        <strong>本次仅检查数据，尚未迁移。</strong>
+        <span>不会创建、修改、覆盖、迁移或删除任何设定，也不会切换项目存储模式。</span>
+      </div>
+
+      {loading && <div className="lore-empty" role="status">正在检查旧资料…</div>}
+      {!loading && error && (
+        <div className="lore-alert" role="alert">
+          {error}
+          <button type="button" onClick={() => setReloadToken((value) => value + 1)}>重新检查</button>
+        </div>
+      )}
+
+      {!loading && report && <>
+        <div className={`lore-migration-preview__result is-${report.overall_status}`} role={report.overall_status === "blocked" ? "alert" : "status"}>
+          <strong>{report.overall_status === "ready" ? "预检已通过" : report.overall_status === "blocked" ? "本次预检未通过" : "预检完成，仍有资料需要确认"}</strong>
+          <span>共检查 {report.counts.legacy_total} 项；未创建或修改任何设定。</span>
+          <small>检查时间：{new Date(report.checked_at).toLocaleString("zh-CN")}</small>
+        </div>
+
+        <section className="lore-migration-preview__summary" aria-label="预检摘要">
+          {filters.map(([key, label, count]) => (
+            <button key={key} type="button" aria-pressed={filter === key} onClick={() => setFilter(key)}>
+              <strong>{count}</strong><span>{label}</span>
+            </button>
+          ))}
+        </section>
+
+        {report.issues.some((issue) => issue.legacy_category === null) && (
+          <section className="lore-migration-preview__blockers" aria-label="项目级阻塞原因">
+            <h2>需要先处理</h2>
+            {report.issues.filter((issue) => issue.legacy_category === null).map((issue) => (
+              <div key={issue.case_id} className="lore-alert" role={issue.severity === "blocked" ? "alert" : "status"}>
+                <strong>{REASON[issue.reason_code] ?? issue.message}</strong>
+                <span>{issue.recommended_action}</span>
+              </div>
+            ))}
+          </section>
+        )}
+
+        <section className="lore-migration-preview__items" aria-label="旧资料逐项结果">
+          <h2>逐项检查结果</h2>
+          {report.counts.legacy_total === 0 ? (
+            <div className="lore-empty"><strong>未找到可检查的旧世界观资料</strong><span>本次未做任何更改。</span></div>
+          ) : visibleItems.length === 0 ? (
+            <div className="lore-empty">当前筛选下没有旧资料。</div>
+          ) : visibleItems.map((item) => (
+            <details className={`lore-migration-preview__item is-${item.classification}`} key={item.planned_element_id}>
+              <summary>
+                <span><strong>{item.name || "未命名资料"}</strong><small>旧世界观 › {CATEGORY[item.legacy_category] ?? item.legacy_category} › 第 {item.legacy_index + 1} 项</small></span>
+                <span className="lore-badge lore-badge--muted">{STATUS[item.classification]}</span>
+              </summary>
+              <div className="lore-migration-preview__detail">
+                <dl>
+                  <div><dt>建议模块类型</dt><dd>{item.proposed_type_key ? TYPE[item.proposed_type_key] ?? item.proposed_type_key : "需要作者确认"}</dd></div>
+                  <div><dt>资料来源</dt><dd>{item.source_label ?? "待确认"}</dd></div>
+                  <div><dt>原文定位</dt><dd>{item.exact_excerpt_available ? "已建立精确段落定位" : "未建立原文段落定位"}</dd></div>
+                </dl>
+                {item.reason_codes.length > 0 && <div className="lore-migration-preview__reasons"><strong>需要处理</strong><ul>{item.reason_codes.map((reason) => <li key={reason}>{REASON[reason] ?? reason}</li>)}</ul></div>}
+                <details><summary>查看原始结构化内容</summary><pre>{JSON.stringify(item.original_value, null, 2)}</pre></details>
+                <details><summary>查看建议字段映射</summary><pre>{JSON.stringify(item.mapped_fields, null, 2)}</pre></details>
+              </div>
+            </details>
+          ))}
+        </section>
+
+        <div className="lore-migration-preview__actions">
+          <button className="btn btn-primary" type="button" onClick={() => setReloadToken((value) => value + 1)}>重新检查</button>
+          <button className="btn btn-secondary" type="button" onClick={onBack}>返回设定仓库</button>
+        </div>
+      </>}
+    </section>
+  );
+}

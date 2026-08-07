@@ -7,6 +7,7 @@ import LoreCreateForm, {
 } from "@/components/LoreCreateForm";
 import LoreRelationsPanel from "@/components/LoreRelationsPanel";
 import LoreMergeHistory from "@/components/LoreMergeHistory";
+import LoreMigrationPreview from "@/components/LoreMigrationPreview";
 import LoreReviewPanel from "@/components/LoreReviewPanel";
 import { ApiError, api } from "@/services/api";
 import { clearDraft, loadDraft, type DraftScope } from "@/services/maintenanceDrafts";
@@ -170,6 +171,7 @@ export default function LoreRepositoryPage() {
   const [formalMutationBusy, setFormalMutationBusy] = useState(false);
   const [actionNotice, setActionNotice] = useState("");
   const [creating, setCreating] = useState(false);
+  const [migrationPreviewOpen, setMigrationPreviewOpen] = useState(false);
   const [initialCreateStored, setInitialCreateStored] = useState<LoreCreateStoredPayload | null>(null);
   const [preservedCandidateDrafts, setPreservedCandidateDrafts] = useState<Record<string, CandidateDraft>>({});
   const requestSequence = useRef(0);
@@ -186,6 +188,7 @@ export default function LoreRepositoryPage() {
   const focusFormalAfterMutation = useRef(false);
   const createButtonRef = useRef<HTMLButtonElement | null>(null);
   const createTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const migrationPreviewTriggerRef = useRef<HTMLButtonElement | null>(null);
   const restoredCreateScopeRef = useRef("");
   const contextKey = `${id ?? ""}?${queryKey}`;
   const contextKeyRef = useRef(contextKey);
@@ -692,6 +695,18 @@ export default function LoreRepositoryPage() {
 
   if (!id) return <div className="empty-state">项目地址无效</div>;
 
+  if (migrationPreviewOpen) {
+    return (
+      <LoreMigrationPreview
+        projectId={id}
+        onBack={() => {
+          setMigrationPreviewOpen(false);
+          setTimeout(() => migrationPreviewTriggerRef.current?.focus(), 0);
+        }}
+      />
+    );
+  }
+
   const formalItems = formal?.items ?? [];
   const hasMore = scope === "formal" ? formal?.has_more : candidateHasMore;
   const total = scope === "formal" ? formal?.total ?? 0 : candidateTotal;
@@ -708,6 +723,18 @@ export default function LoreRepositoryPage() {
           <p>集中管理正式设定，并逐项审核 AI 从用户原文提取的候选。</p>
         </div>
         <div className="lore-header-actions">
+          {overview?.migration_status.storage_mode === "legacy" && (
+            <button
+              ref={migrationPreviewTriggerRef}
+              className="btn btn-secondary lore-migration-preview-trigger"
+              type="button"
+              onClick={() => {
+                if (confirmDiscardDrafts()) setMigrationPreviewOpen(true);
+              }}
+            >
+              检查旧世界观资料
+            </button>
+          )}
           {scope === "formal" && overview?.capabilities.formal_create && (
             <button ref={createButtonRef} className="btn btn-primary" type="button" disabled={formalMutationBusy || creating} onClick={startCreating}>新建设定</button>
           )}

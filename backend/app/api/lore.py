@@ -10,12 +10,13 @@ from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.config import settings
+from app import database as database_module
 from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.lore_migration import (
     LoreProjection,
@@ -26,6 +27,7 @@ from app.core.lore_migration import (
     type_field_definitions,
     validate_projection,
 )
+from app.core.lore_migration_preview import build_migration_preview
 from app.core.lore_merge_commit import (
     build_merge_operation_response,
     commit_lore_merge,
@@ -63,6 +65,8 @@ from app.models.lore import (
     LoreRelationCreateOperation,
     LoreReviewSuggestion,
     LoreReviewSuggestionEvent,
+    LegacyElementMap,
+    ProjectLoreMigration,
     SettingElement,
     SettingType,
 )
@@ -80,6 +84,7 @@ from app.schemas.lore import (
     LoreFieldDefinition,
     LoreListResponse,
     LoreMigrationStatus,
+    LoreMigrationPreviewResponse,
     LoreMergePreviewInput,
     LoreMergePreviewResponse,
     LoreMergeCommitInput,
@@ -225,6 +230,62 @@ async def _load_projection(
         await db.execute(select(Worldview).where(Worldview.project_id == project_id))
     ).scalar_one_or_none()
     return project, project_legacy_worldview(project_id, worldview)
+
+
+async def _build_read_only_migration_preview(
+    project_id: str,
+    current_user: User,
+) -> dict[str, Any]:
+    """Plan from an isolated snapshot, then reject a source changed mid-check."""
+    async with database_module.async_session() as snapshot_db:
+        if snapshot_db.get_bind().dialect.name == "postgresql":
+            # This is intentionally the first statement in the dedicated session.
+            await snapshot_db.execute(text(
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+            ))
+        project = await get_project_for_owner(project_id, current_user, snapshot_db)
+        worldview = await snapshot_db.scalar(
+            select(Worldview).where(Worldview.project_id == project_id)
+        )
+        existing_elements = list((await snapshot_db.scalars(
+            select(SettingElement).where(SettingElement.project_id == project_id)
+        )).all())
+        existing_legacy_map_count = int(await snapshot_db.scalar(
+            select(func.count()).select_from(LegacyElementMap).where(
+                LegacyElementMap.project_id == project_id
+            )
+        ) or 0)
+        existing_migration_count = int(await snapshot_db.scalar(
+            select(func.count()).select_from(ProjectLoreMigration).where(
+                ProjectLoreMigration.project_id == project_id
+            )
+        ) or 0)
+        preview = build_migration_preview(
+            project_id,
+            project.lore_storage_mode or "legacy",
+            worldview,
+            existing_elements=existing_elements,
+            existing_legacy_map_count=existing_legacy_map_count,
+            existing_migration_count=existing_migration_count,
+        )
+
+    async with database_module.async_session() as verify_db:
+        latest_worldview = await verify_db.scalar(
+            select(Worldview).where(Worldview.project_id == project_id)
+        )
+        latest_checksum = project_legacy_worldview(
+            project_id, latest_worldview
+        ).checksum
+    if latest_checksum != preview["source_checksum"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "LORE_MIGRATION_PREVIEW_STALE",
+                "message": "旧资料在检查期间发生变化，当前结果已失效，请重新检查。",
+                "retryable": True,
+            },
+        )
+    return preview
 
 
 def _migration_status(project: Any, projection: LoreProjection) -> LoreMigrationStatus:
@@ -594,6 +655,18 @@ def _find_element(
         if element.id == element_id:
             return element
     raise HTTPException(status_code=404, detail="设定不存在")
+
+
+@router.get(
+    "/migration-preview",
+    response_model=LoreMigrationPreviewResponse,
+)
+async def get_lore_migration_preview(
+    project_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Return a versioned dry-run report; never create or update Lore rows."""
+    return await _build_read_only_migration_preview(project_id, current_user)
 
 
 @router.get("/elements", response_model=LoreListResponse)

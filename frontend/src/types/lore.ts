@@ -10,6 +10,66 @@ export interface LoreMigrationStatus {
   read_only: boolean;
 }
 
+export type LoreMigrationPreviewClassification =
+  | "mappable"
+  | "review_required"
+  | "possible_conflict"
+  | "blocked";
+
+export interface LoreMigrationPreviewItem {
+  legacy_category: string;
+  legacy_index: number;
+  legacy_id: string | null;
+  planned_element_id: string;
+  proposed_type_key: string | null;
+  name: string;
+  classification: LoreMigrationPreviewClassification;
+  reason_codes: string[];
+  source_locator: string;
+  source_kind: string | null;
+  source_label: string | null;
+  exact_excerpt_available: boolean;
+  original_value: unknown;
+  mapped_fields: Record<string, unknown>;
+  unmapped_fields: string[];
+}
+
+export interface LoreMigrationPreviewIssue {
+  case_id: string;
+  severity: "review" | "blocked";
+  reason_code: string;
+  legacy_category: string | null;
+  legacy_index: number | null;
+  message: string;
+  recommended_action: string;
+}
+
+export interface LoreMigrationPreviewResponse {
+  preview_schema_version: number;
+  mapping_version: number;
+  project_id: string;
+  storage_mode: string;
+  source_checksum: string;
+  semantic_result_checksum: string;
+  checked_at: string;
+  overall_status: "ready" | "review_required" | "blocked";
+  dry_run: true;
+  read_only: true;
+  writes_performed: 0;
+  commit_available: false;
+  counts: {
+    legacy_total: number;
+    mappable: number;
+    review_required: number;
+    possible_conflict: number;
+    blocked: number;
+  };
+  by_legacy_category: Record<string, number>;
+  by_target_type: Record<string, number>;
+  items: LoreMigrationPreviewItem[];
+  issues: LoreMigrationPreviewIssue[];
+}
+
 export interface LoreOverview {
   formal_total: number;
   confirmed_active: number;

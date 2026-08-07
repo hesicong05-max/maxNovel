@@ -32,6 +32,64 @@ class LoreMigrationStatus(BaseModel):
     can_retry: bool = False
 
 
+class LoreMigrationPreviewCounts(BaseModel):
+    legacy_total: int
+    mappable: int
+    review_required: int
+    possible_conflict: int
+    blocked: int
+
+
+class LoreMigrationPreviewItem(BaseModel):
+    legacy_category: str
+    legacy_index: int
+    legacy_id: str | None = None
+    planned_element_id: str
+    proposed_type_key: str | None = None
+    name: str
+    classification: Literal[
+        "mappable", "review_required", "possible_conflict", "blocked"
+    ]
+    reason_codes: list[str] = Field(default_factory=list)
+    source_locator: str
+    source_kind: str | None = None
+    source_label: str | None = None
+    exact_excerpt_available: bool = False
+    original_value: Any
+    mapped_fields: dict[str, Any] = Field(default_factory=dict)
+    unmapped_fields: list[str] = Field(default_factory=list)
+
+
+class LoreMigrationPreviewIssue(BaseModel):
+    case_id: str
+    severity: Literal["review", "blocked"]
+    reason_code: str
+    legacy_category: str | None = None
+    legacy_index: int | None = None
+    message: str
+    recommended_action: str
+
+
+class LoreMigrationPreviewResponse(BaseModel):
+    preview_schema_version: int
+    mapping_version: int
+    project_id: str
+    storage_mode: str
+    source_checksum: str
+    semantic_result_checksum: str
+    checked_at: datetime
+    overall_status: Literal["ready", "review_required", "blocked"]
+    dry_run: Literal[True]
+    read_only: Literal[True]
+    writes_performed: Literal[0]
+    commit_available: Literal[False]
+    counts: LoreMigrationPreviewCounts
+    by_legacy_category: dict[str, int] = Field(default_factory=dict)
+    by_target_type: dict[str, int] = Field(default_factory=dict)
+    items: list[LoreMigrationPreviewItem] = Field(default_factory=list)
+    issues: list[LoreMigrationPreviewIssue] = Field(default_factory=list)
+
+
 class LoreElementListItem(BaseModel):
     id: str
     type: LoreTypeSummary
