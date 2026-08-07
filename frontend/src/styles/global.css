@@ -2685,6 +2685,33 @@ input, select, textarea { font-family: inherit; }
   }
 }
 
+.worldview-migration-fix {
+  border-color: var(--gold-border);
+  background: var(--gold-light);
+}
+
+.worldview-migration-fix:focus-visible {
+  outline: 3px solid var(--gold);
+  outline-offset: 3px;
+}
+
+.wv-entry.is-migration-target {
+  border: 2px solid var(--gold);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 18%, transparent);
+}
+
+@media (max-width: 390px) {
+  .worldview-migration-fix .draft-notice__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .worldview-migration-fix .btn {
+    min-height: 44px;
+    width: 100%;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     transition-duration: 0.01ms !important;

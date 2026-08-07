@@ -217,6 +217,10 @@ export default function LoreRepositoryPage() {
     if (overview?.migration_status.storage_mode === "migrating") setMigrationPreviewOpen(true);
   }, [overview?.migration_status.storage_mode]);
 
+  useEffect(() => {
+    if (searchParams.get("migration") === "preview") setMigrationPreviewOpen(true);
+  }, [queryKey]);
+
   function confirmDiscardDrafts(): boolean {
     if (candidateMutationBusy || formalMutationBusy) {
       setActionNotice("设定操作正在提交，请等待结果后再切换页面或筛选。");
@@ -727,8 +731,18 @@ export default function LoreRepositoryPage() {
         projectId={id}
         userId={user.id}
         onUpgraded={() => setReloadToken((value) => value + 1)}
+        onEditItem={(category, index, itemFingerprint, sourceChecksum) => {
+          navigate(`/project/${id}?migration_fix=${encodeURIComponent(
+            `${category}:${index}:${itemFingerprint}:${sourceChecksum}`
+          )}`);
+        }}
         onBack={() => {
           setMigrationPreviewOpen(false);
+          if (searchParams.get("migration") === "preview") {
+            const next = new URLSearchParams(searchParams);
+            next.delete("migration");
+            setSearchParams(next, { replace: true });
+          }
           setTimeout(() => migrationPreviewTriggerRef.current?.focus(), 0);
         }}
       />

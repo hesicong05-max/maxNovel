@@ -8,6 +8,8 @@ import LoreMigrationUpgrade from "./LoreMigrationUpgrade";
 
 type Filter = "all" | LoreMigrationPreviewClassification;
 
+const CONTENT_EDITABLE_REASONS = new Set(["missing_name", "parsed_name_mismatch"]);
+
 const STATUS: Record<LoreMigrationPreviewClassification, string> = {
   mappable: "可迁移",
   review_required: "待确认",
@@ -69,11 +71,18 @@ export default function LoreMigrationPreview({
   userId,
   onBack,
   onUpgraded,
+  onEditItem = () => {},
 }: {
   projectId: string;
   userId: string;
   onBack: () => void;
   onUpgraded: () => void;
+  onEditItem?: (
+    category: string,
+    index: number,
+    itemFingerprint: string,
+    sourceChecksum: string
+  ) => void;
 }) {
   const [report, setReport] = useState<LoreMigrationPreviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -128,7 +137,7 @@ export default function LoreMigrationPreview({
 
       <div className="lore-migration-preview__notice" role="note">
         <strong>预检本身只检查数据，不会自动迁移。</strong>
-        <span>只有预检通过、进入安全升级窗口并由你再次确认后，系统才会开始升级；原资料不会被删除或覆盖。</span>
+        <span>系统不会替你补写、选择类型、合并资料或自动保存；只有预检通过、进入安全升级窗口并由你再次确认后，系统才会开始升级，原资料不会被删除或覆盖。</span>
       </div>
 
       {loading && <div className="lore-empty" role="status">正在检查旧资料…</div>}
@@ -186,7 +195,21 @@ export default function LoreMigrationPreview({
                 </dl>
                 {item.reason_codes.length > 0 && <div className="lore-migration-preview__reasons"><strong>需要处理</strong><ul>{item.reason_codes.map((reason) => <li key={reason}>{REASON[reason] ?? reason}</li>)}</ul></div>}
                 <details><summary>查看原始结构化内容</summary><pre>{JSON.stringify(item.original_value, null, 2)}</pre></details>
-                <details><summary>查看建议字段映射</summary><pre>{JSON.stringify(item.mapped_fields, null, 2)}</pre></details>
+                <details><summary>系统计划如何整理（仅预览）</summary><pre>{JSON.stringify(item.mapped_fields, null, 2)}</pre></details>
+                {item.reason_codes.some((reason) => CONTENT_EDITABLE_REASONS.has(reason)) && (
+                  <button
+                    className="btn btn-primary"
+                    type="button"
+                    onClick={() => onEditItem(
+                      item.legacy_category,
+                      item.legacy_index,
+                      item.item_fingerprint,
+                      report.source_checksum
+                    )}
+                  >
+                    去修改这项原资料
+                  </button>
+                )}
               </div>
             </details>
           ))}

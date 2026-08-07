@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useParams, useNavigate } from "react-router-dom";
+import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "@/services/api";
 import type { Project } from "@/types";
 import WorldviewEditor from "@/components/WorldviewEditor";
@@ -8,9 +8,31 @@ import ProgressPanel from "@/components/ProgressPanel";
 
 type Step = "worldview" | "writing";
 
+const MIGRATION_CATEGORIES = new Set([
+  "characters", "geography", "factions", "power_system",
+  "history", "conflicts", "special_settings",
+]);
+
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const migrationFix = searchParams.get("migration_fix");
+  const [migrationCategory, migrationIndexText, migrationItemFingerprint, migrationSourceChecksum] =
+    migrationFix?.split(":") ?? [];
+  const migrationIndex = Number(migrationIndexText);
+  const isChecksum = (value: string | undefined) => /^[a-f0-9]{64}$/.test(value ?? "");
+  const migrationTarget = typeof migrationCategory === "string" && MIGRATION_CATEGORIES.has(migrationCategory) &&
+    Number.isInteger(migrationIndex) && migrationIndex >= 0 &&
+    isChecksum(migrationItemFingerprint) && isChecksum(migrationSourceChecksum)
+    ? {
+        category: migrationCategory,
+        index: migrationIndex,
+        itemFingerprint: migrationItemFingerprint as string,
+        sourceChecksum: migrationSourceChecksum as string,
+      }
+    : null;
+  const migrationRequestInvalid = migrationFix !== null && migrationTarget === null;
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -18,7 +40,7 @@ export default function ProjectDetail() {
 
   useEffect(() => {
     if (id) loadProject(id);
-  }, [id]);
+  }, [id, migrationFix]);
 
   // Sync project status when tab becomes visible again (handles refresh / tab switch)
   useEffect(() => {
@@ -37,7 +59,7 @@ export default function ProjectDetail() {
       const data = await api.getProject(projectId);
       setProject(data);
       if (autoStep) {
-        setActiveStep(data.has_outline ? "writing" : "worldview");
+        setActiveStep(migrationFix ? "worldview" : data.has_outline ? "writing" : "worldview");
       }
     } catch (e) {
       console.error("Failed to load project:", e);
@@ -142,6 +164,9 @@ export default function ProjectDetail() {
           projectId={project.id}
           hasWorldview={project.has_worldview}
           genre={project.genre}
+          migrationTarget={migrationTarget}
+          migrationRequestInvalid={migrationRequestInvalid}
+          onReturnToMigration={() => navigate(`/project/${project.id}/lore?migration=preview`)}
           onComplete={async () => {
             await refreshProject();
             navigate(`/project/${project.id}/lore`);
@@ -149,7 +174,9 @@ export default function ProjectDetail() {
           onExtractionComplete={() => {
             navigate(`/project/${project.id}/lore?scope=review`);
           }}
-          onBack={() => navigate("/")}
+          onBack={() => migrationTarget
+            ? navigate(`/project/${project.id}/lore?migration=preview`)
+            : navigate("/")}
         />
       )}
 

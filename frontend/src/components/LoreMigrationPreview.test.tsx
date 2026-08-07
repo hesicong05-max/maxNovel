@@ -30,7 +30,8 @@ const report: LoreMigrationPreviewResponse = {
   items: [{
     legacy_category: "characters",
     legacy_index: 0,
-    legacy_id: null,
+      legacy_id: null,
+      item_fingerprint: "1".repeat(64),
     planned_element_id: "element-1",
     proposed_type_key: "character",
     name: "林岚",
@@ -46,7 +47,8 @@ const report: LoreMigrationPreviewResponse = {
   }, {
     legacy_category: "special_settings",
     legacy_index: 0,
-    legacy_id: null,
+      legacy_id: null,
+      item_fingerprint: "2".repeat(64),
     planned_element_id: "element-2",
     proposed_type_key: null,
     name: "夜禁",
@@ -135,5 +137,38 @@ describe("LoreMigrationPreview", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "← 返回设定仓库" }));
     expect(onBack).toHaveBeenCalledOnce();
+  });
+
+  it("offers a safe editor handoff only for content-editable issues", async () => {
+    const onEditItem = vi.fn();
+    mockPreview(Promise.resolve({
+      ...report,
+      overall_status: "blocked",
+      items: [{
+        ...report.items[0],
+        name: "",
+        classification: "blocked",
+        reason_codes: ["missing_name"],
+      }, report.items[1]],
+    }));
+    render(
+      <LoreMigrationPreview
+        projectId="project-1"
+        userId="user-1"
+        onBack={vi.fn()}
+        onUpgraded={vi.fn()}
+        onEditItem={onEditItem}
+      />
+    );
+
+    await screen.findByText("本次预检未通过");
+    await userEvent.click(screen.getByRole("button", { name: "去修改这项原资料" }));
+    expect(onEditItem).toHaveBeenCalledWith(
+      "characters",
+      0,
+      "1".repeat(64),
+      "a".repeat(64)
+    );
+    expect(screen.getAllByText("系统计划如何整理（仅预览）").length).toBeGreaterThan(0);
   });
 });

@@ -5,6 +5,7 @@ import logging
 import os
 import tempfile
 import zipfile
+from types import SimpleNamespace
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -17,16 +18,17 @@ from app.core.maintenance import (
     ensure_project_writes_available,
     require_project_writes_available,
 )
+from app.core.lore_migration_preview import migration_preview_source_checksum
 from app.core.project_files import save_worldview_file
 from app.core.worldview_parser import worldview_parser
 from app.database import get_db
 from app.models.lore import ProjectLoreMigrationOperation
 from app.models.project import Project, ProjectStatus, Worldview
 from app.schemas.models import (
-    WorldviewCreate,
     WorldviewImportRequest,
     WorldviewImportResponse,
     WorldviewResponse,
+    WorldviewSaveRequest,
 )
 
 router = APIRouter(prefix="/api/worldview", tags=["worldview"])
@@ -258,7 +260,7 @@ async def import_worldview(
 @router.post("/{project_id}", response_model=WorldviewResponse)
 async def set_worldview(
     project_id: str,
-    data: WorldviewCreate,
+    data: WorldviewSaveRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
     _write_gate: Annotated[None, Depends(require_project_writes_available)],
@@ -297,9 +299,41 @@ async def set_worldview(
         .with_for_update()
     )
 
-    # Parse worldview into elements
-    worldview_dict = data.model_dump()
+    # Parse worldview into elements. The optimistic token is transport metadata
+    # and must never be persisted into the author's source document.
+    worldview_dict = data.model_dump(exclude={"expected_source_checksum"})
     elements = worldview_parser.parse(worldview_dict)
+
+    checksum_candidate = SimpleNamespace(
+        **worldview_dict,
+        parsed_elements=elements,
+    )
+    target_source_checksum = migration_preview_source_checksum(checksum_candidate)
+
+    if existing_wv is not None:
+        current_source_checksum = migration_preview_source_checksum(existing_wv)
+        if data.expected_source_checksum != current_source_checksum:
+            # A lost response may cause the exact saved payload to be retried.
+            # Treat that as an idempotent replay, but reject every stale change.
+            if target_source_checksum == current_source_checksum:
+                save_worldview_file(project_id, existing_wv)
+                return WorldviewResponse(
+                    id=existing_wv.id,
+                    project_id=existing_wv.project_id,
+                    **worldview_dict,
+                    parsed_elements=elements,
+                    source_checksum=current_source_checksum,
+                    created_at=existing_wv.created_at,
+                )
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "WORLDVIEW_SOURCE_STALE",
+                    "message": "服务器上的世界观已发生变化，请先重新加载并核对本地草稿。",
+                    "retryable": False,
+                    "reload_required": True,
+                },
+            )
 
     if existing_wv is None:
         worldview = Worldview(project_id=project_id)
@@ -338,6 +372,7 @@ async def set_worldview(
         raw_text=data.raw_text,
         source=worldview.source,
         parsed_elements=elements,
+        source_checksum=migration_preview_source_checksum(worldview),
         created_at=worldview.created_at,
     )
 
@@ -370,6 +405,7 @@ async def get_worldview(
         raw_text=worldview.raw_text,
         source=worldview.source or "manual",
         parsed_elements=worldview.parsed_elements or [],
+        source_checksum=migration_preview_source_checksum(worldview),
         created_at=worldview.created_at,
     )
 

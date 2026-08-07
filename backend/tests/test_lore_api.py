@@ -64,6 +64,10 @@ async def _set_worldview(client, headers, project_id, extra_characters=None):
         },
     ]
     characters.extend(extra_characters or [])
+    current = await client.get(f"/api/worldview/{project_id}", headers=headers)
+    expected_source_checksum = (
+        current.json()["source_checksum"] if current.status_code == 200 else None
+    )
     response = await client.post(
         f"/api/worldview/{project_id}",
         headers=headers,
@@ -83,6 +87,7 @@ async def _set_worldview(client, headers, project_id, extra_characters=None):
             "special_settings": [],
             "raw_text": None,
             "source": "manual",
+            "expected_source_checksum": expected_source_checksum,
         },
     )
     assert response.status_code == 200

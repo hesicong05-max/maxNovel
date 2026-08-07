@@ -90,10 +90,16 @@ async def _save_worldview(
     name: str = "林岚",
     payload: dict | None = None,
 ):
+    current = await client.get(f"/api/worldview/{project_id}", headers=headers)
+    expected_source_checksum = (
+        current.json()["source_checksum"] if current.status_code == 200 else None
+    )
+    request_payload = dict(payload or _worldview_payload(name))
+    request_payload["expected_source_checksum"] = expected_source_checksum
     response = await client.post(
         f"/api/worldview/{project_id}",
         headers=headers,
-        json=payload or _worldview_payload(name),
+        json=request_payload,
     )
     assert response.status_code == 200, response.text
     return response.json()

@@ -22,6 +22,14 @@ interface Props {
   onComplete: () => void;
   onExtractionComplete?: () => void;
   onBack: () => void;
+  migrationTarget?: {
+    category: string;
+    index: number;
+    itemFingerprint: string;
+    sourceChecksum: string;
+  } | null;
+  migrationRequestInvalid?: boolean;
+  onReturnToMigration?: () => void;
 }
 
 type EditorMode = "manual" | "import" | "hybrid";
@@ -210,7 +218,17 @@ function isWorldviewDraftPayload(value: unknown): value is WorldviewDraftPayload
   );
 }
 
-export default function WorldviewEditor({ projectId, hasWorldview, genre, onComplete, onExtractionComplete, onBack }: Props) {
+export default function WorldviewEditor({
+  projectId,
+  hasWorldview,
+  genre,
+  onComplete,
+  onExtractionComplete,
+  onBack,
+  migrationTarget = null,
+  migrationRequestInvalid = false,
+  onReturnToMigration,
+}: Props) {
   const { user } = useAuth();
   const [mode, setMode] = useState<EditorMode>("manual");
   const [data, setData] = useState<WorldviewData>(EMPTY_WORLDVIEW);
@@ -239,6 +257,12 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
   const [saveResult, setSaveResult] = useState<SaveResult | null>(null);
   const loadedRef = useRef(false);  // 防止已加载的数据被 hasWorldview 变化覆盖
   const [saveError, setSaveError] = useState("");
+  const [worldviewStale, setWorldviewStale] = useState(false);
+  const [migrationTargetState, setMigrationTargetState] = useState<
+    "idle" | "loading" | "valid" | "invalid" | "error"
+  >("idle");
+  const [migrationPreviewReloadToken, setMigrationPreviewReloadToken] = useState(0);
+  const [serverSourceChecksum, setServerSourceChecksum] = useState<string | null>(null);
   const [importError, setImportError] = useState("");
   const [uploadError, setUploadError] = useState("");
   const [relationalMode, setRelationalMode] = useState<boolean | null>(null);
@@ -251,6 +275,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
   const fileInputRef = useRef<HTMLInputElement>(null);
   const baseFingerprintRef = useRef<string | null>(null);
   const serverSnapshotRef = useRef("");
+  const serverSourceChecksumRef = useRef<string | null>(null);
+  const worldviewExistsRef = useRef(false);
   const draftReadyRef = useRef(false);
   const dirtyRef = useRef(false);
   const currentPayloadRef = useRef<WorldviewDraftPayload>(
@@ -261,6 +287,11 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
   const scopeGenerationRef = useRef(0);
   const saveGenerationRef = useRef(0);
   const editorRootRef = useRef<HTMLDivElement>(null);
+  const migrationNoticeRef = useRef<HTMLDivElement>(null);
+  const saveResultRef = useRef<HTMLDivElement>(null);
+  const draftRecoveryContainerRef = useRef<HTMLDivElement>(null);
+  const focusRecoveryAfterReloadRef = useRef(false);
+  const migrationFocusHandledRef = useRef("");
   const extractionResultRef = useRef<HTMLDivElement>(null);
   const pendingFocusRef = useRef<(() => HTMLElement | null | undefined) | null>(
     null
@@ -291,6 +322,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
     dirtyRef.current = false;
     baseFingerprintRef.current = null;
     serverSnapshotRef.current = "";
+    serverSourceChecksumRef.current = null;
+    worldviewExistsRef.current = false;
     setRecovery(null);
     setCorruptDraft(false);
     setMaintenanceFailure(null);
@@ -314,6 +347,10 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
     setImportError("");
     setUploadError("");
     setSaveError("");
+    setWorldviewStale(false);
+    setMigrationTargetState("idle");
+    setMigrationPreviewReloadToken(0);
+    setServerSourceChecksum(null);
     return () => {
       if (dirtyRef.current && scopedDraft) {
         saveDraft(
@@ -449,7 +486,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
     generation: number,
     scopeGeneration: number,
     expectedScopeKey: string,
-    parsedCount = 0
+    parsedCount = 0,
+    sourceChecksum: string | null = null
   ) {
     const payload = draftPayload(
       serverData,
@@ -468,6 +506,9 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
     baseFingerprintRef.current =
       fingerprint.status === "available" ? fingerprint.value : null;
     serverSnapshotRef.current = JSON.stringify(payload);
+    serverSourceChecksumRef.current = sourceChecksum;
+    setServerSourceChecksum(sourceChecksum);
+    worldviewExistsRef.current = exists;
     dirtyRef.current = false;
     setData(serverData);
     setSource(serverSource);
@@ -583,7 +624,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
         generation,
         scopeGeneration,
         expectedScopeKey,
-        wv.parsed_elements?.length || 0
+        wv.parsed_elements?.length || 0,
+        wv.source_checksum
       );
       if (
         generation !== loadGenerationRef.current ||
@@ -885,6 +927,10 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
 
   async function handleSave() {
     if (recovery) return;
+    if (worldviewExistsRef.current && !serverSourceChecksumRef.current) {
+      setSaveError("无法确认当前世界观版本，已停止保存。请重新加载后再试。");
+      return;
+    }
     const saveGeneration = ++saveGenerationRef.current;
     const submittedScope = draftScope;
     const submittedPayload = currentPayloadRef.current;
@@ -892,6 +938,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
     setLoading(true);
     setSaveError("");
     setSaveResult(null);
+    setWorldviewStale(false);
     const localDraft = storeCurrentDraft();
     try {
       // 导入/混合模式下确保 raw_text 始终为最新输入的原文
@@ -899,7 +946,10 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
         mode !== "manual" && importText
           ? { ...data, raw_text: importText, source }
           : { ...data, source };
-      await api.setWorldview(projectId, saveData);
+      const savedWorldview = await api.setWorldview(projectId, {
+        ...saveData,
+        expected_source_checksum: serverSourceChecksumRef.current,
+      });
       if (
         saveGeneration !== saveGenerationRef.current ||
         !submittedScope ||
@@ -914,6 +964,9 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
       if (saveGeneration !== saveGenerationRef.current) return;
       baseFingerprintRef.current =
         fingerprint.status === "available" ? fingerprint.value : null;
+      serverSourceChecksumRef.current = savedWorldview.source_checksum;
+      setServerSourceChecksum(savedWorldview.source_checksum);
+      worldviewExistsRef.current = true;
       serverSnapshotRef.current = JSON.stringify(savedPayload);
       // 重试成功 — 清除旧维护提示和普通错误
       setMaintenanceFailure(null);
@@ -959,6 +1012,14 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
       if (saveGeneration !== saveGenerationRef.current) return;
       if (isProjectWriteFrozenError(e)) {
         setMaintenanceFailure({ error: e, draftStored: localDraft.stored });
+      } else if (e instanceof ApiError && e.code === "WORLDVIEW_SOURCE_STALE") {
+        setMaintenanceFailure(null);
+        setWorldviewStale(true);
+        setSaveError(
+          localDraft.stored
+            ? "服务器上的世界观已更新，本地修改已保留。请重新加载并比较后再保存。"
+            : "服务器上的世界观已更新，当前内容仅保留在页面，请立即复制后再重新加载。"
+        );
       } else {
         // 重试变成普通错误时清除旧维护提示
         setMaintenanceFailure(null);
@@ -1083,6 +1144,135 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
   const isReadOnly = mode === "import" && importResult?.done;
   const showEditor = relationalMode !== true && (mode === "manual" || importResult?.done === true);
 
+  const migrationCategoryLabels: Record<string, string> = {
+    characters: "角色",
+    geography: "地点",
+    factions: "阵营",
+    power_system: "能力体系",
+    history: "历史事件",
+    conflicts: "冲突",
+    special_settings: "其他重要设定",
+  };
+
+  function isMigrationTarget(category: string, index: number): boolean {
+    return migrationTarget?.category === category && migrationTarget.index === index;
+  }
+
+  const migrationTargetEntries = migrationTarget
+    ? (data as unknown as Record<string, unknown[]>)[migrationTarget.category]
+    : null;
+  const migrationTargetExists = Array.isArray(migrationTargetEntries) &&
+    migrationTarget != null && migrationTarget.index < migrationTargetEntries.length &&
+    migrationTargetState === "valid";
+  const migrationSourceUnchanged =
+    JSON.stringify(currentPayloadRef.current) === serverSnapshotRef.current;
+  const migrationCanLocate = migrationTargetExists && migrationSourceUnchanged &&
+    recovery === null && !corruptDraft;
+
+  useEffect(() => {
+    if (!migrationTarget) {
+      setMigrationTargetState("idle");
+      return;
+    }
+    if (scopeLoading || loadedScopeKey !== currentScopeKey) {
+      setMigrationTargetState("loading");
+      return;
+    }
+    if (!serverSourceChecksum) {
+      setMigrationTargetState("invalid");
+      return;
+    }
+    const controller = new AbortController();
+    let active = true;
+    setMigrationTargetState("loading");
+    void api.getLoreMigrationPreview(projectId, controller.signal).then((preview) => {
+      if (!active) return;
+      const current = preview.items.find((item) =>
+        item.legacy_category === migrationTarget.category &&
+        item.legacy_index === migrationTarget.index
+      );
+      const reasonIsEditable = current?.reason_codes.some((reason) =>
+          reason === "missing_name" || reason === "parsed_name_mismatch"
+        ) === true;
+      const exactVersionMatches =
+        preview.storage_mode === "legacy" &&
+        preview.source_checksum === migrationTarget.sourceChecksum &&
+        serverSourceChecksum === migrationTarget.sourceChecksum;
+      setMigrationTargetState(
+        exactVersionMatches && current?.item_fingerprint === migrationTarget.itemFingerprint && reasonIsEditable
+          ? "valid"
+          : "invalid"
+      );
+    }).catch((error) => {
+      if (active && (error as Error).name !== "AbortError") setMigrationTargetState("error");
+    });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [
+    projectId,
+    migrationTarget?.category,
+    migrationTarget?.index,
+    migrationTarget?.itemFingerprint,
+    migrationTarget?.sourceChecksum,
+    serverSourceChecksum,
+    scopeLoading,
+    loadedScopeKey,
+    currentScopeKey,
+    migrationPreviewReloadToken,
+  ]);
+
+  useEffect(() => {
+    const key = migrationTarget
+      ? `${projectId}:${migrationTarget.itemFingerprint}`
+      : migrationRequestInvalid
+        ? `${projectId}:invalid-migration-request`
+        : "";
+    if (!key) {
+      migrationFocusHandledRef.current = "";
+      return;
+    }
+    if (
+      relationalMode !== false || migrationTargetState === "loading" ||
+      scopeLoading || loadedScopeKey !== currentScopeKey || recovery || corruptDraft ||
+      migrationFocusHandledRef.current === key
+    ) return;
+    migrationFocusHandledRef.current = key;
+    migrationNoticeRef.current?.focus();
+  }, [projectId, migrationTarget?.itemFingerprint, migrationRequestInvalid, migrationTargetState, relationalMode, scopeLoading, loadedScopeKey, recovery, corruptDraft]);
+
+  useEffect(() => {
+    if (!saveResult || maintenanceFailure || saveError) return;
+    saveResultRef.current?.focus();
+  }, [saveResult, maintenanceFailure, saveError]);
+
+  useEffect(() => {
+    if (!recovery || !focusRecoveryAfterReloadRef.current) return;
+    focusRecoveryAfterReloadRef.current = false;
+    draftRecoveryContainerRef.current?.focus();
+  }, [recovery]);
+
+  function locateMigrationTarget() {
+    if (!migrationCanLocate || !migrationTarget) return;
+    if (isReadOnly) switchMode("hybrid");
+    requestAnimationFrame(() => {
+      const selector = `[data-migration-target="${migrationTarget.category}:${migrationTarget.index}"]`;
+      const entry = editorRootRef.current?.querySelector<HTMLElement>(selector);
+      const field = entry?.querySelector<HTMLElement>("input, textarea, button");
+      const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+      entry?.scrollIntoView?.({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+      field?.focus();
+    });
+  }
+
+  function reloadProjectVersionAfterStale() {
+    setSaveError("");
+    setWorldviewStale(false);
+    focusRecoveryAfterReloadRef.current = true;
+    void loadWorldview(true);
+  }
+
   // CRUD helpers
   function addCharacter() { setData({ ...data, characters: [...data.characters, { name: "", personality: "", background: "", motivation: "", ability: "", relations: [] }] }); }
   function updateCharacter(i: number, field: keyof Character, value: string) { const c = [...data.characters]; c[i] = { ...c[i], [field]: value }; setData({ ...data, characters: c }); }
@@ -1176,7 +1366,13 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
       )}
 
       {saveResult && !maintenanceFailure && !saveError && (
-        <div className="draft-notice" style={{ borderColor: "var(--gold)", background: "var(--gold-light)" }}>
+        <div
+          ref={saveResultRef}
+          className="draft-notice"
+          style={{ borderColor: "var(--gold)", background: "var(--gold-light)" }}
+          role="status"
+          tabIndex={-1}
+        >
           <h3>世界观已保存</h3>
           <p>
             {saveResult === "saved_clean"
@@ -1198,6 +1394,13 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
               </button>
             </div>
           )}
+          {migrationTarget && onReturnToMigration && saveResult === "saved_clean" && (
+            <div className="draft-notice__actions">
+              <button type="button" className="btn btn-primary" onClick={onReturnToMigration}>
+                返回并重新检查
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1209,9 +1412,9 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => void handleSave()}
+              onClick={() => worldviewStale ? reloadProjectVersionAfterStale() : void handleSave()}
             >
-              重试保存
+              {worldviewStale ? "重新加载项目版本" : "重试保存"}
             </button>
             <button
               type="button"
@@ -1258,13 +1461,15 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
       )}
 
       {recovery && (
-        <DraftRecoveryNotice
-          state={recovery.state}
-          savedAt={new Date(recovery.draft.savedAt).toISOString()}
-          onRestore={restoreDraft}
-          onCopy={() => void copyWorldview(recovery.draft.payload)}
-          onDiscard={discardDraft}
-        />
+        <div ref={draftRecoveryContainerRef} tabIndex={-1}>
+          <DraftRecoveryNotice
+            state={recovery.state}
+            savedAt={new Date(recovery.draft.savedAt).toISOString()}
+            onRestore={restoreDraft}
+            onCopy={() => void copyWorldview(recovery.draft.payload)}
+            onDiscard={discardDraft}
+          />
+        </div>
       )}
 
       {copyFallback !== null && (
@@ -1279,6 +1484,60 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
             readOnly
             onFocus={(event) => event.currentTarget.select()}
           />
+        </div>
+      )}
+
+      {(migrationTarget || migrationRequestInvalid) && loadedScopeKey === currentScopeKey && !scopeLoading && (
+        <div
+          id="worldview-migration-fix-notice"
+          ref={migrationNoticeRef}
+          className="draft-notice worldview-migration-fix"
+          tabIndex={-1}
+          role={migrationTargetState === "invalid" || migrationTargetState === "error" || migrationRequestInvalid ? "alert" : "status"}
+        >
+          <h3>修正旧资料检查项</h3>
+          <p>
+            {migrationRequestInvalid
+              ? "这个修正链接无效或不完整。系统没有定位或修改任何资料，请返回预检重新检查。"
+              : migrationTargetState === "loading" || migrationTargetState === "idle"
+              ? "正在根据最新的已保存资料核对这项检查结果。"
+              : migrationTargetState === "error"
+              ? "暂时无法核对这项资料，系统没有定位或修改任何内容。你可以重试核对或返回预检。"
+              : migrationTargetExists && migrationTarget
+              ? `正在处理：旧世界观 › ${migrationCategoryLabels[migrationTarget.category] ?? "资料"} › 第 ${migrationTarget.index + 1} 项。系统不会替你补写或自动保存。`
+              : "这项资料的位置已经变化。请返回预检重新检查，系统不会按旧位置修改内容。"}
+          </p>
+          {migrationTargetExists && migrationTargetState === "valid" && (
+            <div className="draft-notice__actions">
+              <button type="button" className="btn btn-primary" onClick={locateMigrationTarget} disabled={!migrationCanLocate}>
+                {isReadOnly ? "切换为混合模式并定位" : "定位到这项资料"}
+              </button>
+              {onReturnToMigration && (
+                <button type="button" className="btn btn-secondary" onClick={onReturnToMigration}>
+                  返回迁移预检
+                </button>
+              )}
+            </div>
+          )}
+          {migrationTargetState === "error" && (
+            <div className="draft-notice__actions">
+              <button type="button" className="btn btn-primary" onClick={() => setMigrationPreviewReloadToken((value) => value + 1)}>
+                重试核对
+              </button>
+              {onReturnToMigration && <button type="button" className="btn btn-secondary" onClick={onReturnToMigration}>返回迁移预检</button>}
+            </div>
+          )}
+          {(migrationRequestInvalid || migrationTargetState === "invalid") && onReturnToMigration && (
+            <div className="draft-notice__actions">
+              <button type="button" className="btn btn-primary" onClick={onReturnToMigration}>
+                返回并重新检查
+              </button>
+            </div>
+          )}
+          {(recovery || corruptDraft) && <small>请先处理上方本地草稿，再定位和编辑。</small>}
+          {!recovery && !corruptDraft && migrationTargetState === "valid" && !migrationSourceUnchanged && (
+            <small>当前编辑区已有未保存变更。请先保存或返回预检，系统不会按旧位置继续定位。</small>
+          )}
         </div>
       )}
 
@@ -1451,8 +1710,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           <div className="card">
             <div className="wv-section-title" tabIndex={-1}>角色 ({data.characters.length})</div>
             {data.characters.map((c, i) => (
-              <div key={i} className="wv-entry">
-                <input className="form-input" placeholder="姓名" value={c.name} onChange={(e) => updateCharacter(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`角色${i + 1} 姓名`} />
+              <div key={i} className={`wv-entry ${isMigrationTarget("characters", i) ? "is-migration-target" : ""}`} data-migration-target={`characters:${i}`}>
+                <input className="form-input" placeholder="姓名" value={c.name} onChange={(e) => updateCharacter(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`角色${i + 1} 姓名`} aria-describedby={isMigrationTarget("characters", i) ? "worldview-migration-fix-notice" : undefined} />
                 <input className="form-input" placeholder="性格" value={c.personality} onChange={(e) => updateCharacter(i, "personality", e.target.value)} readOnly={isReadOnly} aria-label={`角色${i + 1} 性格`} />
                 <input className="form-input" placeholder="背景" value={c.background} onChange={(e) => updateCharacter(i, "background", e.target.value)} readOnly={isReadOnly} aria-label={`角色${i + 1} 背景`} />
                 <div style={{ display: "flex", gap: "0.375rem" }}>
@@ -1469,8 +1728,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           <div className="card">
             <div className="wv-section-title" tabIndex={-1}>地理设定 ({data.geography.length})</div>
             {data.geography.map((g, i) => (
-              <div key={i} className="wv-entry">
-                <input className="form-input" placeholder="地名" value={g.name} onChange={(e) => updateGeography(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`地点${i + 1} 名称`} />
+              <div key={i} className={`wv-entry ${isMigrationTarget("geography", i) ? "is-migration-target" : ""}`} data-migration-target={`geography:${i}`}>
+                <input className="form-input" placeholder="地名" value={g.name} onChange={(e) => updateGeography(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`地点${i + 1} 名称`} aria-describedby={isMigrationTarget("geography", i) ? "worldview-migration-fix-notice" : undefined} />
                 <input className="form-input" placeholder="描述" value={g.description} onChange={(e) => updateGeography(i, "description", e.target.value)} readOnly={isReadOnly} aria-label={`地点${i + 1} 描述`} />
                 <input className="form-input" placeholder="重要性" value={g.significance} onChange={(e) => updateGeography(i, "significance", e.target.value)} readOnly={isReadOnly} aria-label={`地点${i + 1} 重要性`} />
                 {!isReadOnly && <button className="btn btn-ghost btn-sm" onClick={() => removeGeography(i)} style={{ color: "var(--red)" }} aria-label={`移除地点 ${i + 1}`}><span aria-hidden="true">✕</span></button>}
@@ -1483,8 +1742,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           <div className="card">
             <div className="wv-section-title" tabIndex={-1}>势力组织 ({data.factions.length})</div>
             {data.factions.map((f, i) => (
-              <div key={i} className="wv-entry">
-                <input className="form-input" placeholder="势力名称" value={f.name} onChange={(e) => updateFaction(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`势力${i + 1} 名称`} />
+              <div key={i} className={`wv-entry ${isMigrationTarget("factions", i) ? "is-migration-target" : ""}`} data-migration-target={`factions:${i}`}>
+                <input className="form-input" placeholder="势力名称" value={f.name} onChange={(e) => updateFaction(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`势力${i + 1} 名称`} aria-describedby={isMigrationTarget("factions", i) ? "worldview-migration-fix-notice" : undefined} />
                 <input className="form-input" placeholder="立场" value={f.stance} onChange={(e) => updateFaction(i, "stance", e.target.value)} readOnly={isReadOnly} aria-label={`势力${i + 1} 立场`} />
                 <input className="form-input" placeholder="实力等级" value={f.power_level} onChange={(e) => updateFaction(i, "power_level", e.target.value)} readOnly={isReadOnly} aria-label={`势力${i + 1} 实力等级`} />
                 {!isReadOnly && <button className="btn btn-ghost btn-sm" onClick={() => removeFaction(i)} style={{ color: "var(--red)" }} aria-label={`移除势力 ${i + 1}`}><span aria-hidden="true">✕</span></button>}
@@ -1497,8 +1756,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           <div className="card">
             <div className="wv-section-title" tabIndex={-1}>力量体系 ({data.power_system.length})</div>
             {data.power_system.map((ps, i) => (
-              <div key={i} className="wv-entry">
-                <input className="form-input" placeholder="体系名称" value={ps.name} onChange={(e) => updatePowerSystem(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`体系${i + 1} 名称`} />
+              <div key={i} className={`wv-entry ${isMigrationTarget("power_system", i) ? "is-migration-target" : ""}`} data-migration-target={`power_system:${i}`}>
+                <input className="form-input" placeholder="体系名称" value={ps.name} onChange={(e) => updatePowerSystem(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`体系${i + 1} 名称`} aria-describedby={isMigrationTarget("power_system", i) ? "worldview-migration-fix-notice" : undefined} />
                 <input className="form-input" placeholder="等级划分" value={ps.levels} onChange={(e) => updatePowerSystem(i, "levels", e.target.value)} readOnly={isReadOnly} aria-label={`体系${i + 1} 等级划分`} />
                 <input className="form-input" placeholder="规则" value={ps.rules} onChange={(e) => updatePowerSystem(i, "rules", e.target.value)} readOnly={isReadOnly} aria-label={`体系${i + 1} 规则`} />
                 <div style={{ display: "flex", gap: "0.375rem" }}>
@@ -1514,8 +1773,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           <div className="card">
             <div className="wv-section-title" tabIndex={-1}>历史事件 ({data.history.length})</div>
             {data.history.map((h, i) => (
-              <div key={i} className="wv-entry">
-                <input className="form-input" placeholder="事件名称" value={h.event} onChange={(e) => updateHistory(i, "event", e.target.value)} readOnly={isReadOnly} aria-label={`事件${i + 1} 名称`} />
+              <div key={i} className={`wv-entry ${isMigrationTarget("history", i) ? "is-migration-target" : ""}`} data-migration-target={`history:${i}`}>
+                <input className="form-input" placeholder="事件名称" value={h.event} onChange={(e) => updateHistory(i, "event", e.target.value)} readOnly={isReadOnly} aria-label={`事件${i + 1} 名称`} aria-describedby={isMigrationTarget("history", i) ? "worldview-migration-fix-notice" : undefined} />
                 <input className="form-input" placeholder="时间" value={h.time} onChange={(e) => updateHistory(i, "time", e.target.value)} readOnly={isReadOnly} aria-label={`事件${i + 1} 时间`} />
                 <input className="form-input" placeholder="描述" value={h.description} onChange={(e) => updateHistory(i, "description", e.target.value)} readOnly={isReadOnly} aria-label={`事件${i + 1} 描述`} />
                 <div style={{ display: "flex", gap: "0.375rem" }}>
@@ -1531,8 +1790,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           <div className="card">
             <div className="wv-section-title" tabIndex={-1}>核心矛盾 ({data.conflicts.length})</div>
             {data.conflicts.map((c, i) => (
-              <div key={i} className="wv-entry">
-                <input className="form-input" placeholder="矛盾名称" value={c.name} onChange={(e) => updateConflict(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`矛盾${i + 1} 名称`} />
+              <div key={i} className={`wv-entry ${isMigrationTarget("conflicts", i) ? "is-migration-target" : ""}`} data-migration-target={`conflicts:${i}`}>
+                <input className="form-input" placeholder="矛盾名称" value={c.name} onChange={(e) => updateConflict(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`矛盾${i + 1} 名称`} aria-describedby={isMigrationTarget("conflicts", i) ? "worldview-migration-fix-notice" : undefined} />
                 <input className="form-input" placeholder="类型" value={c.type} onChange={(e) => updateConflict(i, "type", e.target.value)} readOnly={isReadOnly} aria-label={`矛盾${i + 1} 类型`} />
                 <input className="form-input" placeholder="涉及方" value={c.parties} onChange={(e) => updateConflict(i, "parties", e.target.value)} readOnly={isReadOnly} aria-label={`矛盾${i + 1} 涉及方`} />
                 <div style={{ display: "flex", gap: "0.375rem" }}>
@@ -1549,8 +1808,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           <div className="card">
             <div className="wv-section-title" tabIndex={-1}>特殊设定 ({data.special_settings.length})</div>
             {data.special_settings.map((ss, i) => (
-              <div key={i} className="wv-entry">
-                <input className="form-input" placeholder="设定名称" value={ss.name} onChange={(e) => updateSpecial(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`设定${i + 1} 名称`} />
+              <div key={i} className={`wv-entry ${isMigrationTarget("special_settings", i) ? "is-migration-target" : ""}`} data-migration-target={`special_settings:${i}`}>
+                <input className="form-input" placeholder="设定名称" value={ss.name} onChange={(e) => updateSpecial(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`设定${i + 1} 名称`} aria-describedby={isMigrationTarget("special_settings", i) ? "worldview-migration-fix-notice" : undefined} />
                 <input className="form-input" placeholder="描述" value={ss.description} onChange={(e) => updateSpecial(i, "description", e.target.value)} readOnly={isReadOnly} aria-label={`设定${i + 1} 描述`} />
                 <input className="form-input" placeholder="规则" value={ss.rules} onChange={(e) => updateSpecial(i, "rules", e.target.value)} readOnly={isReadOnly} aria-label={`设定${i + 1} 规则`} />
                 {!isReadOnly && <button className="btn btn-ghost btn-sm" onClick={() => removeSpecial(i)} style={{ color: "var(--red)" }} aria-label={`移除设定 ${i + 1}`}><span aria-hidden="true">✕</span></button>}

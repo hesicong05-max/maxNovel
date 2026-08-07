@@ -7,8 +7,14 @@ import type { Project } from "@/types";
 import ProjectDetail from "./ProjectDetail";
 
 vi.mock("@/components/WorldviewEditor", () => ({
-  default: ({ onComplete }: { onComplete: () => void }) => (
+  default: ({ onComplete, migrationTarget, migrationRequestInvalid }: {
+    onComplete: () => void;
+    migrationTarget?: { category: string; index: number } | null;
+    migrationRequestInvalid?: boolean;
+  }) => (
     <section aria-label="世界观编辑器">
+      {migrationTarget && <span>修正目标 {migrationTarget.category}:{migrationTarget.index}</span>}
+      {migrationRequestInvalid && <span>修正链接无效</span>}
       <button onClick={onComplete}>测试打开设定仓库</button>
     </section>
   ),
@@ -41,7 +47,7 @@ const baseProject: Project = {
   chapter_count: 0,
 };
 
-function renderPage(project: Project) {
+function renderPage(project: Project, path = `/project/${project.id}`) {
   const getProject = vi.fn().mockResolvedValue(project);
   vi.spyOn(apiModule, "api", "get").mockReturnValue({
     ...apiModule.api,
@@ -49,7 +55,7 @@ function renderPage(project: Project) {
   });
 
   render(
-    <MemoryRouter initialEntries={[`/project/${project.id}`]}>
+    <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/project/:id" element={<ProjectDetail />} />
         <Route path="/project/:id/lore" element={<div>设定仓库页面</div>} />
@@ -95,6 +101,30 @@ describe("ProjectDetail outline retirement", () => {
 
     await userEvent.click(screen.getByText("测试返回世界观"));
     expect(await screen.findByLabelText("世界观编辑器")).toBeInTheDocument();
+    expect(screen.queryByLabelText("章节写作器")).not.toBeInTheDocument();
+  });
+
+  it("forces a historical outline project into the requested worldview fix", async () => {
+    renderPage(
+      { ...baseProject, has_outline: true, chapter_count: 3 },
+      `/project/project-1?migration_fix=${encodeURIComponent(
+        `characters:0:${"c".repeat(64)}:${"a".repeat(64)}`
+      )}`
+    );
+
+    expect(await screen.findByLabelText("世界观编辑器")).toBeInTheDocument();
+    expect(screen.getByText("修正目标 characters:0")).toBeInTheDocument();
+    expect(screen.queryByLabelText("章节写作器")).not.toBeInTheDocument();
+  });
+
+  it("keeps an invalid migration fix request in a safe worldview exit state", async () => {
+    renderPage(
+      { ...baseProject, has_outline: true, chapter_count: 3 },
+      "/project/project-1?migration_fix=characters%3A0"
+    );
+
+    expect(await screen.findByLabelText("世界观编辑器")).toBeInTheDocument();
+    expect(screen.getByText("修正链接无效")).toBeInTheDocument();
     expect(screen.queryByLabelText("章节写作器")).not.toBeInTheDocument();
   });
 

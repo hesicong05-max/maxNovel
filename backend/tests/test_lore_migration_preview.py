@@ -54,6 +54,10 @@ def test_preview_is_stable_zero_write_plan_with_dedicated_type_mapping():
     assert [item["planned_element_id"] for item in first["items"]] == [
         item["planned_element_id"] for item in second["items"]
     ]
+    assert [item["item_fingerprint"] for item in first["items"]] == [
+        item["item_fingerprint"] for item in second["items"]
+    ]
+    assert all(len(item["item_fingerprint"]) == 64 for item in first["items"])
     type_by_category = {
         item["legacy_category"]: item["proposed_type_key"]
         for item in first["items"]
@@ -104,6 +108,23 @@ def test_preview_source_checksum_includes_raw_text_used_for_evidence_status():
     worldview.raw_text = "林岚来自另一座城。"
 
     assert migration_preview_source_checksum(worldview) != before
+
+
+def test_preview_item_fingerprint_changes_when_position_value_changes():
+    first = build_migration_preview("project-a", "legacy", _worldview())
+    changed = build_migration_preview(
+        "project-a",
+        "legacy",
+        _worldview(characters=[{"name": "林岚", "personality": "果断"}]),
+    )
+
+    first_character = next(
+        item for item in first["items"] if item["legacy_category"] == "characters"
+    )
+    changed_character = next(
+        item for item in changed["items"] if item["legacy_category"] == "characters"
+    )
+    assert first_character["item_fingerprint"] != changed_character["item_fingerprint"]
 
 
 @pytest.mark.parametrize(

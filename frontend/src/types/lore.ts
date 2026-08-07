@@ -20,6 +20,7 @@ export interface LoreMigrationPreviewItem {
   legacy_category: string;
   legacy_index: number;
   legacy_id: string | null;
+  item_fingerprint: string;
   planned_element_id: string;
   proposed_type_key: string | null;
   name: string;

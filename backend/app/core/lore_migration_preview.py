@@ -83,6 +83,19 @@ def _item_name(category: str, raw: dict[str, Any]) -> str:
     return str(value).strip() if value is not None else ""
 
 
+def migration_preview_item_fingerprint(
+    legacy_category: str,
+    legacy_index: int,
+    legacy_id: str | None,
+    original_value: Any,
+) -> str:
+    """Bind a preview row to its exact position and canonical legacy value."""
+    payload = [legacy_category, legacy_index, legacy_id, _json_value(original_value)]
+    return hashlib.sha256(json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()).hexdigest()
+
+
 def _issue(
     reason_code: str,
     severity: str,
@@ -211,6 +224,9 @@ def build_migration_preview(
                     "legacy_category": category,
                     "legacy_index": index,
                     "legacy_id": legacy_id or None,
+                    "item_fingerprint": migration_preview_item_fingerprint(
+                        category, index, legacy_id or None, raw
+                    ),
                     "planned_element_id": deterministic_element_id(project_id, category, index, legacy_id or None),
                     "proposed_type_key": target_type,
                     "name": name,

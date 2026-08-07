@@ -95,10 +95,20 @@ class WorldviewCreate(BaseModel):
     source: str = "manual"  # manual / imported / hybrid
 
 
+class WorldviewSaveRequest(WorldviewCreate):
+    expected_source_checksum: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+
+
 class WorldviewResponse(WorldviewCreate):
     id: str
     project_id: str
     parsed_elements: list[dict[str, Any]] = Field(default_factory=list)
+    source_checksum: str
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

@@ -859,3 +859,38 @@ describe("API - Lore migration operations", () => {
     });
   });
 });
+
+describe("API - Worldview optimistic save", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("sends the expected source checksum with the complete worldview payload", async () => {
+    const response = {
+      id: "worldview-1",
+      source_checksum: "b".repeat(64),
+      parsed_elements: [],
+    };
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const input = {
+      characters: [],
+      geography: [],
+      factions: [],
+      power_system: [],
+      history: [],
+      conflicts: [],
+      special_settings: [],
+      source: "manual" as const,
+      expected_source_checksum: "a".repeat(64),
+    };
+
+    await api.setWorldview("project-1", input);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/worldview/project-1",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(input) })
+    );
+  });
+});

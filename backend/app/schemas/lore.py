@@ -44,6 +44,9 @@ class LoreMigrationPreviewItem(BaseModel):
     legacy_category: str
     legacy_index: int
     legacy_id: str | None = None
+    item_fingerprint: str = Field(
+        ..., min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$"
+    )
     planned_element_id: str
     proposed_type_key: str | None = None
     name: str

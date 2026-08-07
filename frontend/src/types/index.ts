@@ -94,6 +94,13 @@ export interface WorldviewData {
   source?: WorldviewSource;
 }
 
+export interface WorldviewResponse extends WorldviewData {
+  id: string;
+  parsed_elements: WorldviewElement[];
+  source: WorldviewSource;
+  source_checksum: string;
+}
+
 export type WorldviewSource = "manual" | "imported" | "hybrid";
 
 export interface WorldviewImportResult extends WorldviewData {

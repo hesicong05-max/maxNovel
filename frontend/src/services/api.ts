@@ -18,7 +18,7 @@ import type {
   StreamMessage,
   WordCountConfig,
   WorldviewData,
-  WorldviewElement,
+  WorldviewResponse,
   WorldviewImportResult,
 } from "@/types";
 import type {
@@ -287,11 +287,14 @@ export const api = {
 
   // Worldview
   getWorldview: (projectId: string) =>
-    fetchJSON<WorldviewData & { id: string; parsed_elements: WorldviewElement[]; source: string }>(
+    fetchJSON<WorldviewResponse>(
       `/worldview/${projectId}`
     ),
-  setWorldview: (projectId: string, data: WorldviewData) =>
-    fetchJSON<WorldviewData & { id: string; parsed_elements: WorldviewElement[]; source: string }>(
+  setWorldview: (
+    projectId: string,
+    data: WorldviewData & { expected_source_checksum: string | null }
+  ) =>
+    fetchJSON<WorldviewResponse>(
       `/worldview/${projectId}`,
       { method: "POST", body: JSON.stringify(data) }
     ),
