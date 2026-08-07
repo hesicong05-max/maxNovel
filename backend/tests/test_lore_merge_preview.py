@@ -22,6 +22,7 @@ from tests.test_lore_writes import (
     _create_project,
     _create_relation,
     _create_relational_element,
+    _make_legacy,
 )
 
 
@@ -306,6 +307,7 @@ async def test_preview_obeys_maintenance_and_project_ownership(
     legacy_project_id = await _create_project(
         client, auth_headers, title="legacy preview gate"
     )
+    await _make_legacy(legacy_project_id)
     legacy = await client.post(
         f"/api/projects/{legacy_project_id}/lore/reviews/{suggestion['id']}/merge-preview",
         headers=auth_headers,

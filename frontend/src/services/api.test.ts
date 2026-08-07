@@ -716,3 +716,34 @@ describe("API - Community", () => {
     expect(result.like_count).toBe(42);
   });
 });
+
+describe("API - Lore extraction", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("creates an idempotent source-grounded extraction batch", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: "batch-1", status: "completed" }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    await api.createLoreExtraction("project-1", {
+      idempotency_key: "extract-operation-1",
+      document_text: "林远性格坚韧，目标是守护故乡。",
+      source_kind: "worldview_import",
+      source_ref: "世界观编辑器导入原文",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/projects/project-1/lore/extractions",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          idempotency_key: "extract-operation-1",
+          document_text: "林远性格坚韧，目标是守护故乡。",
+          source_kind: "worldview_import",
+          source_ref: "世界观编辑器导入原文",
+        }),
+      })
+    );
+  });
+});

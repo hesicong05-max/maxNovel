@@ -37,6 +37,7 @@ import type {
   LoreElementStateInput,
   LoreElementUpdateInput,
   LoreElementWriteResponse,
+  LoreExtractionBatch,
   LoreListResponse,
   LoreMergePreviewInput,
   LoreMergePreviewResponse,
@@ -301,6 +302,19 @@ export const api = {
     }
     return resp.json() as Promise<{ text: string; filename: string; char_count: number }>;
   },
+
+  createLoreExtraction: (
+    projectId: string,
+    data: {
+      idempotency_key: string;
+      document_text: string;
+      source_kind: string;
+      source_ref?: string | null;
+    }
+  ) => fetchJSON<LoreExtractionBatch>(
+    `/projects/${projectId}/lore/extractions`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
 
   // Unified lore repository (read-only first slice)
   getLoreOverview: (projectId: string, signal?: AbortSignal) =>

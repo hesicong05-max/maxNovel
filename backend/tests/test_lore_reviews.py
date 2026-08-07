@@ -11,6 +11,7 @@ from tests.test_lore_writes import (
     _create_project,
     _create_relational_element,
     _make_relational,
+    _make_legacy,
 )
 
 
@@ -217,6 +218,7 @@ async def test_review_queue_isolated_and_legacy_scan_fails_closed(
     assert denied.status_code == 403
 
     legacy_id = await _create_project(client, auth_headers, title="兼容项目")
+    await _make_legacy(legacy_id)
     legacy = await client.post(
         f"/api/projects/{legacy_id}/lore/reviews/scan", headers=auth_headers
     )

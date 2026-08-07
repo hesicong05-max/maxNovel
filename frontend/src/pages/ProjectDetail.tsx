@@ -140,6 +140,9 @@ export default function ProjectDetail() {
             await refreshProject();
             navigate(`/project/${project.id}/lore`);
           }}
+          onExtractionComplete={() => {
+            navigate(`/project/${project.id}/lore?scope=review`);
+          }}
           onBack={() => navigate("/")}
         />
       )}

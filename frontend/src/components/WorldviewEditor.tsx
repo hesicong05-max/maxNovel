@@ -20,6 +20,7 @@ interface Props {
   hasWorldview: boolean;
   genre: string;
   onComplete: () => void;
+  onExtractionComplete?: () => void;
   onBack: () => void;
 }
 
@@ -42,6 +43,47 @@ interface WorldviewDraftPayload {
 interface RecoveryCandidate {
   state: DraftRecoveryState;
   draft: DraftEnvelope<WorldviewDraftPayload>;
+}
+
+type ExtractionPhase =
+  | "submitting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "maintenance"
+  | "outcome_unknown";
+
+interface ExtractionDraftPayload {
+  documentText: string;
+  documentHash: string;
+  idempotencyKey: string;
+  phase: ExtractionPhase;
+  batchId: string | null;
+  candidateCount: number | null;
+  errorCode: string | null;
+  errorStatus: number | null;
+  retryable: boolean;
+}
+
+function isExtractionDraftPayload(value: unknown): value is ExtractionDraftPayload {
+  if (!value || typeof value !== "object") return false;
+  const payload = value as Partial<ExtractionDraftPayload>;
+  return (
+    typeof payload.documentText === "string" &&
+    typeof payload.documentHash === "string" && /^[a-f0-9]{64}$/.test(payload.documentHash) &&
+    typeof payload.idempotencyKey === "string" &&
+    ["submitting", "running", "completed", "failed", "maintenance", "outcome_unknown"].includes(String(payload.phase)) &&
+    (payload.batchId === null || typeof payload.batchId === "string") &&
+    (payload.candidateCount === null || typeof payload.candidateCount === "number") &&
+    (payload.errorCode === null || typeof payload.errorCode === "string") &&
+    (payload.errorStatus === null || typeof payload.errorStatus === "number") &&
+    typeof payload.retryable === "boolean"
+  );
+}
+
+function extractionOperationKey(): string {
+  if (globalThis.crypto?.randomUUID) return `extract-${globalThis.crypto.randomUUID()}`;
+  return `extract-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 const EMPTY_WORLDVIEW: WorldviewData = {
@@ -168,7 +210,7 @@ function isWorldviewDraftPayload(value: unknown): value is WorldviewDraftPayload
   );
 }
 
-export default function WorldviewEditor({ projectId, hasWorldview, genre, onComplete, onBack }: Props) {
+export default function WorldviewEditor({ projectId, hasWorldview, genre, onComplete, onExtractionComplete, onBack }: Props) {
   const { user } = useAuth();
   const [mode, setMode] = useState<EditorMode>("manual");
   const [data, setData] = useState<WorldviewData>(EMPTY_WORLDVIEW);
@@ -199,6 +241,13 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
   const [saveError, setSaveError] = useState("");
   const [importError, setImportError] = useState("");
   const [uploadError, setUploadError] = useState("");
+  const [relationalMode, setRelationalMode] = useState<boolean | null>(null);
+  const [loreModeError, setLoreModeError] = useState("");
+  const [loreModeReloadToken, setLoreModeReloadToken] = useState(0);
+  const [extractionDraft, setExtractionDraft] = useState<ExtractionDraftPayload | null>(null);
+  const [extractionNotice, setExtractionNotice] = useState("");
+  const [extractionError, setExtractionError] = useState("");
+  const [extractionCorrupt, setExtractionCorrupt] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const baseFingerprintRef = useRef<string | null>(null);
   const serverSnapshotRef = useRef("");
@@ -212,12 +261,16 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
   const scopeGenerationRef = useRef(0);
   const saveGenerationRef = useRef(0);
   const editorRootRef = useRef<HTMLDivElement>(null);
+  const extractionResultRef = useRef<HTMLDivElement>(null);
   const pendingFocusRef = useRef<(() => HTMLElement | null | undefined) | null>(
     null
   );
 
   const draftScope: DraftScope | null = user
     ? { userId: user.id, projectId, kind: "worldview", objectId: "worldview" }
+    : null;
+  const extractionScope: DraftScope | null = user
+    ? { userId: user.id, projectId, kind: "lore-extraction", objectId: "worldview-import" }
     : null;
   const currentScopeKey = user ? `${user.id}:${projectId}` : `anonymous:${projectId}`;
   currentPayloadRef.current = draftPayload(
@@ -271,6 +324,50 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
       }
     };
   }, [projectId, user?.id]);
+
+  useEffect(() => {
+    let active = true;
+    setRelationalMode(null);
+    setLoreModeError("");
+    void api.getLoreOverview(projectId).then((overview) => {
+      if (active) {
+        const relational = overview.migration_status.storage_mode === "relational";
+        setRelationalMode(relational);
+        if (relational) setMode("import");
+      }
+    }).catch(() => {
+      if (active) {
+        setRelationalMode(null);
+        setLoreModeError("无法确认当前项目的设定仓库模式，已停止 AI 提取以避免写入错误位置。请检查网络后重试页面。");
+      }
+    });
+    return () => { active = false; };
+  }, [projectId, loreModeReloadToken]);
+
+  useEffect(() => {
+    if (relationalMode && mode !== "import") setMode("import");
+  }, [relationalMode, mode]);
+
+  useEffect(() => {
+    setExtractionDraft(null);
+    setExtractionNotice("");
+    setExtractionError("");
+    setExtractionCorrupt(false);
+    if (!extractionScope || scopeLoading) return;
+    const stored = loadDraft<ExtractionDraftPayload>(extractionScope);
+    if ((stored.status === "available" || stored.status === "expired") && isExtractionDraftPayload(stored.draft.payload)) {
+      setExtractionDraft(stored.draft.payload);
+      setImportText(stored.draft.payload.documentText);
+      setExtractionNotice(
+        stored.draft.payload.phase === "completed"
+          ? `上次提取已完成，共 ${stored.draft.payload.candidateCount ?? 0} 项待审核候选。`
+          : "已恢复上次提取任务；请先核对结果，系统不会自动重复调用 AI。"
+      );
+    } else if (stored.status === "corrupt") {
+      setExtractionCorrupt(true);
+      setExtractionError("上次提取状态已损坏。请放弃该状态后重新提取；原文草稿仍由世界观编辑器保留。");
+    }
+  }, [user?.id, projectId, scopeLoading]);
 
   // pagehide / 可靠卸载前同步草稿刷新 — 覆盖输入后立即刷新场景
   useEffect(() => {
@@ -653,6 +750,139 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
     }
   }
 
+  async function handleStrictExtraction(newAttempt = false) {
+    const documentText = importText.trim();
+    if (documentText.length < 10) {
+      setExtractionError("请输入或上传至少 10 个字符的文档内容。");
+      return;
+    }
+    if (!extractionScope) {
+      setExtractionError("登录状态尚未就绪，暂时无法安全保存提取任务。");
+      return;
+    }
+    if (
+      extractionDraft &&
+      extractionDraft.documentText !== documentText &&
+      ["submitting", "running", "maintenance", "outcome_unknown"].includes(extractionDraft.phase)
+    ) {
+      setExtractionError("上次任务的结果尚未确定。请先恢复该任务绑定的原文，再使用同一任务核对结果；系统不会静默换用新任务标识。");
+      return;
+    }
+    const fingerprint = await fingerprintDraftBase({ documentText });
+    if (fingerprint.status !== "available") {
+      setExtractionError("浏览器无法生成原文指纹，已停止提取以避免任务与错误原文绑定。");
+      return;
+    }
+    const canReuse = !newAttempt && extractionDraft?.documentText === documentText && extractionDraft.documentHash === fingerprint.value;
+    const operation: ExtractionDraftPayload = {
+      documentText,
+      documentHash: fingerprint.value,
+      idempotencyKey: canReuse ? extractionDraft.idempotencyKey : extractionOperationKey(),
+      phase: "submitting",
+      batchId: canReuse ? extractionDraft.batchId : null,
+      candidateCount: canReuse ? extractionDraft.candidateCount : null,
+      errorCode: null,
+      errorStatus: null,
+      retryable: false,
+    };
+    const persisted = saveDraft(extractionScope, operation, null);
+    if (persisted.status !== "saved") {
+      setExtractionError("无法在本机保存幂等任务，已停止提取以避免重复调用。请复制原文后检查浏览器存储设置。");
+      return;
+    }
+    setExtractionDraft(operation);
+    setExtractionError("");
+    setExtractionNotice("正在提取独立设定；结果只会进入待审核列表。");
+    setImporting(true);
+    try {
+      const batch = await api.createLoreExtraction(projectId, {
+        idempotency_key: operation.idempotencyKey,
+        document_text: operation.documentText,
+        source_kind: "worldview_import",
+        source_ref: "世界观编辑器导入原文",
+      });
+      const phase: ExtractionPhase = batch.status;
+      const next: ExtractionDraftPayload = {
+        ...operation,
+        phase,
+        batchId: batch.id,
+        candidateCount: batch.candidate_count,
+        errorCode: batch.error_code,
+        errorStatus: null,
+        retryable: batch.retryable,
+      };
+      saveDraft(extractionScope, next, null);
+      setExtractionDraft(next);
+      if (batch.status === "completed" && batch.candidate_count > 0) {
+        setExtractionNotice(`已生成 ${batch.candidate_count} 项待审核候选，尚未成为正式设定。`);
+        onExtractionComplete ? onExtractionComplete() : onComplete();
+      } else if (batch.status === "completed") {
+        setExtractionNotice("原文中未识别到可确认的独立设定。可修改原文重新提取，或前往设定仓库手动创建。");
+        requestAnimationFrame(() => extractionResultRef.current?.focus());
+      } else if (batch.status === "running") {
+        setExtractionNotice("提取仍在处理中。请稍后使用同一任务核对结果，不会重复调用 AI。");
+      } else {
+        setExtractionError(batch.error_message || "本次提取未完成；原文和任务状态已保留。");
+      }
+    } catch (error) {
+      const apiError = error instanceof ApiError ? error : null;
+      const phase: ExtractionPhase = apiError?.status === 503
+        ? "maintenance"
+        : apiError?.status === 409
+          ? "failed"
+        : apiError && apiError.status >= 500
+          ? "outcome_unknown"
+          : apiError
+            ? "failed"
+            : "outcome_unknown";
+      const next: ExtractionDraftPayload = {
+        ...operation,
+        phase,
+        errorCode: apiError?.code ?? null,
+        errorStatus: apiError?.status ?? null,
+        retryable: apiError?.retryable === true,
+      };
+      saveDraft(extractionScope, next, null);
+      setExtractionDraft(next);
+      if (apiError?.status === 413) {
+        setExtractionError("原文超过当前 20,000 字提取上限，内容已完整保留；请缩短后明确发起新提取，系统不会静默截断。");
+      } else if (apiError?.status === 503) {
+        setExtractionError("系统正在维护，提取任务和原文已保留。维护结束后请使用同一任务重试提取。");
+      } else if (apiError?.status === 409) {
+        setExtractionError("任务标识与原文不一致，已停止操作。请恢复原文核对，或明确放弃后重新提取。");
+      } else if (phase === "outcome_unknown") {
+        setExtractionError("请求结果尚不确定，任务和原文已保留。请使用同一任务核对结果，不要重新提交。");
+      } else if (apiError) {
+        setExtractionError(apiError.detail || "提取失败，原文已保留。");
+      } else {
+        setExtractionError("网络中断，结果尚不确定。请使用同一任务核对结果，不要重新提交。");
+      }
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  function abandonExtraction() {
+    if (!extractionScope) return;
+    if (!window.confirm("确定放弃上次提取任务状态吗？原文会保留，但之后重新提取将使用新的任务标识。")) return;
+    const cleared = clearDraft(extractionScope);
+    if (cleared.status === "unavailable") {
+      setExtractionError("无法清除本机任务状态，已保留当前任务以避免重复调用。");
+      return;
+    }
+    setExtractionDraft(null);
+    setExtractionCorrupt(false);
+    setExtractionNotice("已放弃上次任务状态，原文仍保留在编辑器中。");
+    setExtractionError("");
+  }
+
+  function restoreExtractionSource() {
+    if (!extractionDraft) return;
+    setImportText(extractionDraft.documentText);
+    setExtractionError("");
+    setExtractionNotice("已恢复上次任务绑定的原文，可使用同一任务核对结果。");
+  }
+
   async function handleSave() {
     if (recovery) return;
     const saveGeneration = ++saveGenerationRef.current;
@@ -851,7 +1081,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
   }
 
   const isReadOnly = mode === "import" && importResult?.done;
-  const showEditor = mode === "manual" || importResult?.done === true;
+  const showEditor = relationalMode !== true && (mode === "manual" || importResult?.done === true);
 
   // CRUD helpers
   function addCharacter() { setData({ ...data, characters: [...data.characters, { name: "", personality: "", background: "", motivation: "", ability: "", relations: [] }] }); }
@@ -881,6 +1111,51 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
     { key: "import" as const, label: "导入文档", desc: "上传/粘贴文本，AI 自动提取" },
     { key: "hybrid" as const, label: "混合模式", desc: "导入后可手动追加修改" },
   ];
+
+  if (
+    relationalMode === null &&
+    !scopeLoading &&
+    loadedScopeKey === currentScopeKey
+  ) {
+    return (
+      <div ref={editorRootRef}>
+        <button className="btn-back" onClick={handleBack}>← 返回项目详情</button>
+        <div className="card empty-state" role={loreModeError ? "alert" : "status"} aria-busy={!loreModeError}>
+          <h2>{loreModeError ? "无法确认设定仓库模式" : "正在确认设定仓库模式"}</h2>
+          <p>{loreModeError || "确认完成前不会显示旧编辑流程，也不会调用 AI。"}</p>
+          {loreModeError && <button className="btn btn-primary" type="button" onClick={() => setLoreModeReloadToken((value) => value + 1)}>重新确认仓库模式</button>}
+        </div>
+      </div>
+    );
+  }
+
+  const extractionSourceMatches = extractionDraft?.documentText === importText.trim();
+  const extractionUncertain = extractionDraft != null && ["submitting", "running", "maintenance", "outcome_unknown"].includes(extractionDraft.phase);
+  const extractionCanAbandon = extractionCorrupt || extractionDraft?.phase === "completed" || extractionDraft?.phase === "failed";
+  const extractionCanStartAgain = extractionDraft?.phase === "failed" && (
+    extractionDraft.retryable || extractionDraft.errorStatus === 413
+  );
+  const extractionPrimaryLabel = extractionDraft?.phase === "completed"
+    ? extractionDraft.candidateCount && extractionDraft.candidateCount > 0
+      ? "前往待审核设定"
+      : "前往仓库手动创建"
+    : extractionDraft?.phase === "failed"
+      ? "本次提取失败"
+      : extractionDraft?.phase === "maintenance"
+        ? "维护结束后重试提取"
+        : extractionDraft && extractionSourceMatches
+          ? "核对上次提取结果"
+          : "提取为待审核设定";
+
+  function handleExtractionPrimary() {
+    if (extractionDraft?.phase === "completed") {
+      extractionDraft.candidateCount && extractionDraft.candidateCount > 0
+        ? (onExtractionComplete ? onExtractionComplete() : onComplete())
+        : onComplete();
+      return;
+    }
+    void handleStrictExtraction(false);
+  }
 
   return (
     <div ref={editorRootRef}>
@@ -1047,7 +1322,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
       <div className="card">
         <div className="wv-section-title">世界观创建方式</div>
         <div style={{ display: "flex", gap: "0.625rem", flexWrap: "wrap" }}>
-          {MODES.map((m) => (
+          {(relationalMode ? MODES.filter((item) => item.key === "import") : MODES).map((m) => (
             <button
               key={m.key}
               className="btn"
@@ -1075,7 +1350,11 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
         <div className="card">
           <div className="wv-section-title">导入世界观文档</div>
           <p className="form-hint" style={{ marginBottom: "0.625rem" }}>
-            粘贴或上传包含世界观设定的文档（支持 .txt / .md / .doc / .docx），AI 将自动提取角色、地理、势力、体系等结构化要素。
+            {relationalMode === null
+              ? "正在确认当前项目的设定仓库模式；确认完成前不会调用 AI。"
+              : relationalMode
+              ? "粘贴或上传世界观原文。AI 只生成逐项待审核候选，不会自动写入正式设定；你需要逐项接纳或拒绝。"
+              : "粘贴或上传包含世界观设定的文档（支持 .txt / .md / .doc / .docx）。当前兼容项目会先填充旧世界观表单，不会自动同步正式设定仓库。"}
           </p>
           <textarea
             className="form-textarea worldview-import-text"
@@ -1098,18 +1377,45 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
             disabled={importing}
             aria-label="导入世界观文档原文"
           />
-          <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.625rem", alignItems: "center", flexWrap: "wrap" }}>
+          <div className="lore-candidate-actions">
             <input ref={fileInputRef} type="file" accept=".txt,.md,.markdown,.doc,.docx" onChange={handleFileUpload} style={{ display: "none" }} />
             <button className="btn" onClick={() => fileInputRef.current?.click()} disabled={importing}>
               {importing ? "解析文件中..." : "上传文件"}
             </button>
-            <button className="btn btn-primary" onClick={handleImport} disabled={importing || !importText.trim()}>
-              {importing ? "AI 解析中..." : "开始导入解析"}
+            <button
+              className="btn btn-primary"
+              onClick={() => relationalMode ? handleExtractionPrimary() : void handleImport()}
+              disabled={
+                importing ||
+                extractionCorrupt ||
+                (extractionDraft?.phase !== "completed" && importText.trim().length < 10) ||
+                extractionDraft?.phase === "failed"
+              }
+            >
+              {importing ? "AI 提取中..." : relationalMode ? extractionPrimaryLabel : "兼容解析并填充表单"}
             </button>
-            {importResult?.done && (
+            {relationalMode && extractionCanStartAgain && (
+              <button className="btn btn-secondary" type="button" disabled={importing || (extractionDraft?.errorStatus === 413 && extractionSourceMatches)} onClick={() => void handleStrictExtraction(true)}>{extractionDraft?.errorStatus === 413 ? "修改后重新提取" : "明确重新提取"}</button>
+            )}
+            {relationalMode && extractionUncertain && !extractionSourceMatches && (
+              <button className="btn btn-secondary" type="button" disabled={importing} onClick={restoreExtractionSource}>恢复上次任务原文</button>
+            )}
+            {relationalMode && extractionCanAbandon && (
+              <button className="btn btn-secondary" type="button" disabled={importing} onClick={abandonExtraction}>放弃任务状态</button>
+            )}
+            {!relationalMode && importResult?.done && (
               <span className="tag tag-gold" style={{ fontWeight: 600 }}>已提取 {importResult.count} 个要素</span>
             )}
           </div>
+          {relationalMode && extractionNotice && (
+            <div ref={extractionResultRef} tabIndex={-1} role="status" className="draft-notice" style={{ marginTop: "0.625rem" }}><p>{extractionNotice}</p></div>
+          )}
+          {relationalMode && extractionError && (
+            <div role="alert" className="draft-notice draft-notice--maintenance" style={{ marginTop: "0.625rem" }}><p>{extractionError}</p></div>
+          )}
+          {loreModeError && (
+            <div role="alert" className="draft-notice draft-notice--maintenance" style={{ marginTop: "0.625rem" }}><p>{loreModeError}</p></div>
+          )}
           {mode === "hybrid" && importResult?.done && (
             <div style={{ marginTop: "0.625rem", padding: "0.5rem 0.75rem", background: "var(--gold-light)", borderRadius: "var(--r-md)", fontSize: "12px", color: "var(--gold-dark)", borderLeft: "3px solid var(--gold)" }}>
               混合模式已激活 — 下方表单已填充提取的要素，你可以自由编辑、添加或删除任意内容

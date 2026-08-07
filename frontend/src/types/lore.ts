@@ -91,6 +91,28 @@ export interface LoreOverview {
   count_definitions: Record<string, Record<string, unknown>>;
 }
 
+export interface LoreExtractionBatch {
+  id: string;
+  project_id: string;
+  status: "running" | "completed" | "failed" | "outcome_unknown";
+  source_kind: string;
+  source_ref: string | null;
+  source_hash: string;
+  source_preserved: boolean;
+  extractor_version: string;
+  model_name: string | null;
+  candidate_count: number;
+  pending_review_count: number;
+  accepted_count: number;
+  rejected_count: number;
+  failed_count: number;
+  retryable: boolean;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface LoreElementListItem {
   id: string;
   type: { key: string; display_name: string };

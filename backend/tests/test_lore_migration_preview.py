@@ -114,7 +114,16 @@ async def _create_project(client, headers):
         },
     )
     assert response.status_code == 200
-    return response.json()["id"]
+    project_id = response.json()["id"]
+    from sqlalchemy import update
+    from app.models.project import Project
+    from tests.conftest import TestSessionLocal
+    async with TestSessionLocal() as session:
+        await session.execute(
+            update(Project).where(Project.id == project_id).values(lore_storage_mode="legacy")
+        )
+        await session.commit()
+    return project_id
 
 
 async def _set_worldview(client, headers, project_id):

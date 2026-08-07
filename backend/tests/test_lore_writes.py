@@ -63,6 +63,20 @@ async def _make_relational(client, headers, project_id):
         await session.commit()
 
 
+async def _make_legacy(project_id):
+    """Explicitly create a compatibility-mode fixture after DEV-015A."""
+    from tests.conftest import TestSessionLocal
+    from sqlalchemy import update
+
+    async with TestSessionLocal() as session:
+        await session.execute(
+            update(Project)
+            .where(Project.id == project_id)
+            .values(lore_storage_mode="legacy")
+        )
+        await session.commit()
+
+
 async def _create_relational_element(
     client, headers, project_id, **kwargs
 ):
@@ -173,12 +187,25 @@ async def test_create_returns_404_for_missing_project(
 
 
 @pytest.mark.usefixtures("clean_db")
+async def test_new_projects_start_with_relational_lore(client, auth_headers):
+    project_id = await _create_project(client, auth_headers)
+    overview = await client.get(
+        f"/api/projects/{project_id}/lore/overview", headers=auth_headers
+    )
+    assert overview.status_code == 200
+    data = overview.json()
+    assert data["migration_status"]["storage_mode"] == "relational"
+    assert data["capabilities"]["formal_create"] is True
+    assert data["capabilities"]["candidate_accept"] is True
+
+
+@pytest.mark.usefixtures("clean_db")
 async def test_legacy_project_writes_return_409(client, auth_headers):
     """Legacy mode projects must not allow relational writes."""
     from tests.conftest import TestSessionLocal
 
     project_id = await _create_project(client, auth_headers)
-    # Project defaults to "legacy" — no _make_relational call
+    await _make_legacy(project_id)
 
     # Verify legacy mode
     async with TestSessionLocal() as session:
@@ -216,6 +243,7 @@ async def test_legacy_write_does_not_mutate_worldview(client, auth_headers):
     from tests.conftest import TestSessionLocal
 
     project_id = await _create_project(client, auth_headers)
+    await _make_legacy(project_id)
 
     # Set legacy worldview
     worldview_set = await client.post(

@@ -952,6 +952,44 @@ describe("LoreRepositoryPage", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("focuses the review heading after the initial review list loads", async () => {
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn(),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: vi.fn().mockResolvedValue(readyCandidateResponse()),
+    });
+
+    renderPage("/project/project-1/lore?scope=review");
+
+    const heading = await screen.findByRole("heading", { level: 2, name: "待审核提取" });
+    await waitFor(() => expect(heading).toHaveFocus());
+  });
+
+  it("focuses review after a scope change but does not steal focus on review filters", async () => {
+    const listCandidates = vi.fn().mockResolvedValue(readyCandidateResponse());
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn().mockResolvedValue(formalResponse()),
+      getLoreElement: vi.fn(),
+      listLoreCandidates: listCandidates,
+    });
+    renderPage();
+    await screen.findByRole("heading", { level: 2, name: "正式设定" });
+
+    const scopeNavigation = screen.getByRole("navigation", { name: "设定范围" });
+    await userEvent.click(within(scopeNavigation).getByRole("button", { name: "待审核提取" }));
+    const reviewHeading = await screen.findByRole("heading", { level: 2, name: "待审核提取" });
+    await waitFor(() => expect(reviewHeading).toHaveFocus());
+
+    await userEvent.type(screen.getByRole("textbox", { name: "搜索名称或摘要" }), "寒川");
+    await userEvent.click(screen.getByRole("button", { name: "搜索" }));
+    await waitFor(() => expect(listCandidates).toHaveBeenCalledTimes(2));
+    expect(reviewHeading).not.toHaveFocus();
+  });
+
   it("edits a candidate with the authoritative schema and current revision", async () => {
     const updated = {
       ...readyCandidateResponse().items[0],

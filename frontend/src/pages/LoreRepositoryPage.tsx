@@ -182,6 +182,8 @@ export default function LoreRepositoryPage() {
   const detailRef = useRef<HTMLElement | null>(null);
   const candidateCardRefs = useRef(new Map<string, HTMLButtonElement>());
   const listHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const previousListScopeRef = useRef<Scope | null>(null);
+  const focusReviewHeadingAfterLoadRef = useRef(false);
   const nextCandidateAfterMutation = useRef<string | null>(null);
   const focusAfterMutation = useRef(false);
   const nextFormalAfterMutation = useRef<string | null>(null);
@@ -324,6 +326,10 @@ export default function LoreRepositoryPage() {
 
   useEffect(() => {
     if (!id) return;
+    if (scope !== previousListScopeRef.current) {
+      focusReviewHeadingAfterLoadRef.current = scope === "review";
+      previousListScopeRef.current = scope;
+    }
     const controller = new AbortController();
     const sequence = ++overviewSequence.current;
     setOverview(null);
@@ -412,7 +418,10 @@ export default function LoreRepositoryPage() {
             (target ?? listHeadingRef.current)?.focus();
           });
           focusAfterMutation.current = false;
+        } else if (focusReviewHeadingAfterLoadRef.current) {
+          requestAnimationFrame(() => listHeadingRef.current?.focus());
         }
+        focusReviewHeadingAfterLoadRef.current = false;
         nextCandidateAfterMutation.current = null;
       }
     }).catch((error) => {
@@ -471,6 +480,9 @@ export default function LoreRepositoryPage() {
 
   function changeScope(nextScope: Scope, extra: Record<string, string> = {}) {
     if (!confirmDiscardDrafts()) return;
+    if (nextScope === "review" && scope !== "review") {
+      focusReviewHeadingAfterLoadRef.current = true;
+    }
     setRecoveryNotice("");
     clearSelection(true);
     const next = new URLSearchParams({ scope: nextScope, ...extra });

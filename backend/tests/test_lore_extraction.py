@@ -698,7 +698,15 @@ async def test_candidate_edit_preserves_evidence_and_creates_revision(
 
 @pytest.mark.usefixtures("clean_db")
 async def test_accept_requires_relational_mode(client, auth_headers, monkeypatch):
+    from sqlalchemy import update
+    from tests.conftest import TestSessionLocal
+
     project_id = await _create_project(client, auth_headers)
+    async with TestSessionLocal() as session:
+        await session.execute(
+            update(Project).where(Project.id == project_id).values(lore_storage_mode="legacy")
+        )
+        await session.commit()
     monkeypatch.setattr(
         llm_client,
         "chat_once",
@@ -1284,9 +1292,9 @@ async def test_project_candidate_inbox_filters_pages_and_reports_overview(
     assert overview.json()["confirmed_active"] == 0
     assert overview.json()["pending_review"] == 3
     assert overview.json()["needs_attention"] == attention.json()["total"]
-    assert overview.json()["capabilities"]["candidate_accept"] is False
-    assert overview.json()["capabilities"]["formal_create"] is False
-    assert overview.json()["capabilities"]["formal_conflict_tracking"] is False
+    assert overview.json()["capabilities"]["candidate_accept"] is True
+    assert overview.json()["capabilities"]["formal_create"] is True
+    assert overview.json()["capabilities"]["formal_conflict_tracking"] is True
 
     other_project = await _create_project(client, auth_headers, title="其他候选项目")
     mismatched = await client.get(
