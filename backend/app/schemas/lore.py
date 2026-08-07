@@ -90,6 +90,49 @@ class LoreMigrationPreviewResponse(BaseModel):
     issues: list[LoreMigrationPreviewIssue] = Field(default_factory=list)
 
 
+class LoreMigrationCommitInput(BaseModel):
+    operation_key: str = Field(
+        ...,
+        min_length=16,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    preview_schema_version: int = Field(..., ge=1)
+    mapping_version: int = Field(..., ge=1)
+    expected_source_checksum: str = Field(
+        ...,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    expected_semantic_result_checksum: str = Field(
+        ...,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    confirm_legacy_retained_no_automatic_rollback: Literal[True]
+
+
+class LoreMigrationOperationResponse(BaseModel):
+    id: str
+    project_id: str
+    operation_key: str
+    status: Literal["validating", "ready", "failed"]
+    source_checksum: str
+    preview_schema_version: int
+    mapping_version: int
+    semantic_result_checksum: str
+    result_checksum: str | None = None
+    migration_id: str | None = None
+    error_code: str | None = None
+    counts: dict[str, Any] = Field(default_factory=dict)
+    started_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+    replayed: bool = False
+
+
 class LoreElementListItem(BaseModel):
     id: str
     type: LoreTypeSummary

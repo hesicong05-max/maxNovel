@@ -20,7 +20,8 @@ from app.core.maintenance import (
 from app.core.project_files import save_worldview_file
 from app.core.worldview_parser import worldview_parser
 from app.database import get_db
-from app.models.project import ProjectStatus, Worldview
+from app.models.lore import ProjectLoreMigrationOperation
+from app.models.project import Project, ProjectStatus, Worldview
 from app.schemas.models import (
     WorldviewCreate,
     WorldviewImportRequest,
@@ -262,36 +263,59 @@ async def set_worldview(
     current_user: Annotated[User, Depends(get_current_user)],
     _write_gate: Annotated[None, Depends(require_project_writes_available)],
 ):
-    project = await get_project_for_owner(project_id, current_user, db)
     ensure_project_writes_available()
 
-    # Delete existing worldview if any (query directly to avoid lazy loading)
-    wv_result = await db.execute(
-        select(Worldview).where(Worldview.project_id == project_id)
+    # Migration and legacy saves share the same lock order.  This prevents an
+    # already-started save from replacing the retained source after a migration
+    # has materialized or switched the project to relational storage.
+    project = await db.scalar(
+        select(Project).where(Project.id == project_id).with_for_update()
     )
-    existing_wv = wv_result.scalar_one_or_none()
-    if existing_wv:
-        await db.delete(existing_wv)
-        await db.flush()
+    if project is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    if project.owner_id is None or project.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权操作此项目")
+    protected_migration = await db.scalar(
+        select(ProjectLoreMigrationOperation).where(
+            ProjectLoreMigrationOperation.project_id == project_id,
+            ProjectLoreMigrationOperation.status.in_(("validating", "ready")),
+        )
+    )
+    if project.lore_storage_mode == "migrating" or protected_migration is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "WORLDVIEW_SOURCE_READ_ONLY",
+                "message": "此项目的旧世界观已进入升级流程，仅可作为历史来源查看。",
+                "retryable": False,
+            },
+        )
+
+    existing_wv = await db.scalar(
+        select(Worldview)
+        .where(Worldview.project_id == project_id)
+        .with_for_update()
+    )
 
     # Parse worldview into elements
     worldview_dict = data.model_dump()
     elements = worldview_parser.parse(worldview_dict)
 
-    worldview = Worldview(
-        project_id=project_id,
-        characters=worldview_dict["characters"],
-        geography=worldview_dict["geography"],
-        factions=worldview_dict["factions"],
-        power_system=worldview_dict["power_system"],
-        history=worldview_dict["history"],
-        conflicts=worldview_dict["conflicts"],
-        special_settings=worldview_dict["special_settings"],
-        raw_text=data.raw_text,
-        source=data.source,
-        parsed_elements=elements,
-    )
-    db.add(worldview)
+    if existing_wv is None:
+        worldview = Worldview(project_id=project_id)
+        db.add(worldview)
+    else:
+        worldview = existing_wv
+    worldview.characters = worldview_dict["characters"]
+    worldview.geography = worldview_dict["geography"]
+    worldview.factions = worldview_dict["factions"]
+    worldview.power_system = worldview_dict["power_system"]
+    worldview.history = worldview_dict["history"]
+    worldview.conflicts = worldview_dict["conflicts"]
+    worldview.special_settings = worldview_dict["special_settings"]
+    worldview.raw_text = data.raw_text
+    worldview.source = data.source
+    worldview.parsed_elements = elements
 
     project.status = ProjectStatus.WORLDVIEW_SET
     ensure_project_writes_available()

@@ -28,6 +28,7 @@ from app.models.lore import (  # noqa: F401
     LoreReviewSuggestionCreateOperation,
     LoreReviewSuggestionEvent,
     ProjectLoreMigration,
+    ProjectLoreMigrationOperation,
     SettingElement,
     SettingType,
     SettingTypeRevision,

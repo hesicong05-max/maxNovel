@@ -9,7 +9,7 @@ from collections import Counter
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +30,12 @@ from app.core.lore_migration import (
 from app.core.lore_migration_preview import (
     build_migration_preview,
     migration_preview_source_checksum,
+)
+from app.core.lore_migration_commit import (
+    LoreMigrationCommitError,
+    build_migration_operation_response,
+    commit_lore_migration,
+    find_migration_operation,
 )
 from app.core.lore_merge_commit import (
     build_merge_operation_response,
@@ -88,6 +94,8 @@ from app.schemas.lore import (
     LoreFieldDefinition,
     LoreListResponse,
     LoreMigrationStatus,
+    LoreMigrationCommitInput,
+    LoreMigrationOperationResponse,
     LoreManualReviewCreateInput,
     LoreManualReviewCreateResponse,
     LoreMigrationPreviewResponse,
@@ -296,20 +304,23 @@ async def _build_read_only_migration_preview(
 
 def _migration_status(project: Any, projection: LoreProjection) -> LoreMigrationStatus:
     validation = validate_projection(projection)
-    if not projection.elements:
+    storage_mode = project.lore_storage_mode or "legacy"
+    if storage_mode == "migrating":
+        state = "validating"
+    elif not projection.elements:
         state = "not_started"
     elif validation["valid"]:
         state = "ready"
     else:
         state = "failed"
     return LoreMigrationStatus(
-        storage_mode=project.lore_storage_mode or "legacy",
+        storage_mode=storage_mode,
         state=state,
         read_only=True,
         processed_count=len(projection.elements),
         total_count=len(projection.elements),
         error_category=None if validation["valid"] else "legacy_validation",
-        can_retry=False,
+        can_retry=storage_mode == "migrating",
     )
 
 
@@ -673,6 +684,66 @@ async def get_lore_migration_preview(
 ):
     """Return a versioned dry-run report; never create or update Lore rows."""
     return await _build_read_only_migration_preview(project_id, current_user)
+
+
+@router.post(
+    "/migration-operations",
+    response_model=LoreMigrationOperationResponse,
+)
+async def create_lore_migration_operation(
+    project_id: str,
+    body: LoreMigrationCommitInput,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Create or resume one owner-confirmed, maintenance-gated upgrade."""
+    await get_project_for_owner(project_id, current_user, db)
+    try:
+        return await commit_lore_migration(
+            database_module.async_session,
+            project_id,
+            current_user.id,
+            body,
+        )
+    except LoreMigrationCommitError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.get(
+    "/migration-operations/by-key/{operation_key}",
+    response_model=LoreMigrationOperationResponse,
+)
+async def get_lore_migration_operation_by_key(
+    project_id: str,
+    operation_key: Annotated[
+        str,
+        Path(
+            min_length=16,
+            max_length=128,
+            pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        ),
+    ],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Resolve an unknown client outcome without creating a new operation."""
+    await get_project_for_owner(project_id, current_user, db)
+    operation = await find_migration_operation(
+        db,
+        project_id=project_id,
+        user_id=current_user.id,
+        operation_key=operation_key,
+    )
+    if operation is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "LORE_MIGRATION_OPERATION_NOT_FOUND",
+                "message": "未找到该升级操作，请核对原操作标识。",
+                "retryable": False,
+            },
+        )
+    return build_migration_operation_response(operation, replayed=True)
 
 
 @router.get("/elements", response_model=LoreListResponse)

@@ -236,6 +236,8 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
             "lore_review_suggestion_events",
             "lore_merge_operations",
             "lore_merge_relation_actions",
+            "lore_review_suggestion_create_operations",
+            "project_lore_migration_operations",
         }.issubset(tables)
         project_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(projects)")
@@ -366,6 +368,14 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
             "fk_lore_merge_relation_action_retained_relation"
             in table_sql["lore_merge_relation_actions"]
         )
+        assert (
+            "uq_project_lore_migration_operation_key"
+            in table_sql["project_lore_migration_operations"]
+        )
+        assert (
+            "ck_project_lore_migration_operation_status"
+            in table_sql["project_lore_migration_operations"]
+        )
         indexes = {
             row[0]
             for row in connection.execute(
@@ -380,6 +390,7 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
         assert "ix_setting_elements_merged_into_element_id" in indexes
         assert "ix_lore_merge_operations_project_created" in indexes
         assert "ix_lore_merge_relation_actions_operation" in indexes
+        assert "ix_project_lore_migration_operations_project_created" in indexes
 
     _run_alembic(backend_dir, database_url, "downgrade", "a1d3c7e9f002")
     with sqlite3.connect(database_path) as connection:
@@ -398,6 +409,8 @@ def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_pa
         assert "lore_review_suggestion_events" not in tables
         assert "lore_merge_operations" not in tables
         assert "lore_merge_relation_actions" not in tables
+        assert "lore_review_suggestion_create_operations" not in tables
+        assert "project_lore_migration_operations" not in tables
         table_sql = {
             name: sql or ""
             for name, sql in connection.execute(

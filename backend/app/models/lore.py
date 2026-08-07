@@ -342,6 +342,69 @@ class ProjectLoreMigration(Base):
     completed_at = Column(DateTime, nullable=True)
 
 
+class ProjectLoreMigrationOperation(Base):
+    """Durable exactly-once receipt for one legacy-to-relational upgrade."""
+
+    __tablename__ = "project_lore_migration_operations"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "requested_by",
+            "operation_key",
+            name="uq_project_lore_migration_operation_key",
+        ),
+        CheckConstraint(
+            "status IN ('validating', 'ready', 'failed')",
+            name="ck_project_lore_migration_operation_status",
+        ),
+        Index(
+            "ix_project_lore_migration_operations_project_created",
+            "project_id",
+            "created_at",
+            "id",
+        ),
+    )
+
+    id = Column(String(32), primary_key=True, default=gen_id)
+    project_id = Column(
+        String(32),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    requested_by = Column(
+        String(32),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    operation_key = Column(String(128), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    status = Column(String(20), nullable=False, default="validating")
+    source_worldview_id = Column(
+        String(32),
+        ForeignKey("worldviews.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_checksum = Column(String(64), nullable=False)
+    preview_schema_version = Column(Integer, nullable=False)
+    mapping_version = Column(Integer, nullable=False)
+    semantic_result_checksum = Column(String(64), nullable=False)
+    result_checksum = Column(String(64), nullable=True)
+    migration_id = Column(
+        String(32),
+        ForeignKey("project_lore_migrations.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    error_code = Column(String(100), nullable=True)
+    counts = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+
 class LegacyElementMap(Base):
     __tablename__ = "legacy_element_maps"
     __table_args__ = (
