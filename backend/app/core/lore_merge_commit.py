@@ -476,6 +476,10 @@ async def commit_lore_merge(
         for element_id in endpoint_ids
     }
     impact_summary = {
+        "element_names": {
+            "survivor": fresh_preview.survivor.name,
+            "merged": fresh_preview.merged.name,
+        },
         "type_anchor": {
             "type_id": setting_type.id,
             "status": setting_type.status,

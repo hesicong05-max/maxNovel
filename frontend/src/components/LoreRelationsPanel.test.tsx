@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "@/services/api";
@@ -165,6 +165,15 @@ describe("LoreRelationsPanel", () => {
   });
 
   it("creates a relation with endpoint versions and the backend catalog key", async () => {
+    const user = userEvent.setup();
+    const search = vi.fn().mockResolvedValue({
+      items: [target], next_cursor: null, has_more: false, total: 1,
+      facets: {
+        types: [], confirmation_statuses: [], sources: [],
+        lifecycle_statuses: [], enabled_statuses: [], relation_statuses: [],
+      },
+      migration_status: { storage_mode: "relational", state: "ready", read_only: false },
+    });
     const create = vi.fn().mockImplementation((
       _projectId: string,
       _elementId: string,
@@ -173,13 +182,15 @@ describe("LoreRelationsPanel", () => {
     vi.spyOn(apiModule, "api", "get").mockReturnValue({
       ...apiModule.api,
       createLoreRelation: create,
+      listLoreElements: search,
     });
     renderPanel();
 
-    await userEvent.click(await screen.findByRole("button", { name: "添加关系" }));
-    await userEvent.type(screen.getByRole("searchbox", { name: "搜索目标设定" }), "星盟");
-    await userEvent.click(await screen.findByRole("button", { name: /星盟.*阵营/ }));
-    await userEvent.click(screen.getByRole("button", { name: "创建关系" }));
+    await user.click(await screen.findByRole("button", { name: "添加关系" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索目标设定" }), { target: { value: "星盟" } });
+    await waitFor(() => expect(search).toHaveBeenCalled(), { timeout: 3000 });
+    await user.click(await screen.findByRole("button", { name: /星盟.*阵营/ }, { timeout: 3000 }));
+    await user.click(screen.getByRole("button", { name: "创建关系" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     const [, sourceId, input] = create.mock.calls[0];
@@ -195,6 +206,14 @@ describe("LoreRelationsPanel", () => {
 
   it("refreshes stale endpoint versions before allowing the same operation to retry", async () => {
     const user = userEvent.setup();
+    const search = vi.fn().mockResolvedValue({
+      items: [target], next_cursor: null, has_more: false, total: 1,
+      facets: {
+        types: [], confirmation_statuses: [], sources: [],
+        lifecycle_statuses: [], enabled_statuses: [], relation_statuses: [],
+      },
+      migration_status: { storage_mode: "relational", state: "ready", read_only: false },
+    });
     const create = vi.fn()
       .mockRejectedValueOnce(new apiModule.ApiError(409, {
         detail: "关系端点已变化",
@@ -208,12 +227,14 @@ describe("LoreRelationsPanel", () => {
       ...apiModule.api,
       createLoreRelation: create,
       getLoreElement: getElement,
+      listLoreElements: search,
     });
     renderPanel();
 
     await user.click(await screen.findByRole("button", { name: "添加关系" }));
     const searchbox = screen.getByRole("searchbox", { name: "搜索目标设定" });
-    await user.type(searchbox, "星");
+    fireEvent.change(searchbox, { target: { value: "星" } });
+    await waitFor(() => expect(search).toHaveBeenCalled(), { timeout: 3000 });
     await user.click(await screen.findByRole("button", { name: /星盟.*阵营/ }));
     await user.click(screen.getByRole("button", { name: "创建关系" }));
     const refresh = await screen.findByRole("button", { name: "载入最新端点版本" });

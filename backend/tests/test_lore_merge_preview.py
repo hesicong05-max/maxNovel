@@ -144,7 +144,7 @@ async def test_preview_is_zero_write_and_token_contains_only_fingerprints(
     )
     assert response.status_code == 200, response.text
     preview = response.json()
-    assert preview["commit_available"] is False
+    assert preview["commit_available"] is True
     assert preview["blockers"] == []
     assert preview["source_impact"] == {
         "survivor_source_count": 1,

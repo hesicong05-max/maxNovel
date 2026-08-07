@@ -630,5 +630,5 @@ async def build_merge_preview(
         would_be_generation_eligible=generation_eligible(preview_element),
         preview_token=_encode_token(claims),
         expires_at=expires_at,
-        commit_available=False,
+        commit_available=True,
     )

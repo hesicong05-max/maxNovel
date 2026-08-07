@@ -524,7 +524,7 @@ export interface LoreMergePreviewResponse {
   would_be_generation_eligible: boolean;
   preview_token: string;
   expires_at: string;
-  commit_available: false;
+  commit_available: boolean;
 }
 
 export interface LoreMergeCommitInput {

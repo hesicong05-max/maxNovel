@@ -6,6 +6,7 @@ import LoreCreateForm, {
   type LoreCreateStoredPayload,
 } from "@/components/LoreCreateForm";
 import LoreRelationsPanel from "@/components/LoreRelationsPanel";
+import LoreMergeHistory from "@/components/LoreMergeHistory";
 import LoreReviewPanel from "@/components/LoreReviewPanel";
 import { ApiError, api } from "@/services/api";
 import { clearDraft, loadDraft, type DraftScope } from "@/services/maintenanceDrafts";
@@ -263,7 +264,7 @@ export default function LoreRepositoryPage() {
   useEffect(() => {
     if (
       !id ||
-      (!selectedCandidate && !creating) ||
+      (!selectedCandidate && !creating && scope !== "conflicts") ||
       overview?.migration_status.storage_mode !== "relational" ||
       typesProjectId === id
     ) return;
@@ -288,7 +289,7 @@ export default function LoreRepositoryPage() {
         if (sequence === typesSequence.current) setTypesLoading(false);
       });
     return () => controller.abort();
-  }, [creating, id, overview?.migration_status.storage_mode, selectedCandidate?.id, typesProjectId]);
+  }, [creating, id, overview?.migration_status.storage_mode, scope, selectedCandidate?.id, typesProjectId]);
 
   useEffect(() => {
     if (!createDraftScope || loading || overview?.capabilities.formal_create !== true) return;
@@ -680,8 +681,9 @@ export default function LoreRepositoryPage() {
     setReloadToken((value) => value + 1);
   }
 
-  function openElementFromReview(elementId: string) {
-    if (!confirmDiscardDrafts()) return;
+  function openElementFromReview(elementId: string, afterSuccessfulMerge = false) {
+    if (!afterSuccessfulMerge && !confirmDiscardDrafts()) return;
+    if (afterSuccessfulMerge) setFormalDirty(false);
     nextFormalAfterMutation.current = elementId;
     focusFormalAfterMutation.current = true;
     setSearchDraft("");
@@ -764,6 +766,8 @@ export default function LoreRepositoryPage() {
           projectId={id}
           userId={user.id}
           readOnly={overview.migration_status.read_only}
+          mergeCommitEnabled={overview.capabilities.formal_merge_commit}
+          loreTypes={typesProjectId === id ? loreTypes : []}
           onDirtyChange={setFormalDirty}
           onBusyChange={setFormalMutationBusy}
           onOpenElement={openElementFromReview}
@@ -1279,6 +1283,7 @@ function FormalDetail({
         <>
           <dl className="lore-fields">{definitions.map((definition) => <div key={definition.key}><dt>{definition.label}<span>{FIELD_STATE[baseDetail.field_states[definition.key]] || "状态待确认"}</span></dt><dd>{valueText(baseDetail.payload[definition.key])}</dd></div>)}</dl>
           <section className="lore-sources"><h3>原始出处</h3>{baseDetail.sources.length ? baseDetail.sources.map((source, index) => <article key={source.id ?? `${source.kind}-${index}`}><strong>{SOURCE_KIND[source.kind] || "其他来源"}{source.is_primary ? " · 主要来源" : ""}</strong><p>{source.excerpt || "未提供原文摘录"}</p>{source.reference && <small>{source.reference}</small>}</article>) : <p>暂无来源记录</p>}</section>
+          <LoreMergeHistory projectId={projectId} elementId={baseDetail.id} fieldDefinitions={definitions} refreshToken={baseDetail.lock_version} />
           <LoreRelationsPanel
             projectId={projectId}
             element={baseDetail}

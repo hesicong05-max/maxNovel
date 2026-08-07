@@ -116,6 +116,10 @@ async def test_commit_is_non_destructive_audited_and_replayable(
     assert result["survivor_element_id"] == left["id"]
     assert result["merged_element_id"] == right["id"]
     assert result["impact_summary"]["physical_deletions"] == 0
+    assert result["impact_summary"]["element_names"] == {
+        "survivor": left["name"],
+        "merged": right["name"],
+    }
     assert {action["action"] for action in result["relation_actions"]} == {
         "rewired",
         "self_loop_archived",

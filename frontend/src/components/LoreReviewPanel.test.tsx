@@ -65,6 +65,13 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof LoreReviewPa
     projectId="project-1"
     userId="user-1"
     readOnly={false}
+    mergeCommitEnabled={true}
+    loreTypes={[{
+      id: "type-1", key: "character", display_name: "角色", description: "",
+      field_schema: [{ key: "personality", label: "性格", control: "textarea", value_type: "string", help: "", order: 1, required: false }],
+      is_builtin: true, schema_revision: 1, status: "active",
+      created_at: "2026-08-06T08:00:00Z", updated_at: "2026-08-06T08:00:00Z",
+    }]}
     onDirtyChange={vi.fn()}
     onBusyChange={vi.fn()}
     onOpenElement={vi.fn()}

@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "@/services/api";
+import LoreMergeWizard from "@/components/LoreMergeWizard";
 import {
   clearDraft,
   loadDraft,
@@ -12,6 +13,7 @@ import type {
   LoreReviewKind,
   LoreReviewListItem,
   LoreReviewStatus,
+  LoreTypeDefinition,
 } from "@/types/lore";
 
 type Decision = Exclude<LoreReviewStatus, "pending">;
@@ -76,6 +78,8 @@ export default function LoreReviewPanel({
   projectId,
   userId,
   readOnly,
+  mergeCommitEnabled,
+  loreTypes,
   onDirtyChange,
   onBusyChange,
   onOpenElement,
@@ -84,9 +88,11 @@ export default function LoreReviewPanel({
   projectId: string;
   userId: string;
   readOnly: boolean;
+  mergeCommitEnabled: boolean;
+  loreTypes: LoreTypeDefinition[];
   onDirtyChange: (dirty: boolean) => void;
   onBusyChange: (busy: boolean) => void;
-  onOpenElement: (elementId: string) => void;
+  onOpenElement: (elementId: string, afterSuccessfulMerge?: boolean) => void;
   onOverviewRefresh: () => void;
 }) {
   const [q, setQ] = useState("");
@@ -110,6 +116,8 @@ export default function LoreReviewPanel({
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState<"scan" | "decide" | "check" | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [mergeDirty, setMergeDirty] = useState(false);
+  const [mergeBusy, setMergeBusy] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const listSequence = useRef(0);
   const detailSequence = useRef(0);
@@ -125,10 +133,10 @@ export default function LoreReviewPanel({
     kind: "lore-suggestion-review",
     objectId: selectedId,
   }) : null, [projectId, selectedId, userId]);
-  const dirty = decision !== "" || note.trim() !== "" || frozenInput !== null;
+  const dirty = decision !== "" || note.trim() !== "" || frozenInput !== null || mergeDirty;
 
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
-  useEffect(() => onBusyChange(busy !== null), [busy, onBusyChange]);
+  useEffect(() => onBusyChange(busy !== null || mergeBusy), [busy, mergeBusy, onBusyChange]);
   useEffect(() => () => {
     onDirtyChange(false);
     onBusyChange(false);
@@ -332,8 +340,9 @@ export default function LoreReviewPanel({
           ? "人工判断已记录；不会自动合并、删除、停用或改写设定。"
           : "判断与当前状态相同；已安全记录请求，没有修改设定。" );
       onOverviewRefresh();
+      if (frozenInput.decision === "confirmed_duplicate") setStatus("confirmed_duplicate");
       setReloadToken((value) => value + 1);
-      if (status === "needs_review") {
+      if (status === "needs_review" && frozenInput.decision !== "confirmed_duplicate") {
         setSelectedId(response.next_pending_id);
         requestAnimationFrame(() => {
           const target = response.next_pending_id ? cardRefs.current.get(response.next_pending_id) : null;
@@ -444,6 +453,23 @@ export default function LoreReviewPanel({
               <p>提交只记录人工判断，不会自动合并、删除、停用或改写任何设定。</p>
               <button className="btn btn-primary" type="submit" disabled={readOnly || busy !== null || detail.stale || !decision || Boolean(storageError)}>{busy === "decide" ? "记录中…" : frozenInput ? "使用相同请求安全重试" : "记录判断"}</button>
             </form>
+            <LoreMergeWizard
+              key={`${detail.id}-${detail.evidence_revision}`}
+              projectId={projectId}
+              userId={userId}
+              detail={detail}
+              loreTypes={loreTypes}
+              enabled={mergeCommitEnabled}
+              readOnly={readOnly}
+              onDirtyChange={setMergeDirty}
+              onBusyChange={setMergeBusy}
+              onMerged={(elementId, nextNotice) => {
+                setMergeDirty(false);
+                setNotice(nextNotice);
+                onOverviewRefresh();
+                onOpenElement(elementId, true);
+              }}
+            />
             <section className="lore-review-history"><h3>判断历史</h3>{detail.history.length === 0 ? <p>尚无人工判断记录。</p> : detail.history.map((event) => <article key={event.id}><strong>{STATUS_LABEL[event.previous_status]} → {STATUS_LABEL[event.new_status]}</strong><span>{new Date(event.created_at).toLocaleString()}</span>{event.note && <p>{event.note}</p>}{!event.applied && <span>状态未变化</span>}</article>)}</section>
           </>}
         </aside>
