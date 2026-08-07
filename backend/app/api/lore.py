@@ -27,7 +27,10 @@ from app.core.lore_migration import (
     type_field_definitions,
     validate_projection,
 )
-from app.core.lore_migration_preview import build_migration_preview
+from app.core.lore_migration_preview import (
+    build_migration_preview,
+    migration_preview_source_checksum,
+)
 from app.core.lore_merge_commit import (
     build_merge_operation_response,
     commit_lore_merge,
@@ -273,9 +276,7 @@ async def _build_read_only_migration_preview(
         latest_worldview = await verify_db.scalar(
             select(Worldview).where(Worldview.project_id == project_id)
         )
-        latest_checksum = project_legacy_worldview(
-            project_id, latest_worldview
-        ).checksum
+        latest_checksum = migration_preview_source_checksum(latest_worldview)
     if latest_checksum != preview["source_checksum"]:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

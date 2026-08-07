@@ -6,7 +6,10 @@ import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
 
-from app.core.lore_migration_preview import build_migration_preview
+from app.core.lore_migration_preview import (
+    build_migration_preview,
+    migration_preview_source_checksum,
+)
 from app.models.lore import (
     ElementSource,
     ElementVersion,
@@ -60,6 +63,14 @@ def test_preview_is_stable_zero_write_plan_with_dedicated_type_mapping():
     special = next(item for item in first["items"] if item["legacy_category"] == "special_settings")
     assert special["proposed_type_key"] is None
     assert special["classification"] == "review_required"
+
+
+def test_preview_source_checksum_includes_raw_text_used_for_evidence_status():
+    worldview = _worldview(source="imported", raw_text="林岚来自云港。")
+    before = migration_preview_source_checksum(worldview)
+    worldview.raw_text = "林岚来自另一座城。"
+
+    assert migration_preview_source_checksum(worldview) != before
 
 
 @pytest.mark.parametrize(
@@ -196,8 +207,7 @@ async def test_preview_rejects_a_source_changed_during_check(
     project_id = await _create_project(client, auth_headers)
     await _set_worldview(client, auth_headers, project_id)
 
-    with patch("app.api.lore.project_legacy_worldview") as projection:
-        projection.return_value = SimpleNamespace(checksum="f" * 64)
+    with patch("app.api.lore.migration_preview_source_checksum", return_value="f" * 64):
         response = await client.get(
             f"/api/projects/{project_id}/lore/migration-preview",
             headers=auth_headers,

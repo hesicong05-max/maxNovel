@@ -57,6 +57,17 @@ def _legacy_value(value: Any) -> Any:
     return value
 
 
+def migration_preview_source_checksum(worldview: Any | None) -> str:
+    """Fingerprint every legacy input that can change preview classification."""
+    payload = {
+        "legacy_checksum": legacy_worldview_checksum(worldview),
+        "raw_text": getattr(worldview, "raw_text", None) if worldview is not None else None,
+    }
+    return hashlib.sha256(json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()).hexdigest()
+
+
 def _json_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _json_value(item) for key, item in value.items()}
@@ -124,7 +135,7 @@ def build_migration_preview(
     existing_migration_count: int = 0,
 ) -> dict[str, Any]:
     """Return a deterministic plan without constructing or mutating ORM rows."""
-    source_checksum = legacy_worldview_checksum(worldview)
+    source_checksum = migration_preview_source_checksum(worldview)
     issues: list[dict[str, Any]] = []
     items: list[dict[str, Any]] = []
 
