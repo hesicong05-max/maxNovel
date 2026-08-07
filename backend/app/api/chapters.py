@@ -243,7 +243,7 @@ async def update_word_counts(
             status_code=409,
             detail={
                 "code": _LEGACY_OUTLINE_CHAPTERS_INVALID,
-                "message": "大纲章节配置无法读取，请重新保存大纲后重试",
+                "message": "历史章节安排暂时无法读取，原数据仍保留；当前无法生成新章节",
             },
         )
     chapters_data = chapters_result.items
@@ -606,7 +606,12 @@ async def _stream_batch_generate(
             )
             outline = ol_result.scalar_one_or_none()
             if not outline:
-                yield _sse({"type": "error", "error": "大纲不存在，请先生成并确认大纲"})
+                yield _sse(
+                    {
+                        "type": "error",
+                        "error": "未检测到可用的历史章节安排，原数据未被修改；当前无法生成新章节",
+                    }
+                )
                 return
 
             # Load existing chapters to know which to skip
@@ -763,7 +768,12 @@ async def _generate_chapter_core(
     )
     outline = ol_result.scalar_one_or_none()
     if not outline:
-        yield _sse({"type": "error", "error": "大纲不存在，请先生成并确认大纲"})
+        yield _sse(
+            {
+                "type": "error",
+                "error": "未检测到可用的历史章节安排，原数据未被修改；当前无法生成新章节",
+            }
+        )
         return
 
     # Load worldview
@@ -780,7 +790,7 @@ async def _generate_chapter_core(
         yield _sse(
             {
                 "type": "error",
-                "error": "大纲章节配置无法读取，请重新保存大纲后重试",
+                "error": "历史章节安排暂时无法读取，原数据仍保留；当前无法生成新章节",
                 "code": _LEGACY_OUTLINE_CHAPTERS_INVALID,
             }
         )

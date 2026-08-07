@@ -1,8 +1,8 @@
-"""Project file storage — persists worldview and outline as independent document files.
+"""Project file storage for worldview exports and recoverable project archives.
 
 This module provides an additional layer of persistence alongside the database.
-Worldview and outline are exported as JSON files to data/projects/{project_id}/
-so that users have visible, inspectable document artifacts.
+Worldview is exported to data/projects/{project_id}/. Historical outline.json
+files are left untouched for recovery, but automatic outline export was retired.
 """
 
 import json
@@ -15,8 +15,6 @@ from pathlib import Path
 from typing import Any
 
 from app.config import DATA_DIR
-from app.core.legacy_json import read_legacy_object_list
-
 logger = logging.getLogger(__name__)
 
 # Root directory for project file storage
@@ -180,55 +178,6 @@ def save_worldview_file(project_id: str, worldview: Any) -> None:
         # Non-fatal — DB is the source of truth, file is supplementary
 
 
-def save_outline_file(project_id: str, outline: Any) -> None:
-    """Export outline data as an independent JSON document file.
-
-    Called after DB commit in generate_outline / generate_outline_stream /
-    update_outline to ensure the file is always in sync with the database record.
-
-    Args:
-        project_id: The project ID
-        outline: The Outline ORM model instance (must have attributes:
-            story_arc, chapters, reveal_plan, created_at, updated_at)
-    """
-    try:
-        proj_dir = _ensure_project_dir(project_id)
-        filepath = proj_dir / "outline.json"
-
-        created_at = getattr(outline, "created_at", None)
-        updated_at = getattr(outline, "updated_at", None)
-        chapters = read_legacy_object_list(getattr(outline, "chapters", None))
-        reveal_plan = read_legacy_object_list(
-            getattr(outline, "reveal_plan", None)
-        )
-        if not chapters.valid or not reveal_plan.valid:
-            logger.warning(
-                "Outline file export skipped project=%s chapters=%s reveal_plan=%s",
-                project_id,
-                chapters.error_category or "valid",
-                reveal_plan.error_category or "valid",
-            )
-            return
-
-        doc = {
-            "_doc_type": "outline",
-            "_project_id": project_id,
-            "_version": 1,
-            "_exported_at": datetime.now(timezone.utc).isoformat(),
-            "story_arc": getattr(outline, "story_arc", ""),
-            "chapters": chapters.items,
-            "reveal_plan": reveal_plan.items,
-            "created_at": created_at.isoformat() if isinstance(created_at, datetime) else created_at,
-            "updated_at": updated_at.isoformat() if isinstance(updated_at, datetime) else updated_at,
-        }
-
-        filepath.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
-        logger.info("Outline file saved: %s (%d bytes)", filepath, filepath.stat().st_size)
-    except Exception as e:
-        logger.error("Failed to save outline file for project %s: %s", project_id, e)
-        # Non-fatal — DB is the source of truth, file is supplementary
-
-
 def load_worldview_file(project_id: str) -> dict[str, Any] | None:
     """Read worldview from file (for verification / debugging / backup).
 
@@ -241,19 +190,4 @@ def load_worldview_file(project_id: str) -> dict[str, Any] | None:
         return json.loads(filepath.read_text(encoding="utf-8"))
     except Exception as e:
         logger.error("Failed to read worldview file for project %s: %s", project_id, e)
-        return None
-
-
-def load_outline_file(project_id: str) -> dict[str, Any] | None:
-    """Read outline from file (for verification / debugging / backup).
-
-    Returns None if file doesn't exist.
-    """
-    filepath = PROJECTS_DIR / project_id / "outline.json"
-    if not filepath.exists():
-        return None
-    try:
-        return json.loads(filepath.read_text(encoding="utf-8"))
-    except Exception as e:
-        logger.error("Failed to read outline file for project %s: %s", project_id, e)
         return None

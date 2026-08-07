@@ -290,7 +290,6 @@ describe("API - maintenance error contract", () => {
   });
 
   it.each([
-    ["outline", () => api.generateOutlineStream("project-1")],
     ["chapter", () => api.streamChapter("project-1", 1)],
     ["batch", () => api.streamBatchGenerate("project-1")],
   ])("parses %s SSE maintenance error objects without retrying", async (_, factory) => {

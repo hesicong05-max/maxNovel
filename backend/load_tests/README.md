@@ -10,7 +10,8 @@
 - 章节列表/字数配置
 - 社区浏览/详情/点赞
 - 导出功能
-- **SSE 流式章节生成**（最重负载场景）
+
+章节流式生成专项场景将在第二阶段的权威章节规划可由测试夹具安全建立后恢复。
 
 ## 安装
 
@@ -49,13 +50,6 @@ locust -f load_tests/locustfile.py --host=http://localhost:8000 \
   --headless -u 500 -r 50 -t 60s
 ```
 
-### 3. SSE 专项测试
-
-```bash
-locust -f load_tests/locustfile.py:SSEChapterGenerationUser \
-  --host=http://localhost:8000 --headless -u 20 -r 2 -t 60s
-```
-
 ## 推荐测试场景
 
 | 场景 | 用户数 | 生成速率 | 持续时间 | 目标 |
@@ -64,7 +58,6 @@ locust -f load_tests/locustfile.py:SSEChapterGenerationUser \
 | 正常负载 | 50 | 5/s | 2min | 验证日常承载能力 |
 | 压力测试 | 200 | 10/s | 3min | 找到性能瓶颈 |
 | 峰值测试 | 500 | 50/s | 1min | 验证突发流量处理 |
-| SSE专项 | 20 | 2/s | 60s | 验证流式生成并发 |
 
 ## 性能基线
 

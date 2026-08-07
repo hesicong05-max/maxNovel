@@ -119,11 +119,17 @@ export default function ProjectDetail() {
       {!project.has_outline && (
         <div className="card project-planning-notice" role="status">
           <h2>先完善设定仓库</h2>
-          <p>自动大纲生成已经停止。新的篇章与章节规划将在第二阶段开放；现阶段请先保存世界观并整理独立设定模块。</p>
+          <p>篇章与章节规划将在第二阶段开放；现阶段请先完善世界观和独立设定模块。</p>
           <Link className="btn btn-primary" to={`/project/${project.id}/lore`}>
             打开设定仓库
           </Link>
         </div>
+      )}
+
+      {project.has_outline && activeStep === "writing" && (
+        <p className="project-legacy-planning-note" role="status">
+          已保留历史章节安排，可继续生成、编辑和导出章节；系统不会重新生成或覆盖历史规划。
+        </p>
       )}
 
       {/* Progress panel — only show on writing step */}

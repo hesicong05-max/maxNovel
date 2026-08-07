@@ -256,67 +256,6 @@ async def test_runtime_unfreeze_restores_protected_write(
     assert response.status_code == 200
 
 
-@pytest.mark.skip(reason="DEV-003D1 retired the outline streaming write endpoint")
-@pytest.mark.usefixtures("clean_db")
-async def test_outline_stream_rechecks_freeze_before_fresh_session_save(
-    client, auth_headers, monkeypatch
-):
-    project_id = await _create_project(client, auth_headers)
-    worldview = await client.post(
-        f"/api/worldview/{project_id}",
-        json={
-            **WORLDVIEW_PAYLOAD,
-            "characters": [{"name": "林远"}],
-        },
-        headers=auth_headers,
-    )
-    assert worldview.status_code == 200
-
-    complete_outline = json.dumps(
-        {
-            "story_arc": "林远踏上旅途。",
-            "chapters": [
-                {
-                    "chapter_num": 1,
-                    "title": "启程",
-                    "summary": "林远出发。",
-                    "key_events": ["离开故乡"],
-                    "reveal_elements": ["林远"],
-                }
-            ],
-            "reveal_plan": [],
-        },
-        ensure_ascii=False,
-    )
-
-    async def freeze_after_generation(*_args, **_kwargs):
-        yield complete_outline
-        monkeypatch.setattr(app_settings, "LEGACY_JSON_WRITES_FROZEN", True)
-
-    monkeypatch.setattr(
-        "app.api.outline.llm_client.chat_stream",
-        freeze_after_generation,
-    )
-    response = await client.post(
-        f"/api/outline/{project_id}/generate-stream",
-        headers=auth_headers,
-    )
-    assert response.status_code == 200
-    events = [
-        json.loads(line.removeprefix("data: "))
-        for line in response.text.splitlines()
-        if line.startswith("data: ")
-    ]
-    error = next(event for event in events if event["type"] == "error")
-    assert error["error"]["code"] == PROJECT_WRITE_FROZEN_CODE
-
-    read_response = await client.get(
-        f"/api/outline/{project_id}",
-        headers=auth_headers,
-    )
-    assert read_response.status_code == 404
-
-
 @pytest.mark.usefixtures("clean_db")
 async def test_chapter_stream_rechecks_freeze_before_final_commit(
     client, auth_headers, db_session, monkeypatch
@@ -480,7 +419,7 @@ async def test_invalid_legacy_outline_is_not_generated_or_overwritten(
     assert events == [
         {
             "type": "error",
-            "error": "大纲章节配置无法读取，请重新保存大纲后重试",
+            "error": "历史章节安排暂时无法读取，原数据仍保留；当前无法生成新章节",
             "code": "LEGACY_OUTLINE_CHAPTERS_INVALID",
         }
     ]

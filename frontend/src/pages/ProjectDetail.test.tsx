@@ -87,6 +87,9 @@ describe("ProjectDetail outline retirement", () => {
 
     expect(await screen.findByLabelText("章节写作器")).toBeInTheDocument();
     expect(screen.getByText("章节进度")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "已保留历史章节安排，可继续生成、编辑和导出章节"
+    );
     expect(screen.getByRole("button", { name: /章节写作/ })).toHaveAttribute("aria-current", "step");
     expect(screen.queryByText("大纲")).not.toBeInTheDocument();
 

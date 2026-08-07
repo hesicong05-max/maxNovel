@@ -36,7 +36,6 @@ describe("maintenance draft store", () => {
       SCOPE,
       { ...SCOPE, userId: "other-user" },
       { ...SCOPE, projectId: "other-project" },
-      { ...SCOPE, kind: "outline" as const },
       { ...SCOPE, kind: "lore-create" as const },
       { ...SCOPE, objectId: "2" },
     ];

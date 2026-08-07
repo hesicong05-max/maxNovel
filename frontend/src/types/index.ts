@@ -110,31 +110,6 @@ export interface WorldviewElement {
   reveal_chapter: number | null;
 }
 
-export interface OutlineChapter {
-  chapter_num: number;
-  title: string;
-  summary: string;
-  key_events: string[];
-  reveal_elements: string[];
-}
-
-export interface RevealPlanEntry {
-  chapter: number;
-  phase: string;
-  elements: string[];
-  summary: string;
-}
-
-export interface OutlineData {
-  id: string;
-  project_id: string;
-  story_arc: string;
-  chapters: OutlineChapter[];
-  reveal_plan: RevealPlanEntry[];
-  created_at?: string;
-  updated_at?: string;
-}
-
 export interface ChapterData {
   id: string;
   project_id: string;
@@ -188,19 +163,6 @@ export interface StreamMessage {
   word_count?: number;
   target_word_count?: number;
   summary?: string;
-  error?: string | ApiErrorData;
-}
-
-// === Outline Streaming ===
-
-export interface OutlineStreamMessage {
-  type: "start" | "progress" | "complete" | "error";
-  message?: string;
-  total_chapters?: number;
-  chunks?: number;
-  chars?: number;
-  outline?: OutlineData;
-  warning?: string;
   error?: string | ApiErrorData;
 }
 
