@@ -161,8 +161,10 @@ def build_extraction_messages(document_text: str) -> list[dict[str, str]]:
     }
     system = (
         "你是小说设定候选提取器，不是创作者。只能提取用户原文明确存在的信息，"
-        "不得使用常识、推测或补全。每个具体对象必须是独立 candidate；三名角色"
-        "必须输出三个 candidate。每个非空字段必须给出原文中可精确匹配的连续 excerpt。"
+        "不得使用常识、推测或补全。每个具体对象必须是独立 candidate；候选数量必须"
+        "与原文明示的独立对象数量一致，可以为 0 或任意 N，不设固定数量，不得为满足示例"
+        "而凑数。同一对象在原文中重复出现仍只输出一个 candidate；例如原文明示三名不同"
+        "角色时才输出三个 candidate。每个非空字段必须给出原文中可精确匹配的连续 excerpt。"
         "原文未提供时 value=null,state=unknown,excerpt=null。含义需用户判断时才使用"
         " needs_confirmation。关系只输出建议，不补全双方事实。只输出严格 JSON，不要代码块或解释。"
     )

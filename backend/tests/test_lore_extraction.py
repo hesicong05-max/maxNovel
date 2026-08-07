@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.core.llm_client import LLMSingleCallError, llm_client
+from app.core.lore_extraction import build_extraction_messages
 from app.models.extraction import (
     LoreCandidateFieldEvidence,
     LoreCandidateRevision,
@@ -130,6 +131,41 @@ async def _first_candidate(client, headers, project_id, batch_id):
     )
     assert response.status_code == 200
     return response.json()["items"][0]
+
+
+def test_extraction_prompt_allows_zero_or_n_candidates_without_padding():
+    system = build_extraction_messages("只有朦胧雾气，没有明确对象。")[0]["content"]
+
+    assert "可以为 0 或任意 N" in system
+    assert "不设固定数量" in system
+    assert "不得为满足示例而凑数" in system
+    assert "同一对象在原文中重复出现仍只输出一个 candidate" in system
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_extraction_accepts_zero_candidates_when_source_has_no_explicit_object(
+    client, auth_headers, monkeypatch
+):
+    project_id = await _create_project(client, auth_headers)
+    call = AsyncMock(return_value=_response_json([]))
+    monkeypatch.setattr(llm_client, "chat_once", call)
+
+    response = await client.post(
+        f"/api/projects/{project_id}/lore/extractions",
+        headers=auth_headers,
+        json={
+            "idempotency_key": "extract-zero-objects-001",
+            "document_text": "只有朦胧雾气，没有明确人物、地点或其他设定对象。",
+            "source_kind": "manual_text",
+            "source_ref": "manual:zero-objects",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["status"] == "completed"
+    assert response.json()["candidate_count"] == 0
+    assert response.json()["pending_review_count"] == 0
+    call.assert_awaited_once()
 
 
 @pytest.mark.usefixtures("clean_db")
