@@ -684,8 +684,8 @@ describe("WorldviewEditor maintenance drafts", () => {
       { timeout: 1500 }
     );
 
-    // Click "进入下一步"
-    await user.click(screen.getByRole("button", { name: /进入下一步/ }));
+    // Open the lore repository with unsaved local edits.
+    await user.click(screen.getByRole("button", { name: /打开设定仓库/ }));
 
     // Should show confirmation, not call onComplete
     expect(onComplete).not.toHaveBeenCalled();
@@ -694,7 +694,7 @@ describe("WorldviewEditor maintenance drafts", () => {
     ).toBeInTheDocument();
 
     // User chooses to proceed
-    await user.click(screen.getByRole("button", { name: "仍要进入下一步" }));
+    await user.click(screen.getByRole("button", { name: "仍要打开设定仓库" }));
     expect(onComplete).toHaveBeenCalledOnce();
   });
 
@@ -1377,7 +1377,7 @@ describe("WorldviewEditor maintenance drafts", () => {
         ),
       { timeout: 1500 }
     );
-    await user.click(screen.getByRole("button", { name: /进入下一步/ }));
+    await user.click(screen.getByRole("button", { name: /打开设定仓库/ }));
     expect(
       await screen.findByRole("heading", { name: "内容仅保存在本设备" })
     ).toBeInTheDocument();

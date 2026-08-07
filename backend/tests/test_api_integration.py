@@ -1159,8 +1159,8 @@ class TestWorldviewAPI:
 
 class TestOutlineAPI:
     @pytest.mark.usefixtures("clean_db")
-    async def test_generate_outline(self, client, auth_headers):
-        """Generate outline for a project with worldview (mock LLM)."""
+    async def test_generate_outline_is_retired(self, client, auth_headers):
+        """The public automatic outline generator is no longer registered."""
         proj = await client.post(
             "/api/projects",
             json={
@@ -1197,24 +1197,10 @@ class TestOutlineAPI:
             },
             headers=auth_headers,
         )
-        # Mock the LLM client to return a mock outline (avoid real API call)
-        from unittest.mock import patch
-
-        with patch("app.core.llm_client.load_settings") as mock_load:
-            mock_load.return_value = {
-                "api_key": "",
-                "base_url": "https://api.openai.com/v1",
-                "model": "gpt-4o",
-                "temperature": 0.8,
-                "max_tokens": 4096,
-            }
-            # Generate outline (will use mock response since no API key)
-            resp = await client.post(
-                f"/api/outline/{pid}/generate", headers=auth_headers
-            )
-            assert resp.status_code == 200
-            data = resp.json()
-            assert "story_arc" in data or "chapters" in data or "reveal_plan" in data
+        resp = await client.post(
+            f"/api/outline/{pid}/generate", headers=auth_headers
+        )
+        assert resp.status_code == 404
 
     @pytest.mark.usefixtures("clean_db")
     async def test_get_outline_not_found_404(self, client, auth_headers):

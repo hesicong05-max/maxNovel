@@ -229,7 +229,10 @@ async def update_word_counts(
     )
     outline = ol_result.scalar_one_or_none()
     if not outline:
-        raise HTTPException(status_code=400, detail="大纲不存在，请先生成大纲")
+        raise HTTPException(
+            status_code=400,
+            detail="当前项目没有可用的历史章节规划；新章节规划将在第二阶段开放",
+        )
 
     ensure_project_writes_available()
 

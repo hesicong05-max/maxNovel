@@ -10,6 +10,7 @@ Covers:
 import json
 import pytest
 from unittest.mock import AsyncMock, patch
+from sqlalchemy import select
 
 from app.api.outline import (
     OUTLINE_MAX_TOKENS,
@@ -23,6 +24,7 @@ from app.api.outline import (
     _to_list,
     _to_str,
 )
+from app.models.project import Outline
 
 
 # ════════════════════════════════════════════════════════════
@@ -728,6 +730,73 @@ async def _create_project_with_worldview(client, auth_headers, total_chapters=5)
     return pid
 
 
+class TestRetiredOutlinePublicAPI:
+    @pytest.mark.usefixtures("clean_db")
+    async def test_only_legacy_read_route_remains_in_openapi(self, client):
+        paths = (await client.get("/openapi.json")).json()["paths"]
+
+        assert "/api/outline/{project_id}" in paths
+        assert set(paths["/api/outline/{project_id}"]) == {"get"}
+        assert "/api/outline/{project_id}/generate" not in paths
+        assert "/api/outline/{project_id}/generate-stream" not in paths
+        assert "/api/outline/{project_id}/diagnose" not in paths
+        assert "/api/outline/{project_id}/confirm" not in paths
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_retired_routes_do_not_call_llm_or_write_outline(
+        self, client, auth_headers, db_session
+    ):
+        pid = await _create_project_with_worldview(client, auth_headers)
+        payload = {
+            "story_arc": "不应写入",
+            "chapters": [],
+        }
+
+        with (
+            patch("app.api.outline.llm_client.chat", new_callable=AsyncMock) as chat,
+            patch("app.api.outline.llm_client.chat_stream") as chat_stream,
+        ):
+            responses = [
+                await client.post(f"/api/outline/{pid}/generate", headers=auth_headers),
+                await client.post(f"/api/outline/{pid}/generate-stream", headers=auth_headers),
+                await client.get(f"/api/outline/{pid}/diagnose", headers=auth_headers),
+                await client.put(f"/api/outline/{pid}", json=payload, headers=auth_headers),
+                await client.post(f"/api/outline/{pid}/confirm", headers=auth_headers),
+            ]
+
+        assert [response.status_code for response in responses] == [404, 404, 404, 405, 404]
+        chat.assert_not_awaited()
+        chat_stream.assert_not_called()
+        result = await db_session.execute(select(Outline).where(Outline.project_id == pid))
+        assert result.scalar_one_or_none() is None
+
+    @pytest.mark.usefixtures("clean_db")
+    async def test_legacy_outline_remains_readable(
+        self, client, auth_headers, db_session
+    ):
+        pid = await _create_project_with_worldview(client, auth_headers, total_chapters=1)
+        db_session.add(Outline(
+            project_id=pid,
+            story_arc="旧规划原地保留",
+            chapters=[{
+                "chapter_num": 1,
+                "title": "旧章节",
+                "summary": "旧摘要",
+                "key_events": [],
+                "reveal_elements": [],
+            }],
+            reveal_plan=[],
+        ))
+        await db_session.commit()
+
+        response = await client.get(f"/api/outline/{pid}", headers=auth_headers)
+
+        assert response.status_code == 200
+        assert response.json()["story_arc"] == "旧规划原地保留"
+        assert response.json()["chapters"][0]["title"] == "旧章节"
+
+
+@pytest.mark.skip(reason="DEV-003D1 retired public outline generation and write APIs")
 class TestOutlineAPI:
     @pytest.mark.usefixtures("clean_db")
     async def test_generate_outline_mock_llm(self, client, auth_headers):
@@ -993,6 +1062,7 @@ class TestOutlineAPI:
 # ════════════════════════════════════════════════════════════
 
 
+@pytest.mark.skip(reason="DEV-003D1 retired public outline streaming API")
 class TestOutlineStreamingAPI:
     """Tests for the SSE streaming outline generation endpoint."""
 

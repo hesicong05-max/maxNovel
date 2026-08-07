@@ -12,7 +12,7 @@ from app.api.chapters import (
     _stream_single_chapter,
 )
 from app.core.llm_client import llm_client
-from app.models.project import ProjectStatus, StoryMemory
+from app.models.project import Outline, Project, ProjectStatus, StoryMemory
 from tests.conftest import TestSessionLocal
 
 
@@ -92,11 +92,26 @@ async def _create_ready_project(client, headers, total_chapters: int = 1) -> str
     )
     assert worldview_resp.status_code == 200
 
-    outline_resp = await client.post(
-        f"/api/outline/{project_id}/generate",
-        headers=headers,
-    )
-    assert outline_resp.status_code == 200
+    # DEV-003D1: construct a historical Outline directly. Public outline
+    # generation is retired, while Chapter must keep reading existing rows.
+    async with TestSessionLocal() as db:
+        result = await db.execute(select(Project).where(Project.id == project_id))
+        project = result.scalar_one()
+        project.status = ProjectStatus.OUTLINE_CONFIRMED
+        db.add(Outline(
+            project_id=project_id,
+            story_arc="旧项目兼容规划",
+            chapters=[{
+                "chapter_num": chapter_num,
+                "title": f"第{chapter_num}章",
+                "summary": "兼容测试章节",
+                "key_events": [],
+                "reveal_elements": [],
+            } for chapter_num in range(1, total_chapters + 1)],
+            reveal_plan=[],
+        ))
+        db.add(StoryMemory(project_id=project_id))
+        await db.commit()
     return project_id
 
 

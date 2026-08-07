@@ -106,14 +106,6 @@ async def test_all_protected_http_entrypoints_share_one_contract(
 
     requests = [
         ("POST", f"/api/worldview/{project_id}", WORLDVIEW_PAYLOAD),
-        ("POST", f"/api/outline/{project_id}/generate", None),
-        ("POST", f"/api/outline/{project_id}/generate-stream", None),
-        (
-            "PUT",
-            f"/api/outline/{project_id}",
-            {"story_arc": "", "chapters": []},
-        ),
-        ("POST", f"/api/outline/{project_id}/confirm", None),
         (
             "PUT",
             f"/api/chapters/{project_id}/word-counts",
@@ -264,6 +256,7 @@ async def test_runtime_unfreeze_restores_protected_write(
     assert response.status_code == 200
 
 
+@pytest.mark.skip(reason="DEV-003D1 retired the outline streaming write endpoint")
 @pytest.mark.usefixtures("clean_db")
 async def test_outline_stream_rechecks_freeze_before_fresh_session_save(
     client, auth_headers, monkeypatch

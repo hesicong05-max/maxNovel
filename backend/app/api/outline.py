@@ -32,6 +32,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/outline", tags=["outline"])
 
+# DEV-003D1: automatic outline generation and all public outline writes are retired.
+# Only the read-only GET route remains registered for legacy chapter compatibility.
+# The unregistered helpers below stay temporarily so old parsing fixtures can be
+# retired separately without deleting the compatibility module or historical data.
+
 # max_tokens for outline generation — must be large enough for full chapter list
 # Each chapter needs ~100-125 tokens (title + summary + key_events + reveal_elements)
 # 30 chapters ≈ 3700 tokens + story_arc + JSON overhead ≈ 4000-4500 tokens
@@ -143,7 +148,6 @@ def _load_worldview_elements(
         )
 
 
-@router.post("/{project_id}/generate")
 async def generate_outline(
     project_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -324,7 +328,6 @@ async def generate_outline(
     return result
 
 
-@router.get("/{project_id}/diagnose")
 async def diagnose_outline(
     project_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -461,7 +464,6 @@ async def diagnose_outline(
     }
 
 
-@router.post("/{project_id}/generate-stream")
 async def generate_outline_stream(
     project_id: str,
     request: Request,
@@ -753,7 +755,6 @@ async def get_outline(
     }
 
 
-@router.put("/{project_id}")
 async def update_outline(
     project_id: str,
     data: OutlineCreate,
@@ -803,7 +804,6 @@ async def update_outline(
     }
 
 
-@router.post("/{project_id}/confirm")
 async def confirm_outline(
     project_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],

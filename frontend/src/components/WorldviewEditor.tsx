@@ -191,7 +191,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
   const [scopeLoading, setScopeLoading] = useState(true);
   const [scopeLoadError, setScopeLoadError] = useState("");
   const [saved, setSaved] = useState(false);  // 本地追踪保存状态，解决 hasWorldview prop 闭锁问题
-  const [nextStepBlocked, setNextStepBlocked] = useState(false);  // 未保存编辑时阻止进入下一步
+  const [nextStepBlocked, setNextStepBlocked] = useState(false);  // 未保存编辑时阻止离开编辑器
   const [corruptDraft, setCorruptDraft] = useState(false);  // 损坏或不兼容的草稿，只能丢弃
   const [reparseNeeded, setReparseNeeded] = useState(false);  // 导入原文修改后需重新解析
   const [saveResult, setSaveResult] = useState<SaveResult | null>(null);
@@ -1117,7 +1117,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           )}
           {importResult?.done && !saved && !reparseNeeded && (
             <div style={{ marginTop: "0.625rem", padding: "0.5rem 0.75rem", background: "#fef9e7", borderRadius: "var(--r-md)", fontSize: "13px", color: "#7d6608", borderLeft: "3px solid #f39c12" }}>
-              ⚠️ 世界观已提取但尚未保存。请点击下方「保存世界观」按钮保存后，再进入下一步生成大纲。
+              ⚠️ 世界观已提取但尚未保存。请点击下方「保存世界观」，保存后可进入设定仓库继续整理。
             </div>
           )}
           {reparseNeeded && (
@@ -1274,7 +1274,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
             <button className="btn btn-primary btn-lg" onClick={handleSave} disabled={loading}>
               {loading ? "保存中..." : "保存世界观"}
             </button>
-            {/* saved 或 hasWorldview 任一为 true 即显示"进入下一步" — 解决 prop 闭锁问题 */}
+            {/* 保存过世界观后可以进入独立设定仓库。 */}
             {(hasWorldview || saved) && (
               <button
                 className="btn btn-danger btn-lg"
@@ -1284,7 +1284,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
                     const storedNow = storeCurrentDraft().stored;
                     if (storedNow) {
                       setNextStepBlocked(true);
-                      setDraftMessage("内容仅保存在本设备，尚未保存到项目。建议先保存世界观后再进入下一步。");
+                      setDraftMessage("内容仅保存在本设备，尚未保存到项目。建议先保存世界观后再打开设定仓库。");
                     } else {
                       setDraftMessage("存在未保存编辑且本地草稿也未能保留，请先复制内容。");
                       return;
@@ -1294,7 +1294,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
                   }
                 }}
               >
-                进入下一步 →
+                打开设定仓库 →
               </button>
             )}
           </div>
@@ -1302,7 +1302,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           {nextStepBlocked && (
             <div className="draft-notice" style={{ marginTop: "0.875rem" }}>
               <h3>内容仅保存在本设备</h3>
-              <p>编辑已保留到本地草稿（本设备），尚未保存到项目。建议保存世界观后再进入下一步；也可仍要继续。</p>
+              <p>编辑已保留到本地草稿（本设备），尚未保存到项目。建议保存世界观后再打开设定仓库；也可只查看现有设定。</p>
               <div className="draft-notice__actions">
                 <button
                   type="button"
@@ -1312,7 +1312,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
                     onComplete();
                   }}
                 >
-                  仍要进入下一步
+                  仍要打开设定仓库
                 </button>
                 <button
                   type="button"
@@ -1331,7 +1331,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
         <div className="card" style={{ background: "var(--gold-light)", borderColor: "var(--gold-border)", borderLeftWidth: "3px", borderLeftColor: "var(--gold)" }}>
           <p style={{ fontSize: "13px", color: "var(--gold-dark)", lineHeight: 1.7 }}>
             填写世界观架构。系统会自动解析为结构化要素并分配优先级（核心/重要/次要/背景），
-            然后根据渐进式揭示策略安排各章节的信息展开节奏。
+            保存后可在统一的设定仓库中继续分类查看和管理。
           </p>
         </div>
       )}

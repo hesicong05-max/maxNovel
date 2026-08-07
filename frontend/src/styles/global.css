@@ -458,6 +458,7 @@ input, select, textarea { font-family: inherit; }
 }
 
 .workflow-step {
+  appearance: none;
   flex: 1;
   display: flex;
   align-items: center;
@@ -467,10 +468,20 @@ input, select, textarea { font-family: inherit; }
   cursor: pointer;
   transition: all var(--ease);
   position: relative;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
 }
 
 .workflow-step:hover {
   background: var(--gold-light);
+}
+
+.workflow-step:focus-visible {
+  outline: 2px solid var(--gold-dark);
+  outline-offset: 2px;
 }
 
 .workflow-step.active {
@@ -980,6 +991,20 @@ input, select, textarea { font-family: inherit; }
 .project-lore-link {
   display: inline-flex;
   margin-top: 0.875rem;
+}
+
+.project-planning-notice {
+  margin-bottom: 1rem;
+}
+
+.project-planning-notice h2 {
+  margin-bottom: 0.5rem;
+  font-size: 16px;
+}
+
+.project-planning-notice p {
+  margin-bottom: 0.875rem;
+  color: var(--text-2);
 }
 
 .lore-page {

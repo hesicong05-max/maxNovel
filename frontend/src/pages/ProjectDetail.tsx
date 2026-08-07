@@ -3,17 +3,17 @@ import { Link, useParams, useNavigate } from "react-router-dom";
 import { api } from "@/services/api";
 import type { Project } from "@/types";
 import WorldviewEditor from "@/components/WorldviewEditor";
-import OutlineReview from "@/components/OutlineReview";
 import ChapterWriter from "@/components/ChapterWriter";
 import ProgressPanel from "@/components/ProgressPanel";
 
-type Step = "worldview" | "outline" | "writing";
+type Step = "worldview" | "writing";
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [activeStep, setActiveStep] = useState<Step>("worldview");
 
   useEffect(() => {
@@ -32,21 +32,19 @@ export default function ProjectDetail() {
   }, [id]);
 
   async function loadProject(projectId: string, autoStep = true) {
+    if (autoStep) setLoadError(null);
     try {
       const data = await api.getProject(projectId);
       setProject(data);
-      // Only auto-set step on initial load, not when switching manually
       if (autoStep) {
-        if (data.status === "draft" || data.status === "worldview_set") {
-          setActiveStep("worldview");
-        } else if (data.status === "outline_pending" || data.status === "outline_confirmed") {
-          setActiveStep("outline");
-        } else {
-          setActiveStep("writing");
-        }
+        setActiveStep(data.has_outline ? "writing" : "worldview");
       }
     } catch (e) {
       console.error("Failed to load project:", e);
+      if (autoStep) {
+        setProject(null);
+        setLoadError((e as Error).message || "项目加载失败，请稍后重试。");
+      }
     } finally {
       setLoading(false);
     }
@@ -60,16 +58,29 @@ export default function ProjectDetail() {
     // Refresh project to get latest has_worldview / has_outline before switching
     // autoStep=false: don't override the step we're switching to
     await refreshProject();
+    if (step === "writing" && !project?.has_outline) return;
     setActiveStep(step);
   }
 
   if (loading) return <div className="empty-state">加载中...</div>;
+  if (loadError) {
+    return (
+      <div className="card empty-state" role="alert">
+        <h2>项目暂时无法加载</h2>
+        <p>{loadError}</p>
+        <button className="btn btn-primary" onClick={() => id && loadProject(id)}>
+          重新加载
+        </button>
+      </div>
+    );
+  }
   if (!project) return <div className="empty-state">项目不存在</div>;
 
   const steps = [
-    { key: "worldview" as Step, label: "世界观", num: 1 },
-    { key: "outline" as Step, label: "大纲", num: 2 },
-    { key: "writing" as Step, label: "章节生成", num: 3 },
+    { key: "worldview" as Step, label: "世界观与设定", num: 1 },
+    ...(project.has_outline
+      ? [{ key: "writing" as Step, label: "章节写作", num: 2 }]
+      : []),
   ];
 
   const currentStepIndex = steps.findIndex((s) => s.key === activeStep);
@@ -91,52 +102,56 @@ export default function ProjectDetail() {
       {/* Workflow steps */}
       <div className="workflow-steps">
         {steps.map((step, i) => (
-          <div
+          <button
+            type="button"
             key={step.key}
             className={`workflow-step ${i < currentStepIndex ? "completed" : i === currentStepIndex ? "active" : ""}`}
             onClick={() => goToStep(step.key)}
+            aria-current={i === currentStepIndex ? "step" : undefined}
           >
             <div className="workflow-step-circle">{step.num}</div>
             <div className="workflow-step-label">{step.label}</div>
             {i < steps.length - 1 && <span className="workflow-step-arrow">›</span>}
-          </div>
+          </button>
         ))}
       </div>
+
+      {!project.has_outline && (
+        <div className="card project-planning-notice" role="status">
+          <h2>先完善设定仓库</h2>
+          <p>自动大纲生成已经停止。新的篇章与章节规划将在第二阶段开放；现阶段请先保存世界观并整理独立设定模块。</p>
+          <Link className="btn btn-primary" to={`/project/${project.id}/lore`}>
+            打开设定仓库
+          </Link>
+        </div>
+      )}
 
       {/* Progress panel — only show on writing step */}
       {activeStep === "writing" && project.has_outline && (
         <ProgressPanel projectId={project.id} />
       )}
 
-      {/* Step content — CSS display toggling keeps components mounted to preserve state */}
-      <div style={{ display: activeStep === "worldview" ? "block" : "none" }}>
+      {activeStep === "worldview" && (
         <WorldviewEditor
           projectId={project.id}
           hasWorldview={project.has_worldview}
           genre={project.genre}
-          onComplete={async () => { await refreshProject(); setActiveStep("outline"); }}
+          onComplete={async () => {
+            await refreshProject();
+            navigate(`/project/${project.id}/lore`);
+          }}
           onBack={() => navigate("/")}
         />
-      </div>
+      )}
 
-      <div style={{ display: activeStep === "outline" ? "block" : "none" }}>
-        <OutlineReview
-          projectId={project.id}
-          hasOutline={project.has_outline}
-          projectStatus={project.status}
-          onComplete={async () => { await refreshProject(); setActiveStep("writing"); }}
-          onBack={async () => { await refreshProject(); setActiveStep("worldview"); }}
-        />
-      </div>
-
-      <div style={{ display: activeStep === "writing" ? "block" : "none" }}>
+      {activeStep === "writing" && project.has_outline && (
         <ChapterWriter
           projectId={project.id}
           totalChapters={project.total_chapters}
           onProgress={refreshProject}
-          onBack={() => setActiveStep("outline")}
+          onBack={() => setActiveStep("worldview")}
         />
-      </div>
+      )}
     </div>
   );
 }
