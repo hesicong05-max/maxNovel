@@ -107,6 +107,7 @@ jobs:
       - name: Run lore and read-only preflight tests on PostgreSQL
         run: >-
           python -m pytest
+          tests/test_worldview_optimistic_save.py
           tests/test_lore_api.py
           tests/test_lore_models.py
           tests/test_lore_writes.py

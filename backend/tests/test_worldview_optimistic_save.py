@@ -1,6 +1,10 @@
 import asyncio
+import json
 
 import pytest
+from sqlalchemy import select
+
+from app.models.project import Worldview
 
 
 def _payload(name: str, expected_source_checksum: str | None = None) -> dict:
@@ -189,3 +193,37 @@ async def test_file_write_failure_can_replay_committed_worldview_safely(
         f"/api/worldview/{project_id}", headers=auth_headers
     )
     assert current.json()["characters"][0]["name"] == "已提交待补文件版本"
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_worldview_get_decodes_historical_json_text_without_rewriting(
+    client, auth_headers
+):
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _project(client, auth_headers)
+    created = await client.post(
+        f"/api/worldview/{project_id}",
+        headers=auth_headers,
+        json=_payload("历史文本角色"),
+    )
+    assert created.status_code == 200
+
+    async with TestSessionLocal() as session:
+        worldview = await session.scalar(
+            select(Worldview).where(Worldview.project_id == project_id)
+        )
+        assert worldview is not None
+        for field in (
+            "characters", "geography", "factions", "power_system",
+            "history", "conflicts", "special_settings", "parsed_elements",
+        ):
+            setattr(worldview, field, json.dumps(getattr(worldview, field)))
+        await session.commit()
+
+    response = await client.get(
+        f"/api/worldview/{project_id}", headers=auth_headers
+    )
+    assert response.status_code == 200
+    assert response.json()["characters"][0]["name"] == "历史文本角色"
+    assert len(response.json()["source_checksum"]) == 64

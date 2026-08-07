@@ -19,6 +19,7 @@ from app.core.maintenance import (
     require_project_writes_available,
 )
 from app.core.lore_migration_preview import migration_preview_source_checksum
+from app.core.legacy_json import read_legacy_object_list
 from app.core.project_files import save_worldview_file
 from app.core.worldview_parser import worldview_parser
 from app.database import get_db
@@ -32,6 +33,21 @@ from app.schemas.models import (
 )
 
 router = APIRouter(prefix="/api/worldview", tags=["worldview"])
+
+
+def _response_object_list(value, field: str) -> list[dict]:
+    """Read native or historical JSON-text collections without rewriting them."""
+    result = read_legacy_object_list(value)
+    if not result.valid:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "WORLDVIEW_LEGACY_JSON_INVALID",
+                "message": f"旧世界观字段 {field} 无法安全读取，请先修复原始数据。",
+                "retryable": False,
+            },
+        )
+    return result.items
 
 logger = logging.getLogger(__name__)
 
@@ -395,16 +411,16 @@ async def get_worldview(
     return WorldviewResponse(
         id=worldview.id,
         project_id=worldview.project_id,
-        characters=worldview.characters or [],
-        geography=worldview.geography or [],
-        factions=worldview.factions or [],
-        power_system=worldview.power_system or [],
-        history=worldview.history or [],
-        conflicts=worldview.conflicts or [],
-        special_settings=worldview.special_settings or [],
+        characters=_response_object_list(worldview.characters, "characters"),
+        geography=_response_object_list(worldview.geography, "geography"),
+        factions=_response_object_list(worldview.factions, "factions"),
+        power_system=_response_object_list(worldview.power_system, "power_system"),
+        history=_response_object_list(worldview.history, "history"),
+        conflicts=_response_object_list(worldview.conflicts, "conflicts"),
+        special_settings=_response_object_list(worldview.special_settings, "special_settings"),
         raw_text=worldview.raw_text,
         source=worldview.source or "manual",
-        parsed_elements=worldview.parsed_elements or [],
+        parsed_elements=_response_object_list(worldview.parsed_elements, "parsed_elements"),
         source_checksum=migration_preview_source_checksum(worldview),
         created_at=worldview.created_at,
     )
