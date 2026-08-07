@@ -115,6 +115,8 @@ jobs:
           tests/test_lore_merge_preview.py
           tests/test_lore_merge_commit.py
           tests/test_lore_migration_preview.py
+          tests/test_lore_migration_rehearsal.py
+          tests/test_lore_migration_rehearsal_postgres.py
           tests/test_json_preflight_postgres.py
           tests/test_legacy_json_maintenance.py
           -v --tb=short
