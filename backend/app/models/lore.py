@@ -685,6 +685,43 @@ class LoreReviewSuggestionEvent(Base):
     created_at = Column(DateTime, nullable=False, default=_utcnow)
 
 
+class LoreReviewSuggestionCreateOperation(Base):
+    """Durable idempotency receipt for an author-created review clue."""
+
+    __tablename__ = "lore_review_suggestion_create_operations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "suggestion_id"],
+            ["lore_review_suggestions.project_id", "lore_review_suggestions.id"],
+            name="fk_lore_review_create_operation_suggestion",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "project_id", "requested_by", "operation_key",
+            name="uq_lore_review_create_operation_key",
+        ),
+        Index(
+            "ix_lore_review_create_operations_project_created",
+            "project_id", "created_at", "id",
+        ),
+    )
+
+    id = Column(String(32), primary_key=True, default=gen_id)
+    project_id = Column(
+        String(32), ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    requested_by = Column(
+        String(32), ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    operation_key = Column(String(128), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    suggestion_id = Column(String(32), nullable=False, index=True)
+    created_suggestion = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+
 class LoreMergeOperation(Base):
     """Completed non-destructive merge audit and durable idempotency receipt."""
 

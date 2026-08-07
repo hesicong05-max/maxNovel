@@ -54,6 +54,8 @@ import type {
   LoreReviewDecisionInput,
   LoreReviewDecisionResponse,
   LoreReviewDetail,
+  LoreManualReviewCreateInput,
+  LoreManualReviewCreateResponse,
   LoreReviewListResponse,
   LoreReviewScanResponse,
   LoreTypesResponse,
@@ -69,6 +71,7 @@ export class ApiError extends Error {
   readonly retryable: boolean;
   readonly retryAfterSeconds?: number;
   readonly eventId?: string;
+  readonly suggestionId?: string;
   readonly reloadRequired: boolean;
 
   constructor(status: number, data: ApiErrorData) {
@@ -81,6 +84,7 @@ export class ApiError extends Error {
     this.retryable = data.retryable === true;
     this.retryAfterSeconds = data.retry_after_seconds;
     this.eventId = data.event_id;
+    this.suggestionId = data.suggestion_id;
     this.reloadRequired = data.reload_required === true;
   }
 }
@@ -127,6 +131,8 @@ async function responseApiError(response: Response): Promise<ApiError> {
         ? retryHeader
         : undefined),
     event_id: optionalString(payload.event_id),
+    suggestion_id:
+      optionalString(payload.suggestion_id) || optionalString(nestedDetail.suggestion_id),
     reload_required:
       payload.reload_required === true || nestedDetail.reload_required === true,
   });
@@ -419,6 +425,11 @@ export const api = {
     fetchJSON<LoreReviewScanResponse>(
       `/projects/${projectId}/lore/reviews/scan`,
       { method: "POST" }
+    ),
+  createManualLoreReview: (projectId: string, data: LoreManualReviewCreateInput) =>
+    fetchJSON<LoreManualReviewCreateResponse>(
+      `/projects/${projectId}/lore/reviews/manual`,
+      { method: "POST", body: JSON.stringify(data) }
     ),
   listLoreReviews: (
     projectId: string,

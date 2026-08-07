@@ -107,6 +107,7 @@ export default function LoreMergeWizard({
   detail,
   loreTypes,
   enabled,
+  blockedReason,
   readOnly,
   onDirtyChange,
   onBusyChange,
@@ -117,6 +118,7 @@ export default function LoreMergeWizard({
   detail: LoreReviewDetail;
   loreTypes: LoreTypeDefinition[];
   enabled: boolean;
+  blockedReason?: string | null;
   readOnly: boolean;
   onDirtyChange: (dirty: boolean) => void;
   onBusyChange: (busy: boolean) => void;
@@ -468,7 +470,7 @@ export default function LoreMergeWizard({
       <p>人工判断为重复不会自动执行合并。开始后需要逐项选择保留内容并核对关系影响。</p>
       <p className="lore-note">另一项不会被删除；合并后将暂停用于生成并指向保留项。当前不能自动撤销。</p>
       <button className="btn btn-primary" type="button" disabled={!enabled || readOnly || detail.stale || Boolean(error)} onClick={start}>开始合并</button>
-      {!enabled && <span className="lore-meta">当前项目尚未开放安全合并提交。</span>}
+      {!enabled && <span className="lore-meta">{blockedReason || "当前项目尚未开放安全合并提交。"}</span>}
       {error && <div className="lore-alert" role="alert">{error}</div>}
     </section>;
   }

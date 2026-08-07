@@ -8,6 +8,8 @@ import {
   type DraftScope,
 } from "@/services/maintenanceDrafts";
 import type {
+  LoreElementListItem,
+  LoreManualReviewCreateInput,
   LoreReviewDecisionInput,
   LoreReviewDetail,
   LoreReviewKind,
@@ -118,6 +120,8 @@ export default function LoreReviewPanel({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [mergeDirty, setMergeDirty] = useState(false);
   const [mergeBusy, setMergeBusy] = useState(false);
+  const [manualDirty, setManualDirty] = useState(false);
+  const [manualBusy, setManualBusy] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const listSequence = useRef(0);
   const detailSequence = useRef(0);
@@ -133,10 +137,11 @@ export default function LoreReviewPanel({
     kind: "lore-suggestion-review",
     objectId: selectedId,
   }) : null, [projectId, selectedId, userId]);
-  const dirty = decision !== "" || note.trim() !== "" || frozenInput !== null || mergeDirty;
+  const reviewDirty = decision !== "" || note.trim() !== "" || frozenInput !== null || mergeDirty;
+  const dirty = reviewDirty || manualDirty;
 
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
-  useEffect(() => onBusyChange(busy !== null || mergeBusy), [busy, mergeBusy, onBusyChange]);
+  useEffect(() => onBusyChange(busy !== null || mergeBusy || manualBusy), [busy, manualBusy, mergeBusy, onBusyChange]);
   useEffect(() => () => {
     onDirtyChange(false);
     onBusyChange(false);
@@ -217,7 +222,11 @@ export default function LoreReviewPanel({
       setNotice(loaded.status === "expired"
         ? "已恢复超过七天的判断草稿；系统没有自动提交。"
         : "已恢复这台设备上的判断草稿；系统没有自动提交。");
-    } else if (loaded.status === "corrupt") {
+    } else if (
+      loaded.status === "corrupt"
+      || loaded.status === "available"
+      || loaded.status === "expired"
+    ) {
       setStorageError("这条线索的本机草稿已损坏；原记录仍保留，清除前不会提交新的判断。");
     } else if (loaded.status === "unavailable") {
       setStorageError("浏览器草稿存储不可用；为避免未知结果，本次不能提交判断。");
@@ -260,8 +269,8 @@ export default function LoreReviewPanel({
 
   function selectItem(id: string) {
     if (busy) return;
-    if (id !== selectedId && dirty && !window.confirm("确定放弃当前尚未提交的判断草稿吗？")) return;
-    if (id !== selectedId && dirty && !discardDraft()) return;
+    if (id !== selectedId && reviewDirty && !window.confirm("确定放弃当前尚未提交的判断草稿吗？")) return;
+    if (id !== selectedId && reviewDirty && !discardDraft()) return;
     setNotice("");
     setSelectedId(id);
   }
@@ -393,12 +402,33 @@ export default function LoreReviewPanel({
       <div className="lore-review-toolbar">
         <div>
           <h2 ref={headingRef} tabIndex={-1}>重复与冲突</h2>
-          <p>系统只提供待核对线索，不会自动认定、合并或改写设定。</p>
+          <p>所有线索只用于待核对，不会自动认定、合并或改写设定。</p>
         </div>
         <button className="btn btn-primary" type="button" disabled={readOnly || busy !== null} onClick={scan}>
           {busy === "scan" ? "扫描中…" : "扫描正式设定"}
         </button>
       </div>
+      <ManualReviewForm
+        projectId={projectId}
+        userId={userId}
+        readOnly={readOnly}
+        onDirtyChange={setManualDirty}
+        onBusyChange={setManualBusy}
+        onCreated={(createdDetail, created, replayed, openedExistingConflict = false) => {
+          setStatus(createdDetail.needs_review ? "needs_review" : createdDetail.review_status);
+          setSelectedId(createdDetail.id);
+          setDetail(createdDetail);
+          setNotice(openedExistingConflict
+            ? "这两项设定已有另一条人工线索，已打开原记录；本次没有覆盖。"
+            : replayed
+              ? "该人工线索先前已安全记录，本次没有重复创建。"
+              : created
+                ? "人工线索已创建；它不会自动改写或合并设定。"
+                : "这两项设定已有相同的人工线索，已安全复用。");
+          setReloadToken((value) => value + 1);
+          onOverviewRefresh();
+        }}
+      />
       {readOnly && <div className="lore-note">当前仓库只读，可查看已有线索，但不能扫描或记录判断。</div>}
       {notice && <div className="lore-note" role="status">{notice}</div>}
       {listError && <div className="lore-alert" role="alert">{listError}<button type="button" onClick={() => setReloadToken((value) => value + 1)}>重试</button></div>}
@@ -410,8 +440,8 @@ export default function LoreReviewPanel({
       </form>
       <div className={`lore-workspace lore-review-workspace ${selectedId ? "has-selection" : ""}`}>
         <section className="lore-list" aria-busy={loading} aria-label="设定线索列表">
-          <div className="lore-list-heading"><h3>系统线索</h3><span aria-live="polite">{loading ? "加载中…" : `共 ${total} 项`}</span></div>
-          {!loading && !listError && total === 0 && <div className="lore-empty"><strong>当前没有待核对的系统线索</strong><span>这不表示仓库一定没有重复或冲突；可扫描正式设定，或查看已判断线索。</span></div>}
+          <div className="lore-list-heading"><h3>复核线索</h3><span aria-live="polite">{loading ? "加载中…" : `共 ${total} 项`}</span></div>
+          {!loading && !listError && total === 0 && <div className="lore-empty"><strong>当前没有待核对的线索</strong><span>这不表示仓库一定没有重复或冲突；可扫描正式设定，也可创建人工线索。</span></div>}
           {items.map((item) => <button
             key={item.id}
             ref={(node) => { if (node) cardRefs.current.set(item.id, node); else cardRefs.current.delete(item.id); }}
@@ -421,7 +451,7 @@ export default function LoreReviewPanel({
             disabled={busy !== null}
             onClick={() => selectItem(item.id)}
           >
-            <span className="lore-card-top"><span className="lore-type">系统线索 · {KIND_LABEL[item.kind]}</span>{item.stale && <span className="lore-badge lore-badge--warning">依据已变化</span>}</span>
+            <span className="lore-card-top"><span className="lore-type">{item.origin === "author_report" ? "作者提报" : "系统扫描"} · {KIND_LABEL[item.kind]}</span>{item.stale && <span className="lore-badge lore-badge--warning">依据已变化</span>}</span>
             <strong>{item.left.name} ↔ {item.right.name}</strong>
             <span className="lore-summary">{item.primary_reason}</span>
             <span className="lore-meta">{STATUS_LABEL[item.review_status]} · {item.left.type.display_name} · 证据版本 {item.evidence_revision}</span>
@@ -429,21 +459,21 @@ export default function LoreReviewPanel({
           {cursor && <button className="btn btn-secondary lore-load-more" type="button" disabled={loadingMore} onClick={loadMore}>{loadingMore ? "加载中…" : "加载更多"}</button>}
         </section>
         <aside className="lore-detail lore-review-detail" aria-label="线索详情">
-          {selectedId && <button className="btn btn-secondary lore-detail-back" type="button" onClick={() => { if (!dirty || window.confirm("确定放弃当前判断草稿吗？")) { if (!dirty || discardDraft()) setSelectedId(null); } }}>← 返回线索列表</button>}
-          {!selectedId && <div className="lore-empty"><strong>选择一条系统线索</strong><span>可对比双方版本、相关字段和原始来源。</span></div>}
+          {selectedId && <button className="btn btn-secondary lore-detail-back" type="button" onClick={() => { if (!reviewDirty || window.confirm("确定放弃当前判断草稿吗？")) { if (!reviewDirty || discardDraft()) setSelectedId(null); } }}>← 返回线索列表</button>}
+          {!selectedId && <div className="lore-empty"><strong>选择一条复核线索</strong><span>可对比双方版本、相关字段和原始来源。</span></div>}
           {detailLoading && <div className="lore-empty">线索详情加载中…</div>}
           {(detailError || storageError) && <div ref={errorRef} tabIndex={-1} className="lore-alert" role="alert">{detailError || storageError}{(phase === "outcome_unknown" || phase === "conflict" || phase === "stale") && <button type="button" disabled={busy !== null} onClick={checkLatest}>{busy === "check" ? "核对中…" : "核对最新状态"}</button>}</div>}
           {detail && <>
             <header className="lore-review-detail-header">
               <h2 ref={detailHeadingRef} tabIndex={-1}>核对这条设定线索</h2>
-              <p>系统发现的是可能性，以下内容尚未被人工确认。</p>
+              <p>{detail.origin === "author_report" ? "这是作者主动提报的复核线索，尚未形成正式判断。" : "系统扫描发现的是可能性，以下内容尚未被人工确认。"}</p>
               <span className="lore-badge">{KIND_LABEL[detail.kind]}</span>
               <strong>{STATUS_LABEL[detail.review_status]}</strong>
             </header>
             {detail.stale && <div className="lore-alert" role="alert">对比依据已变化，请重新扫描后再判断。</div>}
             <section className="lore-review-comparison" aria-label="两项设定对比">
               <ReviewEndpointCard label="左侧设定" endpoint={detail.left_snapshot} onOpen={() => onOpenElement(detail.left.id)} />
-              <div className="lore-review-evidence"><h3>系统发现的线索</h3><p>{detail.primary_reason}</p>{detail.evidence.length === 0 ? <p>双方名称与类型相同，未发现可安全判定的字段差异。</p> : detail.evidence.map((evidence) => <article key={evidence.field_key}><strong>{evidence.label}：内容不同</strong><span>左：{evidence.left_value || "一侧为空"}</span><span>右：{evidence.right_value || "一侧为空"}</span></article>)}<p className="lore-note">内容不同也可能是补充、时间变化或同名对象，并不自动代表事实矛盾。</p></div>
+              <div className="lore-review-evidence"><h3>{detail.origin === "author_report" ? "作者提报内容" : "系统扫描依据"}</h3><p>{detail.primary_reason}</p>{detail.evidence.length === 0 ? <p>未记录额外依据。</p> : detail.evidence.map((evidence) => evidence.comparison === "author_report" ? <article key={evidence.field_key}><strong>{evidence.label}</strong><span>{evidence.statement || "未填写说明"}</span></article> : <article key={evidence.field_key}><strong>{evidence.label}：内容不同</strong><span>左：{evidence.left_value || "一侧为空"}</span><span>右：{evidence.right_value || "一侧为空"}</span></article>)}<p className="lore-note">线索仅用于引导人工复核，不自动代表事实矛盾或重复设定。</p></div>
               <ReviewEndpointCard label="右侧设定" endpoint={detail.right_snapshot} onOpen={() => onOpenElement(detail.right.id)} />
             </section>
             <form className="lore-review-decision" onSubmit={requestDecision}>
@@ -459,7 +489,8 @@ export default function LoreReviewPanel({
               userId={userId}
               detail={detail}
               loreTypes={loreTypes}
-              enabled={mergeCommitEnabled}
+              enabled={mergeCommitEnabled && detail.merge_allowed}
+              blockedReason={detail.merge_block_reason}
               readOnly={readOnly}
               onDirtyChange={setMergeDirty}
               onBusyChange={setMergeBusy}
@@ -477,6 +508,420 @@ export default function LoreReviewPanel({
       {confirmOpen && frozenInput && <div className="modal-overlay"><div ref={confirmRef} tabIndex={-1} className="modal-content lore-review-confirm" role="alertdialog" aria-modal="true" aria-labelledby="review-confirm-title"><h2 id="review-confirm-title">确认记录“{STATUS_LABEL[frozenInput.decision]}”</h2><p>这只会记录人工判断，不会自动合并、删除、停用或改写任何设定，两项设定及生成权限保持不变。</p><div className="modal-actions"><button className="btn btn-secondary" type="button" onClick={() => setConfirmOpen(false)}>取消</button><button className="btn btn-primary" type="button" onClick={submitDecision}>确认记录</button></div></div></div>}
     </section>
   );
+}
+
+type ManualPhase = "draft" | "maintenance" | "conflict" | "outcome_unknown";
+
+interface StoredManualReviewDraft {
+  version: 1;
+  open: boolean;
+  kind: LoreReviewKind;
+  note: string;
+  leftQuery: string;
+  rightQuery: string;
+  left: LoreElementListItem | null;
+  right: LoreElementListItem | null;
+  frozenInput: LoreManualReviewCreateInput | null;
+  phase: ManualPhase;
+}
+
+function isManualEndpoint(value: unknown): value is LoreElementListItem {
+  if (!value || typeof value !== "object") return false;
+  const endpoint = value as Partial<LoreElementListItem>;
+  const type = endpoint.type as LoreElementListItem["type"] | undefined;
+  return typeof endpoint.id === "string"
+    && endpoint.id.length > 0
+    && typeof endpoint.name === "string"
+    && Boolean(type && typeof type.key === "string" && typeof type.display_name === "string")
+    && typeof endpoint.lifecycle_status === "string"
+    && typeof endpoint.confirmation_status === "string"
+    && typeof endpoint.enabled === "boolean"
+    && typeof endpoint.lock_version === "number"
+    && Number.isInteger(endpoint.lock_version)
+    && endpoint.lock_version >= 1;
+}
+
+function isManualFrozenInput(value: unknown): value is LoreManualReviewCreateInput {
+  if (!value || typeof value !== "object") return false;
+  const input = value as Partial<LoreManualReviewCreateInput>;
+  return typeof input.operation_key === "string"
+    && input.operation_key.length >= 16
+    && (input.kind === "possible_duplicate" || input.kind === "possible_conflict")
+    && typeof input.left_element_id === "string"
+    && input.left_element_id.length > 0
+    && typeof input.right_element_id === "string"
+    && input.right_element_id.length > 0
+    && typeof input.left_expected_lock_version === "number"
+    && Number.isInteger(input.left_expected_lock_version)
+    && input.left_expected_lock_version >= 1
+    && typeof input.right_expected_lock_version === "number"
+    && Number.isInteger(input.right_expected_lock_version)
+    && input.right_expected_lock_version >= 1
+    && typeof input.note === "string";
+}
+
+function isStoredManualDraft(value: unknown): value is StoredManualReviewDraft {
+  if (!value || typeof value !== "object") return false;
+  const draft = value as Partial<StoredManualReviewDraft>;
+  return draft.version === 1
+    && typeof draft.open === "boolean"
+    && (draft.kind === "possible_duplicate" || draft.kind === "possible_conflict")
+    && typeof draft.note === "string"
+    && typeof draft.leftQuery === "string"
+    && typeof draft.rightQuery === "string"
+    && (draft.left === null || isManualEndpoint(draft.left))
+    && (draft.right === null || isManualEndpoint(draft.right))
+    && (draft.frozenInput === null || isManualFrozenInput(draft.frozenInput))
+    && ["draft", "maintenance", "conflict", "outcome_unknown"].includes(String(draft.phase))
+    && (
+      draft.frozenInput === null
+      || Boolean(
+        draft.left
+        && draft.right
+        && draft.frozenInput.left_element_id === draft.left.id
+        && draft.frozenInput.right_element_id === draft.right.id
+        && draft.frozenInput.left_expected_lock_version === draft.left.lock_version
+        && draft.frozenInput.right_expected_lock_version === draft.right.lock_version
+        && draft.frozenInput.kind === draft.kind
+        && draft.frozenInput.note === draft.note.trim()
+      )
+    );
+}
+
+function ManualReviewForm({
+  projectId,
+  userId,
+  readOnly,
+  onDirtyChange,
+  onBusyChange,
+  onCreated,
+}: {
+  projectId: string;
+  userId: string;
+  readOnly: boolean;
+  onDirtyChange: (dirty: boolean) => void;
+  onBusyChange: (busy: boolean) => void;
+  onCreated: (
+    detail: LoreReviewDetail,
+    created: boolean,
+    replayed: boolean,
+    openedExistingConflict?: boolean,
+  ) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [kind, setKind] = useState<LoreReviewKind>("possible_conflict");
+  const [note, setNote] = useState("");
+  const [leftQuery, setLeftQuery] = useState("");
+  const [rightQuery, setRightQuery] = useState("");
+  const [leftResults, setLeftResults] = useState<LoreElementListItem[]>([]);
+  const [rightResults, setRightResults] = useState<LoreElementListItem[]>([]);
+  const [leftLoading, setLeftLoading] = useState(false);
+  const [rightLoading, setRightLoading] = useState(false);
+  const [left, setLeft] = useState<LoreElementListItem | null>(null);
+  const [right, setRight] = useState<LoreElementListItem | null>(null);
+  const [frozenInput, setFrozenInput] = useState<LoreManualReviewCreateInput | null>(null);
+  const [phase, setPhase] = useState<ManualPhase>("draft");
+  const [busy, setBusy] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const [submitError, setSubmitError] = useState("");
+  const [submitErrorCode, setSubmitErrorCode] = useState("");
+  const [storageError, setStorageError] = useState("");
+  const [storageIssue, setStorageIssue] = useState<"corrupt" | "unavailable" | null>(null);
+  const errorRef = useRef<HTMLDivElement | null>(null);
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const draftScope = useMemo<DraftScope>(() => ({
+    userId,
+    projectId,
+    kind: "lore-manual-review",
+    objectId: "new",
+  }), [projectId, userId]);
+  const dirty = open && Boolean(left || right || note.trim() || frozenInput);
+
+  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
+  useEffect(() => onBusyChange(busy), [busy, onBusyChange]);
+  useEffect(() => () => {
+    onDirtyChange(false);
+    onBusyChange(false);
+  }, [onBusyChange, onDirtyChange]);
+  useEffect(() => {
+    const loaded = loadDraft<unknown>(draftScope);
+    if ((loaded.status === "available" || loaded.status === "expired") && isStoredManualDraft(loaded.draft.payload)) {
+      const saved = loaded.draft.payload;
+      setOpen(saved.open);
+      setKind(saved.kind);
+      setNote(saved.note);
+      setLeftQuery(saved.leftQuery);
+      setRightQuery(saved.rightQuery);
+      setLeft(saved.left);
+      setRight(saved.right);
+      setFrozenInput(saved.frozenInput);
+      setPhase(saved.phase);
+    } else if (
+      loaded.status === "corrupt"
+      || loaded.status === "available"
+      || loaded.status === "expired"
+    ) {
+      setStorageIssue("corrupt");
+      setStorageError("人工线索草稿已损坏；为避免重复创建，清除前暂停提交。");
+    } else if (loaded.status === "unavailable") {
+      setStorageIssue("unavailable");
+      setStorageError("人工线索草稿存储不可用；为避免重复创建，暂停提交。");
+    }
+  }, [draftScope]);
+
+  function snapshot(overrides: Partial<StoredManualReviewDraft> = {}): StoredManualReviewDraft {
+    return {
+      version: 1,
+      open: overrides.open ?? open,
+      kind: overrides.kind ?? kind,
+      note: overrides.note ?? note,
+      leftQuery: overrides.leftQuery ?? leftQuery,
+      rightQuery: overrides.rightQuery ?? rightQuery,
+      left: Object.hasOwn(overrides, "left") ? overrides.left ?? null : left,
+      right: Object.hasOwn(overrides, "right") ? overrides.right ?? null : right,
+      frozenInput: Object.hasOwn(overrides, "frozenInput") ? overrides.frozenInput ?? null : frozenInput,
+      phase: overrides.phase ?? phase,
+    };
+  }
+
+  function persist(next: StoredManualReviewDraft): boolean {
+    const result = saveDraft(draftScope, next, null);
+    if (result.status === "unavailable") {
+      setStorageIssue("unavailable");
+      setStorageError("浏览器无法安全保存人工线索草稿，系统没有提交。");
+      return false;
+    }
+    setStorageIssue(null);
+    setStorageError("");
+    return true;
+  }
+
+  useEffect(() => {
+    if (open && !storageError) persist(snapshot());
+    // Persist every user-visible draft change; snapshot uses the same state values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frozenInput, kind, left, leftQuery, note, open, phase, right, rightQuery]);
+
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setSearchError("");
+      setLeftLoading(true);
+      api.listLoreElements(projectId, {
+        q: leftQuery.trim() || undefined,
+        confirmation_status: "confirmed",
+        limit: 20,
+      }, controller.signal).then((response) => {
+        setLeftResults(response.items.filter((item) => item.lifecycle_status !== "merged"));
+      }).catch((error) => {
+        if ((error as Error).name !== "AbortError") setSearchError(`左侧设定加载失败：${message(error)}`);
+      }).finally(() => {
+        if (!controller.signal.aborted) setLeftLoading(false);
+      });
+    }, 200);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [leftQuery, open, projectId]);
+
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setSearchError("");
+      setRightLoading(true);
+      api.listLoreElements(projectId, {
+        q: rightQuery.trim() || undefined,
+        confirmation_status: "confirmed",
+        limit: 20,
+      }, controller.signal).then((response) => {
+        setRightResults(response.items.filter((item) => item.lifecycle_status !== "merged"));
+      }).catch((error) => {
+        if ((error as Error).name !== "AbortError") setSearchError(`右侧设定加载失败：${message(error)}`);
+      }).finally(() => {
+        if (!controller.signal.aborted) setRightLoading(false);
+      });
+    }, 200);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [open, projectId, rightQuery]);
+
+  function close() {
+    const warning = phase === "outcome_unknown"
+      ? "原请求的结果仍不确定。放弃后重新创建可能形成重复线索，确定放弃吗？"
+      : "确定放弃尚未提交的人工线索草稿吗？";
+    if (dirty && !window.confirm(warning)) return;
+    const cleared = clearDraft(draftScope);
+    if (cleared.status === "unavailable") {
+      setStorageError("无法安全清除本机草稿，已停止关闭。");
+      setStorageIssue("unavailable");
+      return;
+    }
+    setOpen(false);
+    setLeft(null);
+    setRight(null);
+    setNote("");
+    setFrozenInput(null);
+    setPhase("draft");
+    setSubmitError("");
+    setSubmitErrorCode("");
+    requestAnimationFrame(() => triggerRef.current?.focus());
+  }
+
+  function clearCorruptDraft() {
+    if (!window.confirm("损坏草稿无法安全恢复。确定只清除这条本机人工线索草稿吗？")) return;
+    const cleared = clearDraft(draftScope);
+    if (cleared.status === "unavailable") {
+      setStorageIssue("unavailable");
+      setStorageError("本机草稿存储仍不可用，没有清除任何内容。");
+      return;
+    }
+    setStorageIssue(null);
+    setStorageError("");
+    setOpen(false);
+    setLeft(null);
+    setRight(null);
+    setFrozenInput(null);
+    setPhase("draft");
+    requestAnimationFrame(() => triggerRef.current?.focus());
+  }
+
+  async function reloadSelectedEndpoints() {
+    if (!left || !right) return;
+    setBusy(true);
+    setSubmitError("");
+    try {
+      const [nextLeft, nextRight] = await Promise.all([
+        api.getLoreElement(projectId, left.id),
+        api.getLoreElement(projectId, right.id),
+      ]);
+      if (nextLeft.lifecycle_status === "merged" || nextRight.lifecycle_status === "merged") {
+        setSubmitError("其中一项设定已合并，不能继续使用。请关闭草稿后重新选择。");
+        return;
+      }
+      setLeft(nextLeft);
+      setRight(nextRight);
+      setFrozenInput(null);
+      setPhase("draft");
+      setSubmitErrorCode("");
+      setSubmitError("已重新加载两项设定的当前版本。请核对后创建新请求。");
+    } catch (error) {
+      setSubmitError(`无法重新加载设定：${message(error)}`);
+    } finally {
+      setBusy(false);
+      requestAnimationFrame(() => errorRef.current?.focus());
+    }
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!left || !right || !note.trim() || readOnly || storageError) return;
+    if (left.id === right.id) {
+      setSubmitError("请选择两项不同的正式设定。");
+      return;
+    }
+    const input = frozenInput ?? {
+      operation_key: operationKey().replace(/^review-/, "manual-review-"),
+      kind,
+      left_element_id: left.id,
+      right_element_id: right.id,
+      left_expected_lock_version: left.lock_version,
+      right_expected_lock_version: right.lock_version,
+      note: note.trim(),
+    };
+    if (!persist(snapshot({ frozenInput: input, phase: "draft" }))) return;
+    setFrozenInput(input);
+    setBusy(true);
+    setSubmitError("");
+    setSubmitErrorCode("");
+    try {
+      const response = await api.createManualLoreReview(projectId, input);
+      const cleared = clearDraft(draftScope);
+      if (cleared.status === "unavailable") {
+        setStorageError("线索已记录，但本机草稿未能清除；请勿再次提交。");
+      }
+      setOpen(false);
+      setLeft(null);
+      setRight(null);
+      setNote("");
+      setFrozenInput(null);
+      setPhase("draft");
+      onCreated(response.suggestion, response.created, response.replayed);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 503) {
+        setPhase("maintenance");
+        setSubmitError("仓库正在维护，草稿和原请求已保留，系统没有自动重试。");
+      } else if (error instanceof ApiError && error.status === 409) {
+        if (error.code === "LORE_MANUAL_REVIEW_PAIR_CONFLICT" && error.suggestionId) {
+          try {
+            const existing = await api.getLoreReview(projectId, error.suggestionId);
+            const cleared = clearDraft(draftScope);
+            if (cleared.status === "unavailable") {
+              setStorageIssue("unavailable");
+              setStorageError("已有线索已找到，但本机草稿无法安全清除；请勿再次提交。");
+              return;
+            }
+            setOpen(false);
+            setLeft(null);
+            setRight(null);
+            setNote("");
+            setFrozenInput(null);
+            setPhase("draft");
+            onCreated(existing, false, false, true);
+            return;
+          } catch (loadError) {
+            setSubmitError(`已存在不同的人工线索，但暂时无法打开：${message(loadError)}`);
+          }
+        } else if (error.code === "LORE_MANUAL_REVIEW_CONFLICT" && error.retryable) {
+          setPhase("outcome_unknown");
+          setSubmitError("并发结果不确定。请使用相同请求安全重试。");
+        } else {
+          setPhase("conflict");
+          setSubmitErrorCode(error.code || "LORE_MANUAL_REVIEW_CONFLICT");
+          setSubmitError(`${error.detail} 原请求已冻结，系统不会自动换键重试。`);
+        }
+      } else {
+        setPhase("outcome_unknown");
+        setSubmitError("网络结果不确定。请使用相同请求安全重试，不要重新选择。");
+      }
+      requestAnimationFrame(() => errorRef.current?.focus());
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) return <section className="lore-manual-review-entry">
+    <div><h3>作者主动提报</h3><p>选择两项正式设定，记录可能重复或冲突的人工线索。</p></div>
+    {storageError && <div className="lore-alert" role="alert">{storageError}{storageIssue === "corrupt" && <button type="button" onClick={clearCorruptDraft}>清除损坏草稿</button>}</div>}
+    <button ref={triggerRef} className="btn btn-secondary" type="button" disabled={readOnly || Boolean(storageError)} onClick={() => { setOpen(true); requestAnimationFrame(() => headingRef.current?.focus()); }}>新建人工线索</button>
+  </section>;
+
+  const resultList = (side: "left" | "right", results: LoreElementListItem[], selected: LoreElementListItem | null, loading: boolean) => <div className="lore-manual-review-results" role="group" aria-label={`${side === "left" ? "左侧" : "右侧"}设定搜索结果`} aria-busy={loading}>
+    {loading ? <p>正在加载正式设定…</p> : results.length === 0 ? <p>未找到可选的正式设定。</p> : results.map((item) => <button
+      key={item.id}
+      type="button"
+      aria-pressed={selected?.id === item.id}
+      className={selected?.id === item.id ? "selected" : ""}
+      disabled={busy || Boolean(frozenInput)}
+      onClick={() => {
+        if (side === "left") setLeft(item); else setRight(item);
+        setFrozenInput(null);
+        setPhase("draft");
+      }}
+    ><strong>{item.name}</strong><span>{selected?.id === item.id ? "已选择 · " : ""}{item.type.display_name} · {item.lifecycle_status === "archived" ? "已归档" : "使用中"} · {item.enabled ? "已启用" : "已停用"} · 版本 {item.lock_version}</span></button>)}
+  </div>;
+
+  return <form className="lore-manual-review-form" onSubmit={submit} aria-busy={busy}>
+    <div className="lore-manual-review-heading"><div><h3 ref={headingRef} tabIndex={-1}>新建人工线索</h3><p>人工线索与系统扫描分开标记，只用于复核，不会自动合并。</p></div><button className="btn btn-secondary" type="button" disabled={busy} onClick={close}>关闭</button></div>
+    {(searchError || submitError || storageError) && <div ref={errorRef} tabIndex={-1} className="lore-alert" role="alert">{submitError || storageError || searchError}{frozenInput && (submitErrorCode === "LORE_MANUAL_REVIEW_ENDPOINT_STALE" || submitErrorCode === "LORE_MANUAL_REVIEW_ENDPOINT_MERGED") && <button type="button" disabled={busy} onClick={reloadSelectedEndpoints}>重新加载两项设定</button>}</div>}
+    <div className="lore-manual-review-pickers">
+      <div className="lore-manual-review-picker"><label htmlFor="manual-review-left-search">左侧设定</label><input id="manual-review-left-search" className="form-input" value={leftQuery} disabled={busy || Boolean(frozenInput)} onChange={(event) => setLeftQuery(event.target.value)} placeholder="搜索名称、摘要或字段" />{resultList("left", leftResults, left, leftLoading)}</div>
+      <div className="lore-manual-review-picker"><label htmlFor="manual-review-right-search">右侧设定</label><input id="manual-review-right-search" className="form-input" value={rightQuery} disabled={busy || Boolean(frozenInput)} onChange={(event) => setRightQuery(event.target.value)} placeholder="搜索名称、摘要或字段" />{resultList("right", rightResults, right, rightLoading)}</div>
+    </div>
+    {left && right && left.type.key !== right.type.key && <div className="lore-note">这是跨类型线索：可记录和复核，但不能进入合并。</div>}
+    <label><span>线索类型</span><select className="form-select" value={kind} disabled={busy || Boolean(frozenInput)} onChange={(event) => { setKind(event.target.value as LoreReviewKind); setFrozenInput(null); }}><option value="possible_conflict">可能冲突</option><option value="possible_duplicate">可能重复</option></select></label>
+    <label><span>需要复核的具体说明（必填，最多 500 字）</span><textarea className="form-textarea" required maxLength={500} value={note} disabled={busy || Boolean(frozenInput)} onChange={(event) => { setNote(event.target.value); setFrozenInput(null); }} /></label>
+    <div className="lore-manual-review-actions"><button className="btn btn-primary" type="submit" disabled={readOnly || busy || !left || !right || left.id === right.id || !note.trim() || Boolean(storageError) || (Boolean(frozenInput) && phase === "conflict")}>{busy ? "记录中…" : frozenInput ? "使用相同请求安全重试" : "记录人工线索"}</button><span>不会修改两项正式设定。</span></div>
+  </form>;
 }
 
 function ReviewEndpointCard({ label, endpoint, onOpen }: {

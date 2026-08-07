@@ -51,6 +51,43 @@ def test_lore_migration_upgrade_and_downgrade_are_additive(tmp_path):
     assert _element_version_type_ondelete(database_path) == "CASCADE"
 
 
+def test_manual_review_receipt_migration_round_trip_is_additive(tmp_path):
+    backend_dir = os.path.dirname(os.path.dirname(__file__))
+    database_path = tmp_path / "manual-review-receipts.db"
+    database_url = f"sqlite+aiosqlite:///{database_path}"
+
+    _run_alembic(backend_dir, database_url, "upgrade", "head")
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "lore_review_suggestion_create_operations" in tables
+        assert "lore_review_suggestions" in tables
+
+    _run_alembic(backend_dir, database_url, "downgrade", "e1b3c7d9f010")
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "lore_review_suggestion_create_operations" not in tables
+        assert "lore_review_suggestions" in tables
+
+    _run_alembic(backend_dir, database_url, "upgrade", "head")
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "lore_review_suggestion_create_operations" in tables
+
 def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_path):
     backend_dir = os.path.dirname(os.path.dirname(__file__))
     database_path = tmp_path / "candidate-review-backfill.db"

@@ -27,11 +27,11 @@ const right: LoreElementDetail = {
 };
 
 const detail: LoreReviewDetail = {
-  id: "review-1", kind: "possible_duplicate", detection_state: "active",
+  id: "review-1", origin: "system_scan", kind: "possible_duplicate", detection_state: "active",
   review_status: "confirmed_duplicate", needs_review: false, lock_version: 2, evidence_revision: 1,
   left: { id: left.id, name: left.name, type: left.type, summary: left.summary, lifecycle_status: "active", enabled: true },
   right: { id: right.id, name: right.name, type: right.type, summary: right.summary, lifecycle_status: "active", enabled: true },
-  primary_reason: "名称相同", stale: false, updated_at: "2026-08-07T00:00:00Z",
+  primary_reason: "名称相同", stale: false, merge_allowed: true, merge_block_reason: null, updated_at: "2026-08-07T00:00:00Z",
   rule_key: "same_name", rule_version: 1,
   left_snapshot: { ...left, field_states: { personality: "provided" }, content_version: left.current_version, sources: [] },
   right_snapshot: { ...right, field_states: { personality: "provided" }, content_version: right.current_version, sources: [] },

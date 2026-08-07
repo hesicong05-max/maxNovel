@@ -606,6 +606,58 @@ describe("API - lore repository", () => {
       "/api/projects/project-1/lore/elements/element-1/merge-history"
     );
   });
+
+  it("posts author review clues to the project-scoped manual endpoint", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ replayed: false, created: true }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const input = {
+      operation_key: "manual-review-operation-0001",
+      kind: "possible_conflict" as const,
+      left_element_id: "left-1",
+      right_element_id: "right-1",
+      left_expected_lock_version: 2,
+      right_expected_lock_version: 3,
+      note: "作者提报的冲突说明",
+    };
+    await api.createManualLoreReview("project-1", input);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/projects/project-1/lore/reviews/manual",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(input) })
+    );
+  });
+
+  it("preserves the existing suggestion id from a pair-conflict response", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        detail: {
+          code: "LORE_MANUAL_REVIEW_PAIR_CONFLICT",
+          message: "这两项设定已有不同的用户线索",
+          suggestion_id: "review-existing",
+          retryable: false,
+        },
+      }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    await expect(api.createManualLoreReview("project-1", {
+      operation_key: "manual-review-operation-0002",
+      kind: "possible_conflict",
+      left_element_id: "left-1",
+      right_element_id: "right-1",
+      left_expected_lock_version: 2,
+      right_expected_lock_version: 3,
+      note: "另一条说明",
+    })).rejects.toMatchObject({
+      status: 409,
+      code: "LORE_MANUAL_REVIEW_PAIR_CONFLICT",
+      suggestionId: "review-existing",
+    } satisfies Partial<ApiError>);
+  });
 });
 
 describe("API - Projects", () => {

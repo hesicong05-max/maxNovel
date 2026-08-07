@@ -530,9 +530,12 @@ class LoreReviewEndpoint(BaseModel):
 class LoreReviewEvidence(BaseModel):
     field_key: str
     label: str
-    comparison: Literal["same", "different", "left_empty", "right_empty"]
+    comparison: Literal[
+        "same", "different", "left_empty", "right_empty", "author_report"
+    ]
     left_value: str | None = None
     right_value: str | None = None
+    statement: str | None = None
 
 
 class LoreReviewDecisionEvent(BaseModel):
@@ -549,6 +552,7 @@ class LoreReviewDecisionEvent(BaseModel):
 class LoreReviewSuggestionListItem(BaseModel):
     id: str
     kind: Literal["possible_duplicate", "possible_conflict"]
+    origin: Literal["system_scan", "author_report"]
     detection_state: Literal["active", "stale"]
     review_status: str
     needs_review: bool
@@ -558,6 +562,8 @@ class LoreReviewSuggestionListItem(BaseModel):
     right: LoreRelationEndpoint
     primary_reason: str
     stale: bool
+    merge_allowed: bool
+    merge_block_reason: str | None = None
     updated_at: datetime
 
 
@@ -587,6 +593,35 @@ class LoreReviewScanResponse(BaseModel):
     pending_total: int
     truncated: bool = False
     rescan_required: bool = False
+
+
+class LoreManualReviewCreateInput(BaseModel):
+    operation_key: str = Field(
+        ...,
+        min_length=16,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    kind: Literal["possible_duplicate", "possible_conflict"]
+    left_element_id: str = Field(..., min_length=1, max_length=32)
+    right_element_id: str = Field(..., min_length=1, max_length=32)
+    left_expected_lock_version: int = Field(..., ge=1)
+    right_expected_lock_version: int = Field(..., ge=1)
+    note: str = Field(..., min_length=1, max_length=500)
+
+    @field_validator("note")
+    @classmethod
+    def _non_empty_note(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("请填写需要复核的具体说明")
+        return value.strip()
+
+
+class LoreManualReviewCreateResponse(BaseModel):
+    suggestion: LoreReviewSuggestionDetail
+    replayed: bool = False
+    created: bool = False
+    reused: bool = False
 
 
 class LoreReviewDecisionInput(BaseModel):

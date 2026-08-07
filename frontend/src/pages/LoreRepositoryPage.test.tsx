@@ -283,7 +283,7 @@ describe("LoreRepositoryPage", () => {
     expect(screen.getByText("待核对线索")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "重复与冲突" }));
     expect(await screen.findByRole("heading", { name: "重复与冲突" })).toBeInTheDocument();
-    expect(screen.getByText("系统只提供待核对线索，不会自动认定、合并或改写设定。")).toBeInTheDocument();
+    expect(screen.getByText("所有线索只用于待核对，不会自动认定、合并或改写设定。")).toBeInTheDocument();
     await waitFor(() => expect(listLoreReviews).toHaveBeenCalled());
   });
 

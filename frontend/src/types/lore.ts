@@ -478,6 +478,7 @@ export interface LoreReviewEndpoint extends LoreReviewEndpointSummary {
 
 export interface LoreReviewListItem {
   id: string;
+  origin: "system_scan" | "author_report";
   kind: LoreReviewKind;
   detection_state: "active" | "stale";
   review_status: LoreReviewStatus;
@@ -488,15 +489,18 @@ export interface LoreReviewListItem {
   right: LoreReviewEndpointSummary;
   primary_reason: string;
   stale: boolean;
+  merge_allowed: boolean;
+  merge_block_reason: string | null;
   updated_at: string;
 }
 
 export interface LoreReviewEvidence {
   field_key: string;
   label: string;
-  comparison: "same" | "different" | "left_empty" | "right_empty";
+  comparison: "same" | "different" | "left_empty" | "right_empty" | "author_report";
   left_value: string | null;
   right_value: string | null;
+  statement?: string | null;
 }
 
 export interface LoreReviewDecisionEvent {
@@ -551,6 +555,23 @@ export interface LoreReviewDecisionResponse {
   replayed: boolean;
   applied: boolean;
   next_pending_id: string | null;
+}
+
+export interface LoreManualReviewCreateInput {
+  operation_key: string;
+  kind: LoreReviewKind;
+  left_element_id: string;
+  right_element_id: string;
+  left_expected_lock_version: number;
+  right_expected_lock_version: number;
+  note: string;
+}
+
+export interface LoreManualReviewCreateResponse {
+  suggestion: LoreReviewDetail;
+  replayed: boolean;
+  created: boolean;
+  reused: boolean;
 }
 
 export type LoreMergeChoice = "survivor" | "merged" | "manual";

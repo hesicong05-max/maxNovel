@@ -25,6 +25,7 @@ from app.models.lore import (  # noqa: F401
     LoreMergeRelationAction,
     LoreRelationCreateOperation,
     LoreReviewSuggestion,
+    LoreReviewSuggestionCreateOperation,
     LoreReviewSuggestionEvent,
     ProjectLoreMigration,
     SettingElement,

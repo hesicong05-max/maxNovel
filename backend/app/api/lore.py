@@ -67,13 +67,14 @@ from app.models.lore import (
     LoreElementCreateOperation,
     LoreRelationCreateOperation,
     LoreReviewSuggestion,
+    LoreReviewSuggestionCreateOperation,
     LoreReviewSuggestionEvent,
     LegacyElementMap,
     ProjectLoreMigration,
     SettingElement,
     SettingType,
 )
-from app.models.project import Worldview, _utcnow
+from app.models.project import Project, Worldview, _utcnow
 from app.schemas.lore import (
     LoreElementCreate,
     LoreElementCreateResponse,
@@ -87,6 +88,8 @@ from app.schemas.lore import (
     LoreFieldDefinition,
     LoreListResponse,
     LoreMigrationStatus,
+    LoreManualReviewCreateInput,
+    LoreManualReviewCreateResponse,
     LoreMigrationPreviewResponse,
     LoreMergePreviewInput,
     LoreMergePreviewResponse,
@@ -133,6 +136,8 @@ _CURSOR_SECRET = (settings.JWT_SECRET or "development-lore-cursor-secret").encod
 _CREATE_FINGERPRINT_VERSION = "lore-element-create:v1"
 _RELATION_CREATE_FINGERPRINT_VERSION = "lore-relation-create:v1"
 _REVIEW_DECISION_FINGERPRINT_VERSION = "lore-review-decision:v1"
+_MANUAL_REVIEW_FINGERPRINT_VERSION = "lore-manual-review-create:v1"
+_MANUAL_REVIEW_RULE_KEY = "manual_pair_review"
 
 _CONFIRMATION_LABELS = {
     "candidate": "待确认",
@@ -1755,11 +1760,84 @@ def _review_endpoint_summary(
 
 def _review_primary_reason(suggestion: LoreReviewSuggestion) -> str:
     evidence = suggestion.evidence or []
+    if suggestion.rule_key == _MANUAL_REVIEW_RULE_KEY:
+        statement = next(
+            (
+                str(item.get("statement") or "").strip()
+                for item in evidence
+                if item.get("comparison") == "author_report"
+            ),
+            "",
+        )
+        prefix = (
+            "用户创建了一条可能重复的待核对线索"
+            if suggestion.kind == "possible_duplicate"
+            else "用户创建了一条可能冲突的待核对线索"
+        )
+        return f"{prefix}：{statement}" if statement else prefix
     if suggestion.kind == "possible_conflict" and evidence:
         labels = "、".join(str(item.get("label") or item.get("field_key")) for item in evidence[:3])
         suffix = "等字段" if len(evidence) > 3 else "字段"
         return f"名称和类型相同，但{labels}{suffix}的已提供内容不同"
     return "名称和类型相同，系统建议人工核对是否为同一项设定"
+
+
+def _review_origin(suggestion: LoreReviewSuggestion) -> str:
+    return (
+        "author_report"
+        if suggestion.rule_key == _MANUAL_REVIEW_RULE_KEY
+        else "system_scan"
+    )
+
+
+def _review_is_stale(
+    suggestion: LoreReviewSuggestion,
+    left: SettingElement,
+    right: SettingElement,
+) -> bool:
+    return (
+        suggestion.detection_state == "stale"
+        or left.content_version != suggestion.left_content_version
+        or right.content_version != suggestion.right_content_version
+        or left.lifecycle_status == "merged"
+        or right.lifecycle_status == "merged"
+    )
+
+
+def _review_merge_access(
+    suggestion: LoreReviewSuggestion,
+    left: SettingElement,
+    right: SettingElement,
+    left_type: SettingType,
+    right_type: SettingType,
+    *,
+    stale: bool,
+) -> tuple[bool, str | None]:
+    if stale:
+        return False, "对比依据已变化，请先核对最新设定"
+    if left_type.id != right_type.id:
+        return False, "类型不同，需先统一类型或分别处理"
+    if left_type.status != "active" or right_type.status != "active":
+        return False, "设定类型已停用，不能进入合并"
+    if left.confirmation_status != "confirmed" or right.confirmation_status != "confirmed":
+        return False, "只能合并两项已确认的正式设定"
+    if (
+        left.lifecycle_status != "active"
+        or right.lifecycle_status != "active"
+        or left.merged_into_element_id is not None
+        or right.merged_into_element_id is not None
+    ):
+        return False, "只能合并两项未归档、未合并的活动设定"
+    if (
+        suggestion.rule_key == _MANUAL_REVIEW_RULE_KEY
+        and suggestion.kind == "possible_conflict"
+    ):
+        return False, "用户创建的“可能冲突”只用于核对，不直接进入合并"
+    if suggestion.review_status != "confirmed_duplicate":
+        return False, "需先将这条线索人工判断为重复"
+    if suggestion.decided_evidence_revision != suggestion.evidence_revision:
+        return False, "对比依据已更新，需按当前依据重新判断"
+    return True, None
 
 
 def _review_needs_review(suggestion: LoreReviewSuggestion) -> bool:
@@ -1884,14 +1962,19 @@ async def _build_review_detail(
         )
         for event in event_rows.scalars().all()
     ]
-    stale = (
-        suggestion.detection_state == "stale"
-        or left.content_version != suggestion.left_content_version
-        or right.content_version != suggestion.right_content_version
+    stale = _review_is_stale(suggestion, left, right)
+    merge_allowed, merge_block_reason = _review_merge_access(
+        suggestion,
+        left,
+        right,
+        left_type,
+        right_type,
+        stale=stale,
     )
     return LoreReviewSuggestionDetail(
         id=suggestion.id,
         kind=suggestion.kind,
+        origin=_review_origin(suggestion),
         detection_state=suggestion.detection_state,
         review_status=suggestion.review_status,
         needs_review=_review_needs_review(suggestion),
@@ -1901,6 +1984,8 @@ async def _build_review_detail(
         right=_review_endpoint_summary(right, right_type),
         primary_reason=_review_primary_reason(suggestion),
         stale=stale,
+        merge_allowed=merge_allowed,
+        merge_block_reason=merge_block_reason,
         updated_at=suggestion.updated_at,
         rule_key=suggestion.rule_key,
         rule_version=suggestion.rule_version,
@@ -1994,6 +2079,308 @@ async def _replay_review_decision(
             event.project_id, event.suggestion_id, db
         ),
     )
+
+
+def _manual_review_request(
+    body: LoreManualReviewCreateInput,
+) -> tuple[str, str, dict[str, int], str, str]:
+    versions = {
+        body.left_element_id: body.left_expected_lock_version,
+        body.right_element_id: body.right_expected_lock_version,
+    }
+    left_id, right_id = sorted((body.left_element_id, body.right_element_id))
+    note = body.note.strip()
+    canonical = json.dumps(
+        {
+            "left_element_id": left_id,
+            "right_element_id": right_id,
+            "left_expected_lock_version": versions[left_id],
+            "right_expected_lock_version": versions[right_id],
+            "kind": body.kind,
+            "note": note,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    fingerprint = hashlib.sha256(
+        f"{_MANUAL_REVIEW_FINGERPRINT_VERSION}\n{canonical}".encode("utf-8")
+    ).hexdigest()
+    return left_id, right_id, versions, note, fingerprint
+
+
+def _manual_review_evidence(note: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "field_key": "author_report",
+            "label": "用户说明",
+            "comparison": "author_report",
+            "left_value": None,
+            "right_value": None,
+            "statement": note or None,
+        }
+    ]
+
+
+def _manual_review_note(suggestion: LoreReviewSuggestion) -> str:
+    return next(
+        (
+            str(item.get("statement") or "").strip()
+            for item in (suggestion.evidence or [])
+            if item.get("comparison") == "author_report"
+        ),
+        "",
+    )
+
+
+async def _find_manual_review_operation(
+    project_id: str,
+    user_id: str,
+    operation_key: str,
+    db: AsyncSession,
+) -> LoreReviewSuggestionCreateOperation | None:
+    return await db.scalar(
+        select(LoreReviewSuggestionCreateOperation).where(
+            LoreReviewSuggestionCreateOperation.project_id == project_id,
+            LoreReviewSuggestionCreateOperation.requested_by == user_id,
+            LoreReviewSuggestionCreateOperation.operation_key == operation_key,
+        )
+    )
+
+
+async def _replay_manual_review_operation(
+    operation: LoreReviewSuggestionCreateOperation,
+    fingerprint: str,
+    db: AsyncSession,
+) -> LoreManualReviewCreateResponse:
+    if operation.request_fingerprint != fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "LORE_MANUAL_REVIEW_IDEMPOTENCY_CONFLICT",
+                "message": "这次线索与先前的同标识请求不同，系统没有重复创建",
+                "retryable": False,
+            },
+        )
+    suggestion = await db.scalar(
+        select(LoreReviewSuggestion).where(
+            LoreReviewSuggestion.project_id == operation.project_id,
+            LoreReviewSuggestion.id == operation.suggestion_id,
+        )
+    )
+    if suggestion is None or suggestion.rule_key != _MANUAL_REVIEW_RULE_KEY:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "LORE_MANUAL_REVIEW_OPERATION_CORRUPT",
+                "message": "人工线索操作记录与线索不一致，已停止自动处理",
+                "retryable": False,
+            },
+        )
+    return LoreManualReviewCreateResponse(
+        suggestion=await _build_review_detail(suggestion, db),
+        replayed=True,
+        created=operation.created_suggestion,
+        reused=not operation.created_suggestion,
+    )
+
+
+@router.post(
+    "/reviews/manual",
+    response_model=LoreManualReviewCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_manual_lore_review(
+    project_id: str,
+    body: LoreManualReviewCreateInput,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    project = await get_project_for_owner(project_id, current_user, db)
+    _require_relational_mode(project)
+    if body.left_element_id == body.right_element_id:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "LORE_MANUAL_REVIEW_SELF_PAIR",
+                "message": "请选择两项不同的正式设定",
+            },
+        )
+    left_id, right_id, expected_versions, note, fingerprint = (
+        _manual_review_request(body)
+    )
+    existing_operation = await _find_manual_review_operation(
+        project_id, current_user.id, body.operation_key, db
+    )
+    if existing_operation is not None:
+        return await _replay_manual_review_operation(
+            existing_operation, fingerprint, db
+        )
+    check_writes_available()
+    try:
+        await db.scalar(
+            select(Project.id)
+            .where(Project.id == project_id)
+            .with_for_update()
+        )
+        existing_operation = await _find_manual_review_operation(
+            project_id, current_user.id, body.operation_key, db
+        )
+        if existing_operation is not None:
+            return await _replay_manual_review_operation(
+                existing_operation, fingerprint, db
+            )
+        rows = await db.execute(
+            select(SettingElement)
+            .where(
+                SettingElement.project_id == project_id,
+                SettingElement.id.in_((left_id, right_id)),
+            )
+            .order_by(SettingElement.id.asc())
+            .with_for_update()
+        )
+        by_id = {element.id: element for element in rows.scalars().all()}
+        if set(by_id) != {left_id, right_id}:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "LORE_MANUAL_REVIEW_ENDPOINT_NOT_FOUND",
+                    "message": "选中的正式设定不存在或不属于当前项目",
+                },
+            )
+        left = by_id[left_id]
+        right = by_id[right_id]
+        if left.confirmation_status != "confirmed" or right.confirmation_status != "confirmed":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "LORE_MANUAL_REVIEW_ENDPOINT_NOT_FORMAL",
+                    "message": "只能对两项已确认的正式设定创建线索",
+                },
+            )
+        if left.lifecycle_status == "merged" or right.lifecycle_status == "merged":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "LORE_MANUAL_REVIEW_ENDPOINT_MERGED",
+                    "message": "选中的设定已被合并，请重新选择当前正式设定",
+                },
+            )
+        stale_versions = [
+            {
+                "element_id": element_id,
+                "expected_lock_version": expected_versions[element_id],
+                "current_lock_version": by_id[element_id].lock_version,
+            }
+            for element_id in (left_id, right_id)
+            if by_id[element_id].lock_version != expected_versions[element_id]
+        ]
+        if stale_versions:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "LORE_MANUAL_REVIEW_ENDPOINT_STALE",
+                    "message": "选中的设定已变化，请核对最新版本后再创建线索",
+                    "endpoints": stale_versions,
+                    "retryable": False,
+                },
+            )
+        suggestion = await db.scalar(
+            select(LoreReviewSuggestion)
+            .where(
+                LoreReviewSuggestion.project_id == project_id,
+                LoreReviewSuggestion.left_element_id == left_id,
+                LoreReviewSuggestion.right_element_id == right_id,
+                LoreReviewSuggestion.rule_key == _MANUAL_REVIEW_RULE_KEY,
+            )
+            .with_for_update()
+        )
+        created = suggestion is None
+        evidence = _manual_review_evidence(note)
+        if suggestion is None:
+            suggestion = LoreReviewSuggestion(
+                project_id=project_id,
+                left_element_id=left_id,
+                right_element_id=right_id,
+                rule_key=_MANUAL_REVIEW_RULE_KEY,
+                rule_version=1,
+                kind=body.kind,
+                detection_state="active",
+                review_status="pending",
+                left_content_version=left.content_version,
+                right_content_version=right.content_version,
+                evidence=evidence,
+                evidence_fingerprint=fingerprint,
+                evidence_revision=1,
+                lock_version=1,
+            )
+            db.add(suggestion)
+            await db.flush()
+        else:
+            if suggestion.kind != body.kind or _manual_review_note(suggestion) != note:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "LORE_MANUAL_REVIEW_PAIR_CONFLICT",
+                        "message": "这两项设定已有不同的用户线索，系统没有覆盖原记录",
+                        "suggestion_id": suggestion.id,
+                        "retryable": False,
+                    },
+                )
+            if (
+                suggestion.left_content_version != left.content_version
+                or suggestion.right_content_version != right.content_version
+                or suggestion.detection_state != "active"
+            ):
+                suggestion.left_content_version = left.content_version
+                suggestion.right_content_version = right.content_version
+                suggestion.detection_state = "active"
+                suggestion.evidence = evidence
+                suggestion.evidence_fingerprint = fingerprint
+                suggestion.evidence_revision += 1
+                suggestion.lock_version += 1
+                suggestion.updated_at = _utcnow()
+        operation = LoreReviewSuggestionCreateOperation(
+            project_id=project_id,
+            requested_by=current_user.id,
+            operation_key=body.operation_key,
+            request_fingerprint=fingerprint,
+            suggestion_id=suggestion.id,
+            created_suggestion=created,
+        )
+        db.add(operation)
+        check_writes_available()
+        await db.commit()
+        await db.refresh(suggestion)
+        return LoreManualReviewCreateResponse(
+            suggestion=await _build_review_detail(suggestion, db),
+            replayed=False,
+            created=created,
+            reused=not created,
+        )
+    except IntegrityError:
+        await db.rollback()
+        existing_operation = await _find_manual_review_operation(
+            project_id, current_user.id, body.operation_key, db
+        )
+        if existing_operation is not None:
+            return await _replay_manual_review_operation(
+                existing_operation, fingerprint, db
+            )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "LORE_MANUAL_REVIEW_CONFLICT",
+                "message": "人工线索发生并发冲突，请核对列表后重试",
+                "retryable": True,
+            },
+        )
+    except LoreWriteError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except HTTPException:
+        await db.rollback()
+        raise
 
 
 @router.post("/reviews/scan", response_model=LoreReviewScanResponse)
@@ -2104,15 +2491,24 @@ async def list_lore_reviews(
     page = page[:limit]
     items = []
     for suggestion, left_element, right_element, left_kind, right_kind in page:
-        stale = (
-            suggestion.detection_state == "stale"
-            or left_element.content_version != suggestion.left_content_version
-            or right_element.content_version != suggestion.right_content_version
+        stale = _review_is_stale(
+            suggestion,
+            left_element,
+            right_element,
+        )
+        merge_allowed, merge_block_reason = _review_merge_access(
+            suggestion,
+            left_element,
+            right_element,
+            left_kind,
+            right_kind,
+            stale=stale,
         )
         items.append(
             LoreReviewSuggestionListItem(
                 id=suggestion.id,
                 kind=suggestion.kind,
+                origin=_review_origin(suggestion),
                 detection_state=suggestion.detection_state,
                 review_status=suggestion.review_status,
                 needs_review=_review_needs_review(suggestion),
@@ -2122,6 +2518,8 @@ async def list_lore_reviews(
                 right=_review_endpoint_summary(right_element, right_kind),
                 primary_reason=_review_primary_reason(suggestion),
                 stale=stale,
+                merge_allowed=merge_allowed,
+                merge_block_reason=merge_block_reason,
                 updated_at=suggestion.updated_at,
             )
         )
@@ -2338,6 +2736,8 @@ async def decide_lore_review(
             or suggestion.evidence_revision != body.expected_evidence_revision
             or left.content_version != suggestion.left_content_version
             or right.content_version != suggestion.right_content_version
+            or left.lifecycle_status == "merged"
+            or right.lifecycle_status == "merged"
         ):
             raise HTTPException(
                 status_code=409,

@@ -1526,6 +1526,8 @@ input, select, textarea { font-family: inherit; }
 
 .lore-review-toolbar,
 .lore-review-filters,
+.lore-manual-review-entry,
+.lore-manual-review-form,
 .lore-review-detail-header,
 .lore-review-decision,
 .lore-review-history,
@@ -1542,6 +1544,86 @@ input, select, textarea { font-family: inherit; }
   justify-content: space-between;
   gap: 16px;
   padding: 18px;
+}
+
+.lore-manual-review-entry,
+.lore-manual-review-heading,
+.lore-manual-review-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.lore-manual-review-entry,
+.lore-manual-review-form {
+  padding: 16px;
+}
+
+.lore-manual-review-entry h3,
+.lore-manual-review-entry p,
+.lore-manual-review-heading h3,
+.lore-manual-review-heading p {
+  margin: 0;
+}
+
+.lore-manual-review-entry p,
+.lore-manual-review-heading p,
+.lore-manual-review-actions span {
+  margin-top: 6px;
+  color: var(--text-2);
+}
+
+.lore-manual-review-form {
+  display: grid;
+  gap: 14px;
+}
+
+.lore-manual-review-form > label,
+.lore-manual-review-picker {
+  display: grid;
+  gap: 6px;
+}
+
+.lore-manual-review-pickers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.lore-manual-review-results {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  max-height: 240px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.lore-manual-review-results > button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--white);
+  color: var(--text-1);
+  text-align: left;
+}
+
+.lore-manual-review-results > button:hover,
+.lore-manual-review-results > button.selected {
+  border-color: var(--primary);
+}
+
+.lore-manual-review-results > button span,
+.lore-manual-review-results > p {
+  margin: 0;
+  color: var(--text-2);
 }
 
 .lore-review-toolbar h2,
@@ -2096,6 +2178,22 @@ input, select, textarea { font-family: inherit; }
 
   .lore-review-comparison {
     display: grid;
+  }
+
+  .lore-manual-review-entry,
+  .lore-manual-review-heading,
+  .lore-manual-review-actions {
+    display: grid;
+  }
+
+  .lore-manual-review-pickers {
+    grid-template-columns: 1fr;
+  }
+
+  .lore-manual-review-entry .btn,
+  .lore-manual-review-heading .btn,
+  .lore-manual-review-actions .btn {
+    width: 100%;
   }
 
   .lore-merge-steps,
