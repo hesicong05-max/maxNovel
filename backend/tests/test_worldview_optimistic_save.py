@@ -4,6 +4,7 @@ import json
 import pytest
 from sqlalchemy import select
 
+from app.core.legacy_json import read_legacy_json
 from app.models.project import Worldview
 
 
@@ -218,7 +219,9 @@ async def test_worldview_get_decodes_historical_json_text_without_rewriting(
             "characters", "geography", "factions", "power_system",
             "history", "conflicts", "special_settings", "parsed_elements",
         ):
-            setattr(worldview, field, json.dumps(getattr(worldview, field)))
+            current = read_legacy_json(getattr(worldview, field))
+            assert current.valid
+            setattr(worldview, field, json.dumps(current.value))
         await session.commit()
 
     response = await client.get(
