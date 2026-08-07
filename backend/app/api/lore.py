@@ -283,6 +283,7 @@ async def _build_read_only_migration_preview(
             existing_elements=existing_elements,
             existing_legacy_map_count=existing_legacy_map_count,
             existing_migration_count=existing_migration_count,
+            commit_enabled=settings.LEGACY_JSON_WRITES_FROZEN,
         )
 
     async with database_module.async_session() as verify_db:

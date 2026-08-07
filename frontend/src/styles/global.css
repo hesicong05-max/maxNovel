@@ -2555,6 +2555,100 @@ input, select, textarea { font-family: inherit; }
   flex-wrap: wrap;
 }
 
+.lore-migration-upgrade {
+  margin: 1rem 0;
+}
+
+.lore-migration-upgrade__entry,
+.lore-migration-upgrade__success {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid var(--gold-border);
+  border-radius: var(--r-md);
+  background: var(--gold-light);
+}
+
+.lore-migration-upgrade__entry > div,
+.lore-migration-upgrade__success {
+  min-width: 0;
+}
+
+.lore-migration-upgrade__entry strong,
+.lore-migration-upgrade__entry span {
+  display: block;
+}
+
+.lore-migration-upgrade__entry span {
+  margin-top: 0.25rem;
+  color: var(--text-2);
+}
+
+.lore-migration-upgrade__success {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.lore-migration-upgrade__success h2,
+.lore-migration-upgrade__success p {
+  margin: 0;
+}
+
+.lore-migration-confirm {
+  width: min(560px, calc(100vw - 2rem));
+  max-width: 560px;
+  max-height: min(760px, 100dvh);
+  padding: 1.25rem;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.lore-migration-upgrade .modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  overflow-y: auto;
+  background: rgba(20, 18, 16, 0.58);
+}
+
+.lore-migration-confirm .modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.625rem;
+  margin-top: 1rem;
+}
+
+.lore-migration-confirm ul {
+  margin: 0.75rem 0 1rem 1.25rem;
+  color: var(--text-2);
+}
+
+.lore-migration-confirm__ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+
+.lore-migration-confirm__ack input {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+}
+
 @media (max-width: 640px) {
   .lore-migration-preview__summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2574,6 +2668,20 @@ input, select, textarea { font-family: inherit; }
 
   .lore-migration-preview__actions .btn {
     width: 100%;
+  }
+
+  .lore-migration-upgrade__entry {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .lore-migration-upgrade__entry .btn,
+  .lore-migration-confirm .modal-actions .btn {
+    width: 100%;
+  }
+
+  .lore-migration-confirm .modal-actions {
+    flex-direction: column;
   }
 }
 

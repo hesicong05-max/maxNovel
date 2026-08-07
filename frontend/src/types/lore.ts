@@ -56,7 +56,7 @@ export interface LoreMigrationPreviewResponse {
   dry_run: true;
   read_only: true;
   writes_performed: 0;
-  commit_available: false;
+  commit_available: boolean;
   counts: {
     legacy_total: number;
     mappable: number;
@@ -68,6 +68,34 @@ export interface LoreMigrationPreviewResponse {
   by_target_type: Record<string, number>;
   items: LoreMigrationPreviewItem[];
   issues: LoreMigrationPreviewIssue[];
+}
+
+export interface LoreMigrationCommitInput {
+  operation_key: string;
+  preview_schema_version: number;
+  mapping_version: number;
+  expected_source_checksum: string;
+  expected_semantic_result_checksum: string;
+  confirm_legacy_retained_no_automatic_rollback: true;
+}
+
+export interface LoreMigrationOperation {
+  id: string;
+  project_id: string;
+  operation_key: string;
+  status: "validating" | "ready" | "failed";
+  source_checksum: string;
+  preview_schema_version: number;
+  mapping_version: number;
+  semantic_result_checksum: string;
+  result_checksum: string | null;
+  migration_id: string | null;
+  error_code: string | null;
+  counts: Record<string, unknown>;
+  started_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  replayed: boolean;
 }
 
 export interface LoreOverview {

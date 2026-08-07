@@ -203,6 +203,19 @@ export default function LoreRepositoryPage() {
   const createDraftScope = useMemo<DraftScope | null>(() => (
     id && user ? { userId: user.id, projectId: id, kind: "lore-create", objectId: "new" } : null
   ), [id, user?.id]);
+  const migrationDraftScope = useMemo<DraftScope | null>(() => (
+    id && user ? { userId: user.id, projectId: id, kind: "lore-migration", objectId: "legacy-to-relational-v1" } : null
+  ), [id, user?.id]);
+
+  useEffect(() => {
+    if (!migrationDraftScope) return;
+    const recovered = loadDraft<unknown>(migrationDraftScope);
+    if (recovered.status !== "missing") setMigrationPreviewOpen(true);
+  }, [migrationDraftScope]);
+
+  useEffect(() => {
+    if (overview?.migration_status.storage_mode === "migrating") setMigrationPreviewOpen(true);
+  }, [overview?.migration_status.storage_mode]);
 
   function confirmDiscardDrafts(): boolean {
     if (candidateMutationBusy || formalMutationBusy) {
@@ -708,9 +721,12 @@ export default function LoreRepositoryPage() {
   if (!id) return <div className="empty-state">项目地址无效</div>;
 
   if (migrationPreviewOpen) {
+    if (!user) return <div className="empty-state">登录状态已失效，请重新登录后返回项目。</div>;
     return (
       <LoreMigrationPreview
         projectId={id}
+        userId={user.id}
+        onUpgraded={() => setReloadToken((value) => value + 1)}
         onBack={() => {
           setMigrationPreviewOpen(false);
           setTimeout(() => migrationPreviewTriggerRef.current?.focus(), 0);

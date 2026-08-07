@@ -151,6 +151,7 @@ export interface ApiErrorData {
   event_id?: string;
   suggestion_id?: string;
   reload_required?: boolean;
+  outcome_unknown?: boolean;
 }
 
 export interface StreamMessage {

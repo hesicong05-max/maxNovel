@@ -260,6 +260,65 @@ describe("LoreRepositoryPage", () => {
     });
   });
 
+  it("reopens a stored migration request after refresh and only checks its original key", async () => {
+    const scope: DraftScope = {
+      userId: "user-1",
+      projectId: "project-1",
+      kind: "lore-migration",
+      objectId: "legacy-to-relational-v1",
+    };
+    const operationKey = "lore-migration:refresh-0001";
+    saveDraft(scope, {
+      version: 1,
+      phase: "outcome_unknown",
+      checkedAt: "2026-08-07T08:00:00Z",
+      legacyTotal: 2,
+      input: {
+        operation_key: operationKey,
+        preview_schema_version: 1,
+        mapping_version: 1,
+        expected_source_checksum: "a".repeat(64),
+        expected_semantic_result_checksum: "b".repeat(64),
+        confirm_legacy_retained_no_automatic_rollback: true,
+      },
+    }, null);
+    const getOperation = vi.fn().mockResolvedValue({
+      id: "operation-1",
+      project_id: "project-1",
+      operation_key: operationKey,
+      status: "ready",
+      source_checksum: "a".repeat(64),
+      preview_schema_version: 1,
+      mapping_version: 1,
+      semantic_result_checksum: "b".repeat(64),
+      result_checksum: "c".repeat(64),
+      migration_id: "migration-1",
+      error_code: null,
+      counts: { elements: 2 },
+      started_at: "2026-08-07T08:00:01Z",
+      updated_at: "2026-08-07T08:00:02Z",
+      completed_at: "2026-08-07T08:00:02Z",
+      replayed: true,
+    });
+    const commit = vi.fn();
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreOverview: vi.fn().mockResolvedValue(overview),
+      listLoreElements: vi.fn().mockResolvedValue(formalResponse()),
+      listLoreCandidates: vi.fn().mockResolvedValue(candidateResponse),
+      listLoreTypes: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+      getLoreMigrationPreview: vi.fn().mockResolvedValue(null),
+      getLoreMigrationOperationByKey: getOperation,
+      commitLoreMigration: commit,
+    });
+
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "设定仓库升级完成" })).toBeInTheDocument();
+    expect(getOperation).toHaveBeenCalledWith("project-1", operationKey);
+    expect(commit).not.toHaveBeenCalled();
+  });
+
   it("opens a separate formal-lore review scope without mixing candidate attention", async () => {
     const listLoreReviews = vi.fn().mockResolvedValue({
       items: [], next_cursor: null, has_more: false, total: 0,

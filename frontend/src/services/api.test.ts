@@ -798,3 +798,64 @@ describe("API - Lore extraction", () => {
     );
   });
 });
+
+describe("API - Lore migration operations", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("submits the frozen request and safely encodes the operation key lookup", async () => {
+    const response = { id: "operation-1", status: "validating" };
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    ));
+    const input = {
+      operation_key: "lore-migration:key:0001",
+      preview_schema_version: 1,
+      mapping_version: 1,
+      expected_source_checksum: "a".repeat(64),
+      expected_semantic_result_checksum: "b".repeat(64),
+      confirm_legacy_retained_no_automatic_rollback: true as const,
+    };
+
+    await api.commitLoreMigration("project-1", input);
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "/api/projects/project-1/lore/migration-operations",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(input) })
+    );
+    await api.getLoreMigrationOperationByKey("project-1", input.operation_key);
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      `/api/projects/project-1/lore/migration-operations/by-key/${encodeURIComponent(input.operation_key)}`,
+      expect.any(Object)
+    );
+  });
+
+  it("parses nested unknown-outcome errors without exposing response internals", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      detail: {
+        code: "LORE_MIGRATION_OUTCOME_UNKNOWN",
+        message: "结果待确认",
+        retryable: true,
+        outcome_unknown: true,
+      },
+    }), {
+      status: 503,
+      headers: { "Content-Type": "application/json" },
+    }));
+
+    await expect(api.commitLoreMigration("project-1", {
+      operation_key: "lore-migration:key-0001",
+      preview_schema_version: 1,
+      mapping_version: 1,
+      expected_source_checksum: "a".repeat(64),
+      expected_semantic_result_checksum: "b".repeat(64),
+      confirm_legacy_retained_no_automatic_rollback: true,
+    })).rejects.toMatchObject({
+      status: 503,
+      code: "LORE_MIGRATION_OUTCOME_UNKNOWN",
+      retryable: true,
+      outcomeUnknown: true,
+    });
+  });
+});

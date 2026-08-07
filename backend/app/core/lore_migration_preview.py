@@ -133,6 +133,7 @@ def build_migration_preview(
     existing_elements: Iterable[Any] = (),
     existing_legacy_map_count: int = 0,
     existing_migration_count: int = 0,
+    commit_enabled: bool = False,
 ) -> dict[str, Any]:
     """Return a deterministic plan without constructing or mutating ORM rows."""
     source_checksum = migration_preview_source_checksum(worldview)
@@ -318,7 +319,12 @@ def build_migration_preview(
         "dry_run": True,
         "read_only": True,
         "writes_performed": 0,
-        "commit_available": False,
+        "commit_available": bool(
+            commit_enabled
+            and storage_mode == "legacy"
+            and overall_status == "ready"
+            and items
+        ),
         "counts": {
             "legacy_total": len(items),
             "mappable": counts["mappable"],

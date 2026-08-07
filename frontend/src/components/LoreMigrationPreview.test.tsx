@@ -77,10 +77,10 @@ describe("LoreMigrationPreview", () => {
 
   it("states zero-write boundaries and shows filterable item evidence", async () => {
     mockPreview(Promise.resolve(report));
-    render(<LoreMigrationPreview projectId="project-1" onBack={vi.fn()} />);
+    render(<LoreMigrationPreview projectId="project-1" userId="user-1" onBack={vi.fn()} onUpgraded={vi.fn()} />);
 
     expect(await screen.findByText("预检完成，仍有资料需要确认")).toBeInTheDocument();
-    expect(screen.getByText("本次仅检查数据，尚未迁移。")).toBeInTheDocument();
+    expect(screen.getByText("预检本身只检查数据，不会自动迁移。")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /立即迁移|确认迁移/ })).not.toBeInTheDocument();
     expect(screen.getByText("林岚")).toBeInTheDocument();
     expect(screen.getByText("夜禁")).toBeInTheDocument();
@@ -104,7 +104,7 @@ describe("LoreMigrationPreview", () => {
         recommended_action: "由开发者审查迁移历史。",
       }],
     }));
-    render(<LoreMigrationPreview projectId="project-1" onBack={vi.fn()} />);
+    render(<LoreMigrationPreview projectId="project-1" userId="user-1" onBack={vi.fn()} onUpgraded={vi.fn()} />);
 
     expect(await screen.findByText("本次预检未通过")).toBeInTheDocument();
     expect(screen.getByText("检测到既有迁移状态")).toBeInTheDocument();
@@ -119,7 +119,7 @@ describe("LoreMigrationPreview", () => {
       ...apiModule.api,
       getLoreMigrationPreview,
     });
-    render(<LoreMigrationPreview projectId="project-1" onBack={vi.fn()} />);
+    render(<LoreMigrationPreview projectId="project-1" userId="user-1" onBack={vi.fn()} onUpgraded={vi.fn()} />);
 
     expect(await screen.findByText(/服务暂不可用，预检未执行/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "重新检查" }));
@@ -130,7 +130,7 @@ describe("LoreMigrationPreview", () => {
   it("returns to the repository without implying a migration", async () => {
     mockPreview(Promise.resolve(report));
     const onBack = vi.fn();
-    render(<LoreMigrationPreview projectId="project-1" onBack={onBack} />);
+    render(<LoreMigrationPreview projectId="project-1" userId="user-1" onBack={onBack} onUpgraded={vi.fn()} />);
     await screen.findByText("预检完成，仍有资料需要确认");
 
     await userEvent.click(screen.getByRole("button", { name: "← 返回设定仓库" }));

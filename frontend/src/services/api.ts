@@ -42,6 +42,8 @@ import type {
   LoreMergeCommitInput,
   LoreMergeOperation,
   LoreMergeOperationsResponse,
+  LoreMigrationCommitInput,
+  LoreMigrationOperation,
   LoreMigrationPreviewResponse,
   LoreOverview,
   LoreRelation,
@@ -73,6 +75,7 @@ export class ApiError extends Error {
   readonly eventId?: string;
   readonly suggestionId?: string;
   readonly reloadRequired: boolean;
+  readonly outcomeUnknown: boolean;
 
   constructor(status: number, data: ApiErrorData) {
     super(data.detail);
@@ -86,6 +89,7 @@ export class ApiError extends Error {
     this.eventId = data.event_id;
     this.suggestionId = data.suggestion_id;
     this.reloadRequired = data.reload_required === true;
+    this.outcomeUnknown = data.outcome_unknown === true;
   }
 }
 
@@ -135,6 +139,8 @@ async function responseApiError(response: Response): Promise<ApiError> {
       optionalString(payload.suggestion_id) || optionalString(nestedDetail.suggestion_id),
     reload_required:
       payload.reload_required === true || nestedDetail.reload_required === true,
+    outcome_unknown:
+      payload.outcome_unknown === true || nestedDetail.outcome_unknown === true,
   });
 }
 
@@ -328,6 +334,19 @@ export const api = {
       `/projects/${projectId}/lore/migration-preview`,
       { signal }
     ),
+  commitLoreMigration: (projectId: string, data: LoreMigrationCommitInput) =>
+    fetchJSON<LoreMigrationOperation>(
+      `/projects/${projectId}/lore/migration-operations`,
+      { method: "POST", body: JSON.stringify(data) }
+    ),
+  getLoreMigrationOperationByKey: (
+    projectId: string,
+    operationKey: string,
+    signal?: AbortSignal
+  ) => fetchJSON<LoreMigrationOperation>(
+    `/projects/${projectId}/lore/migration-operations/by-key/${encodeURIComponent(operationKey)}`,
+    { signal }
+  ),
   listLoreElements: (
     projectId: string,
     filters: LoreElementFilters = {},

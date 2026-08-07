@@ -82,7 +82,7 @@ class LoreMigrationPreviewResponse(BaseModel):
     dry_run: Literal[True]
     read_only: Literal[True]
     writes_performed: Literal[0]
-    commit_available: Literal[False]
+    commit_available: bool = False
     counts: LoreMigrationPreviewCounts
     by_legacy_category: dict[str, int] = Field(default_factory=dict)
     by_target_type: dict[str, int] = Field(default_factory=dict)

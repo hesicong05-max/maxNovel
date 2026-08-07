@@ -4,6 +4,7 @@ import type {
   LoreMigrationPreviewClassification,
   LoreMigrationPreviewResponse,
 } from "@/types/lore";
+import LoreMigrationUpgrade from "./LoreMigrationUpgrade";
 
 type Filter = "all" | LoreMigrationPreviewClassification;
 
@@ -65,10 +66,14 @@ function errorMessage(error: unknown): string {
 
 export default function LoreMigrationPreview({
   projectId,
+  userId,
   onBack,
+  onUpgraded,
 }: {
   projectId: string;
+  userId: string;
   onBack: () => void;
+  onUpgraded: () => void;
 }) {
   const [report, setReport] = useState<LoreMigrationPreviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -122,8 +127,8 @@ export default function LoreMigrationPreview({
       </header>
 
       <div className="lore-migration-preview__notice" role="note">
-        <strong>本次仅检查数据，尚未迁移。</strong>
-        <span>不会创建、修改、覆盖、迁移或删除任何设定，也不会切换项目存储模式。</span>
+        <strong>预检本身只检查数据，不会自动迁移。</strong>
+        <span>只有预检通过、进入安全升级窗口并由你再次确认后，系统才会开始升级；原资料不会被删除或覆盖。</span>
       </div>
 
       {loading && <div className="lore-empty" role="status">正在检查旧资料…</div>}
@@ -187,11 +192,20 @@ export default function LoreMigrationPreview({
           ))}
         </section>
 
-        <div className="lore-migration-preview__actions">
-          <button className="btn btn-primary" type="button" onClick={() => setReloadToken((value) => value + 1)}>重新检查</button>
-          <button className="btn btn-secondary" type="button" onClick={onBack}>返回设定仓库</button>
-        </div>
       </>}
+
+      <LoreMigrationUpgrade
+        projectId={projectId}
+        userId={userId}
+        report={report}
+        onRequestPreviewReload={() => setReloadToken((value) => value + 1)}
+        onUpgraded={onUpgraded}
+      />
+
+      {!loading && report && <div className="lore-migration-preview__actions">
+        <button className="btn btn-secondary" type="button" onClick={() => setReloadToken((value) => value + 1)}>重新检查</button>
+        <button className="btn btn-secondary" type="button" onClick={onBack}>返回设定仓库</button>
+      </div>}
     </section>
   );
 }

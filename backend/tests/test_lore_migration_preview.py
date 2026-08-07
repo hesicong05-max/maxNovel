@@ -65,6 +65,39 @@ def test_preview_is_stable_zero_write_plan_with_dedicated_type_mapping():
     assert special["classification"] == "review_required"
 
 
+def test_preview_only_opens_commit_for_ready_nonempty_legacy_data():
+    ready = build_migration_preview(
+        "project-a",
+        "legacy",
+        _worldview(special_settings=[]),
+        commit_enabled=True,
+    )
+    closed = build_migration_preview(
+        "project-a",
+        "legacy",
+        _worldview(special_settings=[]),
+        commit_enabled=False,
+    )
+    blocked = build_migration_preview(
+        "project-a",
+        "legacy",
+        _worldview(characters=[{"personality": "沉稳"}], special_settings=[]),
+        commit_enabled=True,
+    )
+    non_legacy = build_migration_preview(
+        "project-a",
+        "migrating",
+        _worldview(special_settings=[]),
+        commit_enabled=True,
+    )
+
+    assert ready["overall_status"] == "ready"
+    assert ready["commit_available"] is True
+    assert closed["commit_available"] is False
+    assert blocked["commit_available"] is False
+    assert non_legacy["commit_available"] is False
+
+
 def test_preview_source_checksum_includes_raw_text_used_for_evidence_status():
     worldview = _worldview(source="imported", raw_text="林岚来自云港。")
     before = migration_preview_source_checksum(worldview)
@@ -207,6 +240,31 @@ async def test_preview_api_is_owned_stable_and_does_not_write(
     assert first.json()["dry_run"] is True
     assert first.json()["writes_performed"] == 0
     assert await counts() == before == [0] * len(models)
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_preview_api_exposes_commit_only_during_safe_upgrade_window(
+    client, auth_headers
+):
+    project_id = await _create_project(client, auth_headers)
+    await _set_worldview(client, auth_headers, project_id)
+
+    with patch("app.api.lore.settings.LEGACY_JSON_WRITES_FROZEN", False):
+        closed = await client.get(
+            f"/api/projects/{project_id}/lore/migration-preview",
+            headers=auth_headers,
+        )
+    with patch("app.api.lore.settings.LEGACY_JSON_WRITES_FROZEN", True):
+        opened = await client.get(
+            f"/api/projects/{project_id}/lore/migration-preview",
+            headers=auth_headers,
+        )
+
+    assert closed.status_code == 200
+    assert closed.json()["overall_status"] == "ready"
+    assert closed.json()["commit_available"] is False
+    assert opened.status_code == 200
+    assert opened.json()["commit_available"] is True
 
 
 @pytest.mark.usefixtures("clean_db")
