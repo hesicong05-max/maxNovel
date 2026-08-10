@@ -249,6 +249,24 @@ def _derive_field_states(
     return result
 
 
+def validate_element_content(
+    setting_type: SettingType,
+    payload: dict[str, Any],
+    field_states: dict[str, str] | None,
+) -> dict[str, str]:
+    """Validate element content without mutating persistence state.
+
+    Merge preview and ordinary writes intentionally share this contract so a
+    preview can never approve content that the eventual write path rejects.
+    """
+    field_schema = field_schema_for_type(setting_type)
+    _validate_payload_keys(payload, field_schema)
+    _validate_payload_values(payload, field_schema)
+    if field_states:
+        _validate_field_states(field_states, payload, field_schema)
+    return _derive_field_states(payload, field_schema, field_states)
+
+
 async def _resolve_type(
     db: AsyncSession,
     project_id: str,
@@ -382,16 +400,10 @@ async def create_element(
     check_writes_available()
 
     setting_type = await _resolve_type(db, project_id, type_key)
-    field_schema = field_schema_for_type(setting_type)
-    _validate_payload_keys(payload, field_schema)
-    _validate_payload_values(payload, field_schema)
-    if field_states:
-        _validate_field_states(field_states, payload, field_schema)
-
     type_id = setting_type.id
     normalized_name = name.strip().casefold()
 
-    derived_states = _derive_field_states(payload, field_schema, field_states)
+    derived_states = validate_element_content(setting_type, payload, field_states)
     element = SettingElement(
         project_id=project_id,
         type_id=type_id,
@@ -424,24 +436,30 @@ async def create_element(
     )
     db.add(version)
 
+    primary_source: ElementSource | None = None
     for source in (sources_input or []):
         excerpt = source.get("excerpt")
         confirmation = source.get("confirmation_status", "provided")
         if confirmation not in ("provided", "needs_confirmation"):
             confirmation = "provided"
-        db.add(
-            ElementSource(
-                project_id=project_id,
-                element_id=element.id,
-                source_kind=source.get("kind", "manual"),
-                source_ref=source.get("reference"),
-                locator=source.get("locator", {}) or {},
-                excerpt=excerpt,
-                excerpt_hash=_excerpt_hash(excerpt),
-                confirmation_status=confirmation,
-                is_primary=source.get("is_primary", False),
-            )
+        element_source = ElementSource(
+            project_id=project_id,
+            element_id=element.id,
+            source_kind=source.get("kind", "manual"),
+            source_ref=source.get("reference"),
+            locator=source.get("locator", {}) or {},
+            excerpt=excerpt,
+            excerpt_hash=_excerpt_hash(excerpt),
+            confirmation_status=confirmation,
+            is_primary=source.get("is_primary", False),
         )
+        db.add(element_source)
+        if element_source.is_primary:
+            primary_source = element_source
+
+    if primary_source is not None:
+        await db.flush()
+        version.source_id = primary_source.id
 
     db.add(
         ElementStateEvent(
@@ -478,14 +496,7 @@ async def update_element_content(
     )
     if setting_type is None or setting_type.status != "active":
         raise LoreWriteError("设定类型不存在或已停用", status_code=409)
-    field_schema = field_schema_for_type(setting_type)
-
-    _validate_payload_keys(payload, field_schema)
-    _validate_payload_values(payload, field_schema)
-    if field_states:
-        _validate_field_states(field_states, payload, field_schema)
-
-    derived_states = _derive_field_states(payload, field_schema, field_states)
+    derived_states = validate_element_content(setting_type, payload, field_states)
 
     new_content_version = element.content_version + 1
     element.name = name
@@ -743,13 +754,25 @@ async def update_relation(
     check_writes_available()
     if relation.status != "active":
         raise LoreWriteError("已归档关系需恢复后才能编辑", status_code=409)
+    if relation.lock_version != expected_version:
+        raise LoreStaleVersionError(relation.lock_version, relation.updated_at)
+
+    normalized_description = description or ""
+    normalized_metadata = dict(metadata or {})
+    if (
+        relation.forward_label == forward_label
+        and relation.reverse_label == reverse_label
+        and (relation.description or "") == normalized_description
+        and dict(relation.metadata_ or {}) == normalized_metadata
+    ):
+        return relation
 
     await _claim_lock_version(db, ElementRelation, relation, expected_version)
 
     relation.forward_label = forward_label
     relation.reverse_label = reverse_label
-    relation.description = description
-    relation.metadata_ = dict(metadata or {})
+    relation.description = normalized_description
+    relation.metadata_ = normalized_metadata
     relation.version_no += 1
     _add_relation_snapshot(db, relation, user_id, "编辑关系")
     return relation

@@ -20,7 +20,16 @@ interface Props {
   hasWorldview: boolean;
   genre: string;
   onComplete: () => void;
+  onExtractionComplete?: () => void;
   onBack: () => void;
+  migrationTarget?: {
+    category: string;
+    index: number;
+    itemFingerprint: string;
+    sourceChecksum: string;
+  } | null;
+  migrationRequestInvalid?: boolean;
+  onReturnToMigration?: () => void;
 }
 
 type EditorMode = "manual" | "import" | "hybrid";
@@ -42,6 +51,47 @@ interface WorldviewDraftPayload {
 interface RecoveryCandidate {
   state: DraftRecoveryState;
   draft: DraftEnvelope<WorldviewDraftPayload>;
+}
+
+type ExtractionPhase =
+  | "submitting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "maintenance"
+  | "outcome_unknown";
+
+interface ExtractionDraftPayload {
+  documentText: string;
+  documentHash: string;
+  idempotencyKey: string;
+  phase: ExtractionPhase;
+  batchId: string | null;
+  candidateCount: number | null;
+  errorCode: string | null;
+  errorStatus: number | null;
+  retryable: boolean;
+}
+
+function isExtractionDraftPayload(value: unknown): value is ExtractionDraftPayload {
+  if (!value || typeof value !== "object") return false;
+  const payload = value as Partial<ExtractionDraftPayload>;
+  return (
+    typeof payload.documentText === "string" &&
+    typeof payload.documentHash === "string" && /^[a-f0-9]{64}$/.test(payload.documentHash) &&
+    typeof payload.idempotencyKey === "string" &&
+    ["submitting", "running", "completed", "failed", "maintenance", "outcome_unknown"].includes(String(payload.phase)) &&
+    (payload.batchId === null || typeof payload.batchId === "string") &&
+    (payload.candidateCount === null || typeof payload.candidateCount === "number") &&
+    (payload.errorCode === null || typeof payload.errorCode === "string") &&
+    (payload.errorStatus === null || typeof payload.errorStatus === "number") &&
+    typeof payload.retryable === "boolean"
+  );
+}
+
+function extractionOperationKey(): string {
+  if (globalThis.crypto?.randomUUID) return `extract-${globalThis.crypto.randomUUID()}`;
+  return `extract-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 const EMPTY_WORLDVIEW: WorldviewData = {
@@ -168,7 +218,17 @@ function isWorldviewDraftPayload(value: unknown): value is WorldviewDraftPayload
   );
 }
 
-export default function WorldviewEditor({ projectId, hasWorldview, genre, onComplete, onBack }: Props) {
+export default function WorldviewEditor({
+  projectId,
+  hasWorldview,
+  genre,
+  onComplete,
+  onExtractionComplete,
+  onBack,
+  migrationTarget = null,
+  migrationRequestInvalid = false,
+  onReturnToMigration,
+}: Props) {
   const { user } = useAuth();
   const [mode, setMode] = useState<EditorMode>("manual");
   const [data, setData] = useState<WorldviewData>(EMPTY_WORLDVIEW);
@@ -191,17 +251,32 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
   const [scopeLoading, setScopeLoading] = useState(true);
   const [scopeLoadError, setScopeLoadError] = useState("");
   const [saved, setSaved] = useState(false);  // 本地追踪保存状态，解决 hasWorldview prop 闭锁问题
-  const [nextStepBlocked, setNextStepBlocked] = useState(false);  // 未保存编辑时阻止进入下一步
+  const [nextStepBlocked, setNextStepBlocked] = useState(false);  // 未保存编辑时阻止离开编辑器
   const [corruptDraft, setCorruptDraft] = useState(false);  // 损坏或不兼容的草稿，只能丢弃
   const [reparseNeeded, setReparseNeeded] = useState(false);  // 导入原文修改后需重新解析
   const [saveResult, setSaveResult] = useState<SaveResult | null>(null);
   const loadedRef = useRef(false);  // 防止已加载的数据被 hasWorldview 变化覆盖
   const [saveError, setSaveError] = useState("");
+  const [worldviewStale, setWorldviewStale] = useState(false);
+  const [migrationTargetState, setMigrationTargetState] = useState<
+    "idle" | "loading" | "valid" | "invalid" | "error"
+  >("idle");
+  const [migrationPreviewReloadToken, setMigrationPreviewReloadToken] = useState(0);
+  const [serverSourceChecksum, setServerSourceChecksum] = useState<string | null>(null);
   const [importError, setImportError] = useState("");
   const [uploadError, setUploadError] = useState("");
+  const [relationalMode, setRelationalMode] = useState<boolean | null>(null);
+  const [loreModeError, setLoreModeError] = useState("");
+  const [loreModeReloadToken, setLoreModeReloadToken] = useState(0);
+  const [extractionDraft, setExtractionDraft] = useState<ExtractionDraftPayload | null>(null);
+  const [extractionNotice, setExtractionNotice] = useState("");
+  const [extractionError, setExtractionError] = useState("");
+  const [extractionCorrupt, setExtractionCorrupt] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const baseFingerprintRef = useRef<string | null>(null);
   const serverSnapshotRef = useRef("");
+  const serverSourceChecksumRef = useRef<string | null>(null);
+  const worldviewExistsRef = useRef(false);
   const draftReadyRef = useRef(false);
   const dirtyRef = useRef(false);
   const currentPayloadRef = useRef<WorldviewDraftPayload>(
@@ -212,12 +287,21 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
   const scopeGenerationRef = useRef(0);
   const saveGenerationRef = useRef(0);
   const editorRootRef = useRef<HTMLDivElement>(null);
+  const migrationNoticeRef = useRef<HTMLDivElement>(null);
+  const saveResultRef = useRef<HTMLDivElement>(null);
+  const draftRecoveryContainerRef = useRef<HTMLDivElement>(null);
+  const focusRecoveryAfterReloadRef = useRef(false);
+  const migrationFocusHandledRef = useRef("");
+  const extractionResultRef = useRef<HTMLDivElement>(null);
   const pendingFocusRef = useRef<(() => HTMLElement | null | undefined) | null>(
     null
   );
 
   const draftScope: DraftScope | null = user
     ? { userId: user.id, projectId, kind: "worldview", objectId: "worldview" }
+    : null;
+  const extractionScope: DraftScope | null = user
+    ? { userId: user.id, projectId, kind: "lore-extraction", objectId: "worldview-import" }
     : null;
   const currentScopeKey = user ? `${user.id}:${projectId}` : `anonymous:${projectId}`;
   currentPayloadRef.current = draftPayload(
@@ -238,6 +322,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
     dirtyRef.current = false;
     baseFingerprintRef.current = null;
     serverSnapshotRef.current = "";
+    serverSourceChecksumRef.current = null;
+    worldviewExistsRef.current = false;
     setRecovery(null);
     setCorruptDraft(false);
     setMaintenanceFailure(null);
@@ -261,6 +347,10 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
     setImportError("");
     setUploadError("");
     setSaveError("");
+    setWorldviewStale(false);
+    setMigrationTargetState("idle");
+    setMigrationPreviewReloadToken(0);
+    setServerSourceChecksum(null);
     return () => {
       if (dirtyRef.current && scopedDraft) {
         saveDraft(
@@ -271,6 +361,50 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
       }
     };
   }, [projectId, user?.id]);
+
+  useEffect(() => {
+    let active = true;
+    setRelationalMode(null);
+    setLoreModeError("");
+    void api.getLoreOverview(projectId).then((overview) => {
+      if (active) {
+        const relational = overview.migration_status.storage_mode === "relational";
+        setRelationalMode(relational);
+        if (relational) setMode("import");
+      }
+    }).catch(() => {
+      if (active) {
+        setRelationalMode(null);
+        setLoreModeError("无法确认当前项目的设定仓库模式，已停止 AI 提取以避免写入错误位置。请检查网络后重试页面。");
+      }
+    });
+    return () => { active = false; };
+  }, [projectId, loreModeReloadToken]);
+
+  useEffect(() => {
+    if (relationalMode && mode !== "import") setMode("import");
+  }, [relationalMode, mode]);
+
+  useEffect(() => {
+    setExtractionDraft(null);
+    setExtractionNotice("");
+    setExtractionError("");
+    setExtractionCorrupt(false);
+    if (!extractionScope || scopeLoading) return;
+    const stored = loadDraft<ExtractionDraftPayload>(extractionScope);
+    if ((stored.status === "available" || stored.status === "expired") && isExtractionDraftPayload(stored.draft.payload)) {
+      setExtractionDraft(stored.draft.payload);
+      setImportText(stored.draft.payload.documentText);
+      setExtractionNotice(
+        stored.draft.payload.phase === "completed"
+          ? `上次提取已完成，共 ${stored.draft.payload.candidateCount ?? 0} 项待审核候选。`
+          : "已恢复上次提取任务；请先核对结果，系统不会自动重复调用 AI。"
+      );
+    } else if (stored.status === "corrupt") {
+      setExtractionCorrupt(true);
+      setExtractionError("上次提取状态已损坏。请放弃该状态后重新提取；原文草稿仍由世界观编辑器保留。");
+    }
+  }, [user?.id, projectId, scopeLoading]);
 
   // pagehide / 可靠卸载前同步草稿刷新 — 覆盖输入后立即刷新场景
   useEffect(() => {
@@ -352,7 +486,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
     generation: number,
     scopeGeneration: number,
     expectedScopeKey: string,
-    parsedCount = 0
+    parsedCount = 0,
+    sourceChecksum: string | null = null
   ) {
     const payload = draftPayload(
       serverData,
@@ -371,6 +506,9 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
     baseFingerprintRef.current =
       fingerprint.status === "available" ? fingerprint.value : null;
     serverSnapshotRef.current = JSON.stringify(payload);
+    serverSourceChecksumRef.current = sourceChecksum;
+    setServerSourceChecksum(sourceChecksum);
+    worldviewExistsRef.current = exists;
     dirtyRef.current = false;
     setData(serverData);
     setSource(serverSource);
@@ -486,7 +624,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
         generation,
         scopeGeneration,
         expectedScopeKey,
-        wv.parsed_elements?.length || 0
+        wv.parsed_elements?.length || 0,
+        wv.source_checksum
       );
       if (
         generation !== loadGenerationRef.current ||
@@ -653,8 +792,145 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
     }
   }
 
+  async function handleStrictExtraction(newAttempt = false) {
+    const documentText = importText.trim();
+    if (documentText.length < 10) {
+      setExtractionError("请输入或上传至少 10 个字符的文档内容。");
+      return;
+    }
+    if (!extractionScope) {
+      setExtractionError("登录状态尚未就绪，暂时无法安全保存提取任务。");
+      return;
+    }
+    if (
+      extractionDraft &&
+      extractionDraft.documentText !== documentText &&
+      ["submitting", "running", "maintenance", "outcome_unknown"].includes(extractionDraft.phase)
+    ) {
+      setExtractionError("上次任务的结果尚未确定。请先恢复该任务绑定的原文，再使用同一任务核对结果；系统不会静默换用新任务标识。");
+      return;
+    }
+    const fingerprint = await fingerprintDraftBase({ documentText });
+    if (fingerprint.status !== "available") {
+      setExtractionError("浏览器无法生成原文指纹，已停止提取以避免任务与错误原文绑定。");
+      return;
+    }
+    const canReuse = !newAttempt && extractionDraft?.documentText === documentText && extractionDraft.documentHash === fingerprint.value;
+    const operation: ExtractionDraftPayload = {
+      documentText,
+      documentHash: fingerprint.value,
+      idempotencyKey: canReuse ? extractionDraft.idempotencyKey : extractionOperationKey(),
+      phase: "submitting",
+      batchId: canReuse ? extractionDraft.batchId : null,
+      candidateCount: canReuse ? extractionDraft.candidateCount : null,
+      errorCode: null,
+      errorStatus: null,
+      retryable: false,
+    };
+    const persisted = saveDraft(extractionScope, operation, null);
+    if (persisted.status !== "saved") {
+      setExtractionError("无法在本机保存幂等任务，已停止提取以避免重复调用。请复制原文后检查浏览器存储设置。");
+      return;
+    }
+    setExtractionDraft(operation);
+    setExtractionError("");
+    setExtractionNotice("正在提取独立设定；结果只会进入待审核列表。");
+    setImporting(true);
+    try {
+      const batch = await api.createLoreExtraction(projectId, {
+        idempotency_key: operation.idempotencyKey,
+        document_text: operation.documentText,
+        source_kind: "worldview_import",
+        source_ref: "世界观编辑器导入原文",
+      });
+      const phase: ExtractionPhase = batch.status;
+      const next: ExtractionDraftPayload = {
+        ...operation,
+        phase,
+        batchId: batch.id,
+        candidateCount: batch.candidate_count,
+        errorCode: batch.error_code,
+        errorStatus: null,
+        retryable: batch.retryable,
+      };
+      saveDraft(extractionScope, next, null);
+      setExtractionDraft(next);
+      if (batch.status === "completed" && batch.candidate_count > 0) {
+        setExtractionNotice(`已生成 ${batch.candidate_count} 项待审核候选，尚未成为正式设定。`);
+        onExtractionComplete ? onExtractionComplete() : onComplete();
+      } else if (batch.status === "completed") {
+        setExtractionNotice("原文中未识别到可确认的独立设定。可修改原文重新提取，或前往设定仓库手动创建。");
+        requestAnimationFrame(() => extractionResultRef.current?.focus());
+      } else if (batch.status === "running") {
+        setExtractionNotice("提取仍在处理中。请稍后使用同一任务核对结果，不会重复调用 AI。");
+      } else {
+        setExtractionError(batch.error_message || "本次提取未完成；原文和任务状态已保留。");
+      }
+    } catch (error) {
+      const apiError = error instanceof ApiError ? error : null;
+      const phase: ExtractionPhase = apiError?.status === 503
+        ? "maintenance"
+        : apiError?.status === 409
+          ? "failed"
+        : apiError && apiError.status >= 500
+          ? "outcome_unknown"
+          : apiError
+            ? "failed"
+            : "outcome_unknown";
+      const next: ExtractionDraftPayload = {
+        ...operation,
+        phase,
+        errorCode: apiError?.code ?? null,
+        errorStatus: apiError?.status ?? null,
+        retryable: apiError?.retryable === true,
+      };
+      saveDraft(extractionScope, next, null);
+      setExtractionDraft(next);
+      if (apiError?.status === 413) {
+        setExtractionError("原文超过当前 20,000 字提取上限，内容已完整保留；请缩短后明确发起新提取，系统不会静默截断。");
+      } else if (apiError?.status === 503) {
+        setExtractionError("系统正在维护，提取任务和原文已保留。维护结束后请使用同一任务重试提取。");
+      } else if (apiError?.status === 409) {
+        setExtractionError("任务标识与原文不一致，已停止操作。请恢复原文核对，或明确放弃后重新提取。");
+      } else if (phase === "outcome_unknown") {
+        setExtractionError("请求结果尚不确定，任务和原文已保留。请使用同一任务核对结果，不要重新提交。");
+      } else if (apiError) {
+        setExtractionError(apiError.detail || "提取失败，原文已保留。");
+      } else {
+        setExtractionError("网络中断，结果尚不确定。请使用同一任务核对结果，不要重新提交。");
+      }
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  function abandonExtraction() {
+    if (!extractionScope) return;
+    if (!window.confirm("确定放弃上次提取任务状态吗？原文会保留，但之后重新提取将使用新的任务标识。")) return;
+    const cleared = clearDraft(extractionScope);
+    if (cleared.status === "unavailable") {
+      setExtractionError("无法清除本机任务状态，已保留当前任务以避免重复调用。");
+      return;
+    }
+    setExtractionDraft(null);
+    setExtractionCorrupt(false);
+    setExtractionNotice("已放弃上次任务状态，原文仍保留在编辑器中。");
+    setExtractionError("");
+  }
+
+  function restoreExtractionSource() {
+    if (!extractionDraft) return;
+    setImportText(extractionDraft.documentText);
+    setExtractionError("");
+    setExtractionNotice("已恢复上次任务绑定的原文，可使用同一任务核对结果。");
+  }
+
   async function handleSave() {
     if (recovery) return;
+    if (worldviewExistsRef.current && !serverSourceChecksumRef.current) {
+      setSaveError("无法确认当前世界观版本，已停止保存。请重新加载后再试。");
+      return;
+    }
     const saveGeneration = ++saveGenerationRef.current;
     const submittedScope = draftScope;
     const submittedPayload = currentPayloadRef.current;
@@ -662,6 +938,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
     setLoading(true);
     setSaveError("");
     setSaveResult(null);
+    setWorldviewStale(false);
     const localDraft = storeCurrentDraft();
     try {
       // 导入/混合模式下确保 raw_text 始终为最新输入的原文
@@ -669,7 +946,10 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
         mode !== "manual" && importText
           ? { ...data, raw_text: importText, source }
           : { ...data, source };
-      await api.setWorldview(projectId, saveData);
+      const savedWorldview = await api.setWorldview(projectId, {
+        ...saveData,
+        expected_source_checksum: serverSourceChecksumRef.current,
+      });
       if (
         saveGeneration !== saveGenerationRef.current ||
         !submittedScope ||
@@ -684,6 +964,9 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
       if (saveGeneration !== saveGenerationRef.current) return;
       baseFingerprintRef.current =
         fingerprint.status === "available" ? fingerprint.value : null;
+      serverSourceChecksumRef.current = savedWorldview.source_checksum;
+      setServerSourceChecksum(savedWorldview.source_checksum);
+      worldviewExistsRef.current = true;
       serverSnapshotRef.current = JSON.stringify(savedPayload);
       // 重试成功 — 清除旧维护提示和普通错误
       setMaintenanceFailure(null);
@@ -729,6 +1012,14 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
       if (saveGeneration !== saveGenerationRef.current) return;
       if (isProjectWriteFrozenError(e)) {
         setMaintenanceFailure({ error: e, draftStored: localDraft.stored });
+      } else if (e instanceof ApiError && e.code === "WORLDVIEW_SOURCE_STALE") {
+        setMaintenanceFailure(null);
+        setWorldviewStale(true);
+        setSaveError(
+          localDraft.stored
+            ? "服务器上的世界观已更新，本地修改已保留。请重新加载并比较后再保存。"
+            : "服务器上的世界观已更新，当前内容仅保留在页面，请立即复制后再重新加载。"
+        );
       } else {
         // 重试变成普通错误时清除旧维护提示
         setMaintenanceFailure(null);
@@ -851,7 +1142,136 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
   }
 
   const isReadOnly = mode === "import" && importResult?.done;
-  const showEditor = mode === "manual" || importResult?.done === true;
+  const showEditor = relationalMode !== true && (mode === "manual" || importResult?.done === true);
+
+  const migrationCategoryLabels: Record<string, string> = {
+    characters: "角色",
+    geography: "地点",
+    factions: "阵营",
+    power_system: "能力体系",
+    history: "历史事件",
+    conflicts: "冲突",
+    special_settings: "其他重要设定",
+  };
+
+  function isMigrationTarget(category: string, index: number): boolean {
+    return migrationTarget?.category === category && migrationTarget.index === index;
+  }
+
+  const migrationTargetEntries = migrationTarget
+    ? (data as unknown as Record<string, unknown[]>)[migrationTarget.category]
+    : null;
+  const migrationTargetExists = Array.isArray(migrationTargetEntries) &&
+    migrationTarget != null && migrationTarget.index < migrationTargetEntries.length &&
+    migrationTargetState === "valid";
+  const migrationSourceUnchanged =
+    JSON.stringify(currentPayloadRef.current) === serverSnapshotRef.current;
+  const migrationCanLocate = migrationTargetExists && migrationSourceUnchanged &&
+    recovery === null && !corruptDraft;
+
+  useEffect(() => {
+    if (!migrationTarget) {
+      setMigrationTargetState("idle");
+      return;
+    }
+    if (scopeLoading || loadedScopeKey !== currentScopeKey) {
+      setMigrationTargetState("loading");
+      return;
+    }
+    if (!serverSourceChecksum) {
+      setMigrationTargetState("invalid");
+      return;
+    }
+    const controller = new AbortController();
+    let active = true;
+    setMigrationTargetState("loading");
+    void api.getLoreMigrationPreview(projectId, controller.signal).then((preview) => {
+      if (!active) return;
+      const current = preview.items.find((item) =>
+        item.legacy_category === migrationTarget.category &&
+        item.legacy_index === migrationTarget.index
+      );
+      const reasonIsEditable = current?.reason_codes.some((reason) =>
+          reason === "missing_name" || reason === "parsed_name_mismatch"
+        ) === true;
+      const exactVersionMatches =
+        preview.storage_mode === "legacy" &&
+        preview.source_checksum === migrationTarget.sourceChecksum &&
+        serverSourceChecksum === migrationTarget.sourceChecksum;
+      setMigrationTargetState(
+        exactVersionMatches && current?.item_fingerprint === migrationTarget.itemFingerprint && reasonIsEditable
+          ? "valid"
+          : "invalid"
+      );
+    }).catch((error) => {
+      if (active && (error as Error).name !== "AbortError") setMigrationTargetState("error");
+    });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [
+    projectId,
+    migrationTarget?.category,
+    migrationTarget?.index,
+    migrationTarget?.itemFingerprint,
+    migrationTarget?.sourceChecksum,
+    serverSourceChecksum,
+    scopeLoading,
+    loadedScopeKey,
+    currentScopeKey,
+    migrationPreviewReloadToken,
+  ]);
+
+  useEffect(() => {
+    const key = migrationTarget
+      ? `${projectId}:${migrationTarget.itemFingerprint}`
+      : migrationRequestInvalid
+        ? `${projectId}:invalid-migration-request`
+        : "";
+    if (!key) {
+      migrationFocusHandledRef.current = "";
+      return;
+    }
+    if (
+      relationalMode !== false || migrationTargetState === "loading" ||
+      scopeLoading || loadedScopeKey !== currentScopeKey || recovery || corruptDraft ||
+      migrationFocusHandledRef.current === key
+    ) return;
+    migrationFocusHandledRef.current = key;
+    migrationNoticeRef.current?.focus();
+  }, [projectId, migrationTarget?.itemFingerprint, migrationRequestInvalid, migrationTargetState, relationalMode, scopeLoading, loadedScopeKey, recovery, corruptDraft]);
+
+  useEffect(() => {
+    if (!saveResult || maintenanceFailure || saveError) return;
+    saveResultRef.current?.focus();
+  }, [saveResult, maintenanceFailure, saveError]);
+
+  useEffect(() => {
+    if (!recovery || !focusRecoveryAfterReloadRef.current) return;
+    focusRecoveryAfterReloadRef.current = false;
+    draftRecoveryContainerRef.current?.focus();
+  }, [recovery]);
+
+  function locateMigrationTarget() {
+    if (!migrationCanLocate || !migrationTarget) return;
+    if (isReadOnly) switchMode("hybrid");
+    requestAnimationFrame(() => {
+      const selector = `[data-migration-target="${migrationTarget.category}:${migrationTarget.index}"]`;
+      const entry = editorRootRef.current?.querySelector<HTMLElement>(selector);
+      const field = entry?.querySelector<HTMLElement>("input, textarea, button");
+      const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+      entry?.scrollIntoView?.({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+      field?.focus();
+    });
+  }
+
+  function reloadProjectVersionAfterStale() {
+    setSaveError("");
+    setWorldviewStale(false);
+    focusRecoveryAfterReloadRef.current = true;
+    void loadWorldview(true);
+  }
 
   // CRUD helpers
   function addCharacter() { setData({ ...data, characters: [...data.characters, { name: "", personality: "", background: "", motivation: "", ability: "", relations: [] }] }); }
@@ -882,6 +1302,51 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
     { key: "hybrid" as const, label: "混合模式", desc: "导入后可手动追加修改" },
   ];
 
+  if (
+    relationalMode === null &&
+    !scopeLoading &&
+    loadedScopeKey === currentScopeKey
+  ) {
+    return (
+      <div ref={editorRootRef}>
+        <button className="btn-back" onClick={handleBack}>← 返回项目详情</button>
+        <div className="card empty-state" role={loreModeError ? "alert" : "status"} aria-busy={!loreModeError}>
+          <h2>{loreModeError ? "无法确认设定仓库模式" : "正在确认设定仓库模式"}</h2>
+          <p>{loreModeError || "确认完成前不会显示旧编辑流程，也不会调用 AI。"}</p>
+          {loreModeError && <button className="btn btn-primary" type="button" onClick={() => setLoreModeReloadToken((value) => value + 1)}>重新确认仓库模式</button>}
+        </div>
+      </div>
+    );
+  }
+
+  const extractionSourceMatches = extractionDraft?.documentText === importText.trim();
+  const extractionUncertain = extractionDraft != null && ["submitting", "running", "maintenance", "outcome_unknown"].includes(extractionDraft.phase);
+  const extractionCanAbandon = extractionCorrupt || extractionDraft?.phase === "completed" || extractionDraft?.phase === "failed";
+  const extractionCanStartAgain = extractionDraft?.phase === "failed" && (
+    extractionDraft.retryable || extractionDraft.errorStatus === 413
+  );
+  const extractionPrimaryLabel = extractionDraft?.phase === "completed"
+    ? extractionDraft.candidateCount && extractionDraft.candidateCount > 0
+      ? "前往待审核设定"
+      : "前往仓库手动创建"
+    : extractionDraft?.phase === "failed"
+      ? "本次提取失败"
+      : extractionDraft?.phase === "maintenance"
+        ? "维护结束后重试提取"
+        : extractionDraft && extractionSourceMatches
+          ? "核对上次提取结果"
+          : "提取为待审核设定";
+
+  function handleExtractionPrimary() {
+    if (extractionDraft?.phase === "completed") {
+      extractionDraft.candidateCount && extractionDraft.candidateCount > 0
+        ? (onExtractionComplete ? onExtractionComplete() : onComplete())
+        : onComplete();
+      return;
+    }
+    void handleStrictExtraction(false);
+  }
+
   return (
     <div ref={editorRootRef}>
       <button className="btn-back" onClick={handleBack}>← 返回项目详情</button>
@@ -901,7 +1366,13 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
       )}
 
       {saveResult && !maintenanceFailure && !saveError && (
-        <div className="draft-notice" style={{ borderColor: "var(--gold)", background: "var(--gold-light)" }}>
+        <div
+          ref={saveResultRef}
+          className="draft-notice"
+          style={{ borderColor: "var(--gold)", background: "var(--gold-light)" }}
+          role="status"
+          tabIndex={-1}
+        >
           <h3>世界观已保存</h3>
           <p>
             {saveResult === "saved_clean"
@@ -923,6 +1394,13 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
               </button>
             </div>
           )}
+          {migrationTarget && onReturnToMigration && saveResult === "saved_clean" && (
+            <div className="draft-notice__actions">
+              <button type="button" className="btn btn-primary" onClick={onReturnToMigration}>
+                返回并重新检查
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -934,9 +1412,9 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => void handleSave()}
+              onClick={() => worldviewStale ? reloadProjectVersionAfterStale() : void handleSave()}
             >
-              重试保存
+              {worldviewStale ? "重新加载项目版本" : "重试保存"}
             </button>
             <button
               type="button"
@@ -983,13 +1461,15 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
       )}
 
       {recovery && (
-        <DraftRecoveryNotice
-          state={recovery.state}
-          savedAt={new Date(recovery.draft.savedAt).toISOString()}
-          onRestore={restoreDraft}
-          onCopy={() => void copyWorldview(recovery.draft.payload)}
-          onDiscard={discardDraft}
-        />
+        <div ref={draftRecoveryContainerRef} tabIndex={-1}>
+          <DraftRecoveryNotice
+            state={recovery.state}
+            savedAt={new Date(recovery.draft.savedAt).toISOString()}
+            onRestore={restoreDraft}
+            onCopy={() => void copyWorldview(recovery.draft.payload)}
+            onDiscard={discardDraft}
+          />
+        </div>
       )}
 
       {copyFallback !== null && (
@@ -1004,6 +1484,60 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
             readOnly
             onFocus={(event) => event.currentTarget.select()}
           />
+        </div>
+      )}
+
+      {(migrationTarget || migrationRequestInvalid) && loadedScopeKey === currentScopeKey && !scopeLoading && (
+        <div
+          id="worldview-migration-fix-notice"
+          ref={migrationNoticeRef}
+          className="draft-notice worldview-migration-fix"
+          tabIndex={-1}
+          role={migrationTargetState === "invalid" || migrationTargetState === "error" || migrationRequestInvalid ? "alert" : "status"}
+        >
+          <h3>修正旧资料检查项</h3>
+          <p>
+            {migrationRequestInvalid
+              ? "这个修正链接无效或不完整。系统没有定位或修改任何资料，请返回预检重新检查。"
+              : migrationTargetState === "loading" || migrationTargetState === "idle"
+              ? "正在根据最新的已保存资料核对这项检查结果。"
+              : migrationTargetState === "error"
+              ? "暂时无法核对这项资料，系统没有定位或修改任何内容。你可以重试核对或返回预检。"
+              : migrationTargetExists && migrationTarget
+              ? `正在处理：旧世界观 › ${migrationCategoryLabels[migrationTarget.category] ?? "资料"} › 第 ${migrationTarget.index + 1} 项。系统不会替你补写或自动保存。`
+              : "这项资料的位置已经变化。请返回预检重新检查，系统不会按旧位置修改内容。"}
+          </p>
+          {migrationTargetExists && migrationTargetState === "valid" && (
+            <div className="draft-notice__actions">
+              <button type="button" className="btn btn-primary" onClick={locateMigrationTarget} disabled={!migrationCanLocate}>
+                {isReadOnly ? "切换为混合模式并定位" : "定位到这项资料"}
+              </button>
+              {onReturnToMigration && (
+                <button type="button" className="btn btn-secondary" onClick={onReturnToMigration}>
+                  返回迁移预检
+                </button>
+              )}
+            </div>
+          )}
+          {migrationTargetState === "error" && (
+            <div className="draft-notice__actions">
+              <button type="button" className="btn btn-primary" onClick={() => setMigrationPreviewReloadToken((value) => value + 1)}>
+                重试核对
+              </button>
+              {onReturnToMigration && <button type="button" className="btn btn-secondary" onClick={onReturnToMigration}>返回迁移预检</button>}
+            </div>
+          )}
+          {(migrationRequestInvalid || migrationTargetState === "invalid") && onReturnToMigration && (
+            <div className="draft-notice__actions">
+              <button type="button" className="btn btn-primary" onClick={onReturnToMigration}>
+                返回并重新检查
+              </button>
+            </div>
+          )}
+          {(recovery || corruptDraft) && <small>请先处理上方本地草稿，再定位和编辑。</small>}
+          {!recovery && !corruptDraft && migrationTargetState === "valid" && !migrationSourceUnchanged && (
+            <small>当前编辑区已有未保存变更。请先保存或返回预检，系统不会按旧位置继续定位。</small>
+          )}
         </div>
       )}
 
@@ -1047,7 +1581,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
       <div className="card">
         <div className="wv-section-title">世界观创建方式</div>
         <div style={{ display: "flex", gap: "0.625rem", flexWrap: "wrap" }}>
-          {MODES.map((m) => (
+          {(relationalMode ? MODES.filter((item) => item.key === "import") : MODES).map((m) => (
             <button
               key={m.key}
               className="btn"
@@ -1075,7 +1609,11 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
         <div className="card">
           <div className="wv-section-title">导入世界观文档</div>
           <p className="form-hint" style={{ marginBottom: "0.625rem" }}>
-            粘贴或上传包含世界观设定的文档（支持 .txt / .md / .doc / .docx），AI 将自动提取角色、地理、势力、体系等结构化要素。
+            {relationalMode === null
+              ? "正在确认当前项目的设定仓库模式；确认完成前不会调用 AI。"
+              : relationalMode
+              ? "粘贴或上传世界观原文。AI 只生成逐项待审核候选，不会自动写入正式设定；你需要逐项接纳或拒绝。"
+              : "粘贴或上传包含世界观设定的文档（支持 .txt / .md / .doc / .docx）。当前兼容项目会先填充旧世界观表单，不会自动同步正式设定仓库。"}
           </p>
           <textarea
             className="form-textarea worldview-import-text"
@@ -1098,18 +1636,45 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
             disabled={importing}
             aria-label="导入世界观文档原文"
           />
-          <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.625rem", alignItems: "center", flexWrap: "wrap" }}>
+          <div className="lore-candidate-actions">
             <input ref={fileInputRef} type="file" accept=".txt,.md,.markdown,.doc,.docx" onChange={handleFileUpload} style={{ display: "none" }} />
             <button className="btn" onClick={() => fileInputRef.current?.click()} disabled={importing}>
               {importing ? "解析文件中..." : "上传文件"}
             </button>
-            <button className="btn btn-primary" onClick={handleImport} disabled={importing || !importText.trim()}>
-              {importing ? "AI 解析中..." : "开始导入解析"}
+            <button
+              className="btn btn-primary"
+              onClick={() => relationalMode ? handleExtractionPrimary() : void handleImport()}
+              disabled={
+                importing ||
+                extractionCorrupt ||
+                (extractionDraft?.phase !== "completed" && importText.trim().length < 10) ||
+                extractionDraft?.phase === "failed"
+              }
+            >
+              {importing ? "AI 提取中..." : relationalMode ? extractionPrimaryLabel : "兼容解析并填充表单"}
             </button>
-            {importResult?.done && (
+            {relationalMode && extractionCanStartAgain && (
+              <button className="btn btn-secondary" type="button" disabled={importing || (extractionDraft?.errorStatus === 413 && extractionSourceMatches)} onClick={() => void handleStrictExtraction(true)}>{extractionDraft?.errorStatus === 413 ? "修改后重新提取" : "明确重新提取"}</button>
+            )}
+            {relationalMode && extractionUncertain && !extractionSourceMatches && (
+              <button className="btn btn-secondary" type="button" disabled={importing} onClick={restoreExtractionSource}>恢复上次任务原文</button>
+            )}
+            {relationalMode && extractionCanAbandon && (
+              <button className="btn btn-secondary" type="button" disabled={importing} onClick={abandonExtraction}>放弃任务状态</button>
+            )}
+            {!relationalMode && importResult?.done && (
               <span className="tag tag-gold" style={{ fontWeight: 600 }}>已提取 {importResult.count} 个要素</span>
             )}
           </div>
+          {relationalMode && extractionNotice && (
+            <div ref={extractionResultRef} tabIndex={-1} role="status" className="draft-notice" style={{ marginTop: "0.625rem" }}><p>{extractionNotice}</p></div>
+          )}
+          {relationalMode && extractionError && (
+            <div role="alert" className="draft-notice draft-notice--maintenance" style={{ marginTop: "0.625rem" }}><p>{extractionError}</p></div>
+          )}
+          {loreModeError && (
+            <div role="alert" className="draft-notice draft-notice--maintenance" style={{ marginTop: "0.625rem" }}><p>{loreModeError}</p></div>
+          )}
           {mode === "hybrid" && importResult?.done && (
             <div style={{ marginTop: "0.625rem", padding: "0.5rem 0.75rem", background: "var(--gold-light)", borderRadius: "var(--r-md)", fontSize: "12px", color: "var(--gold-dark)", borderLeft: "3px solid var(--gold)" }}>
               混合模式已激活 — 下方表单已填充提取的要素，你可以自由编辑、添加或删除任意内容
@@ -1117,7 +1682,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           )}
           {importResult?.done && !saved && !reparseNeeded && (
             <div style={{ marginTop: "0.625rem", padding: "0.5rem 0.75rem", background: "#fef9e7", borderRadius: "var(--r-md)", fontSize: "13px", color: "#7d6608", borderLeft: "3px solid #f39c12" }}>
-              ⚠️ 世界观已提取但尚未保存。请点击下方「保存世界观」按钮保存后，再进入下一步生成大纲。
+              ⚠️ 世界观已提取但尚未保存。请点击下方「保存世界观」，保存后可进入设定仓库继续整理。
             </div>
           )}
           {reparseNeeded && (
@@ -1145,8 +1710,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           <div className="card">
             <div className="wv-section-title" tabIndex={-1}>角色 ({data.characters.length})</div>
             {data.characters.map((c, i) => (
-              <div key={i} className="wv-entry">
-                <input className="form-input" placeholder="姓名" value={c.name} onChange={(e) => updateCharacter(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`角色${i + 1} 姓名`} />
+              <div key={i} className={`wv-entry ${isMigrationTarget("characters", i) ? "is-migration-target" : ""}`} data-migration-target={`characters:${i}`}>
+                <input className="form-input" placeholder="姓名" value={c.name} onChange={(e) => updateCharacter(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`角色${i + 1} 姓名`} aria-describedby={isMigrationTarget("characters", i) ? "worldview-migration-fix-notice" : undefined} />
                 <input className="form-input" placeholder="性格" value={c.personality} onChange={(e) => updateCharacter(i, "personality", e.target.value)} readOnly={isReadOnly} aria-label={`角色${i + 1} 性格`} />
                 <input className="form-input" placeholder="背景" value={c.background} onChange={(e) => updateCharacter(i, "background", e.target.value)} readOnly={isReadOnly} aria-label={`角色${i + 1} 背景`} />
                 <div style={{ display: "flex", gap: "0.375rem" }}>
@@ -1163,8 +1728,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           <div className="card">
             <div className="wv-section-title" tabIndex={-1}>地理设定 ({data.geography.length})</div>
             {data.geography.map((g, i) => (
-              <div key={i} className="wv-entry">
-                <input className="form-input" placeholder="地名" value={g.name} onChange={(e) => updateGeography(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`地点${i + 1} 名称`} />
+              <div key={i} className={`wv-entry ${isMigrationTarget("geography", i) ? "is-migration-target" : ""}`} data-migration-target={`geography:${i}`}>
+                <input className="form-input" placeholder="地名" value={g.name} onChange={(e) => updateGeography(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`地点${i + 1} 名称`} aria-describedby={isMigrationTarget("geography", i) ? "worldview-migration-fix-notice" : undefined} />
                 <input className="form-input" placeholder="描述" value={g.description} onChange={(e) => updateGeography(i, "description", e.target.value)} readOnly={isReadOnly} aria-label={`地点${i + 1} 描述`} />
                 <input className="form-input" placeholder="重要性" value={g.significance} onChange={(e) => updateGeography(i, "significance", e.target.value)} readOnly={isReadOnly} aria-label={`地点${i + 1} 重要性`} />
                 {!isReadOnly && <button className="btn btn-ghost btn-sm" onClick={() => removeGeography(i)} style={{ color: "var(--red)" }} aria-label={`移除地点 ${i + 1}`}><span aria-hidden="true">✕</span></button>}
@@ -1177,8 +1742,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           <div className="card">
             <div className="wv-section-title" tabIndex={-1}>势力组织 ({data.factions.length})</div>
             {data.factions.map((f, i) => (
-              <div key={i} className="wv-entry">
-                <input className="form-input" placeholder="势力名称" value={f.name} onChange={(e) => updateFaction(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`势力${i + 1} 名称`} />
+              <div key={i} className={`wv-entry ${isMigrationTarget("factions", i) ? "is-migration-target" : ""}`} data-migration-target={`factions:${i}`}>
+                <input className="form-input" placeholder="势力名称" value={f.name} onChange={(e) => updateFaction(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`势力${i + 1} 名称`} aria-describedby={isMigrationTarget("factions", i) ? "worldview-migration-fix-notice" : undefined} />
                 <input className="form-input" placeholder="立场" value={f.stance} onChange={(e) => updateFaction(i, "stance", e.target.value)} readOnly={isReadOnly} aria-label={`势力${i + 1} 立场`} />
                 <input className="form-input" placeholder="实力等级" value={f.power_level} onChange={(e) => updateFaction(i, "power_level", e.target.value)} readOnly={isReadOnly} aria-label={`势力${i + 1} 实力等级`} />
                 {!isReadOnly && <button className="btn btn-ghost btn-sm" onClick={() => removeFaction(i)} style={{ color: "var(--red)" }} aria-label={`移除势力 ${i + 1}`}><span aria-hidden="true">✕</span></button>}
@@ -1191,8 +1756,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           <div className="card">
             <div className="wv-section-title" tabIndex={-1}>力量体系 ({data.power_system.length})</div>
             {data.power_system.map((ps, i) => (
-              <div key={i} className="wv-entry">
-                <input className="form-input" placeholder="体系名称" value={ps.name} onChange={(e) => updatePowerSystem(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`体系${i + 1} 名称`} />
+              <div key={i} className={`wv-entry ${isMigrationTarget("power_system", i) ? "is-migration-target" : ""}`} data-migration-target={`power_system:${i}`}>
+                <input className="form-input" placeholder="体系名称" value={ps.name} onChange={(e) => updatePowerSystem(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`体系${i + 1} 名称`} aria-describedby={isMigrationTarget("power_system", i) ? "worldview-migration-fix-notice" : undefined} />
                 <input className="form-input" placeholder="等级划分" value={ps.levels} onChange={(e) => updatePowerSystem(i, "levels", e.target.value)} readOnly={isReadOnly} aria-label={`体系${i + 1} 等级划分`} />
                 <input className="form-input" placeholder="规则" value={ps.rules} onChange={(e) => updatePowerSystem(i, "rules", e.target.value)} readOnly={isReadOnly} aria-label={`体系${i + 1} 规则`} />
                 <div style={{ display: "flex", gap: "0.375rem" }}>
@@ -1208,8 +1773,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           <div className="card">
             <div className="wv-section-title" tabIndex={-1}>历史事件 ({data.history.length})</div>
             {data.history.map((h, i) => (
-              <div key={i} className="wv-entry">
-                <input className="form-input" placeholder="事件名称" value={h.event} onChange={(e) => updateHistory(i, "event", e.target.value)} readOnly={isReadOnly} aria-label={`事件${i + 1} 名称`} />
+              <div key={i} className={`wv-entry ${isMigrationTarget("history", i) ? "is-migration-target" : ""}`} data-migration-target={`history:${i}`}>
+                <input className="form-input" placeholder="事件名称" value={h.event} onChange={(e) => updateHistory(i, "event", e.target.value)} readOnly={isReadOnly} aria-label={`事件${i + 1} 名称`} aria-describedby={isMigrationTarget("history", i) ? "worldview-migration-fix-notice" : undefined} />
                 <input className="form-input" placeholder="时间" value={h.time} onChange={(e) => updateHistory(i, "time", e.target.value)} readOnly={isReadOnly} aria-label={`事件${i + 1} 时间`} />
                 <input className="form-input" placeholder="描述" value={h.description} onChange={(e) => updateHistory(i, "description", e.target.value)} readOnly={isReadOnly} aria-label={`事件${i + 1} 描述`} />
                 <div style={{ display: "flex", gap: "0.375rem" }}>
@@ -1225,8 +1790,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           <div className="card">
             <div className="wv-section-title" tabIndex={-1}>核心矛盾 ({data.conflicts.length})</div>
             {data.conflicts.map((c, i) => (
-              <div key={i} className="wv-entry">
-                <input className="form-input" placeholder="矛盾名称" value={c.name} onChange={(e) => updateConflict(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`矛盾${i + 1} 名称`} />
+              <div key={i} className={`wv-entry ${isMigrationTarget("conflicts", i) ? "is-migration-target" : ""}`} data-migration-target={`conflicts:${i}`}>
+                <input className="form-input" placeholder="矛盾名称" value={c.name} onChange={(e) => updateConflict(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`矛盾${i + 1} 名称`} aria-describedby={isMigrationTarget("conflicts", i) ? "worldview-migration-fix-notice" : undefined} />
                 <input className="form-input" placeholder="类型" value={c.type} onChange={(e) => updateConflict(i, "type", e.target.value)} readOnly={isReadOnly} aria-label={`矛盾${i + 1} 类型`} />
                 <input className="form-input" placeholder="涉及方" value={c.parties} onChange={(e) => updateConflict(i, "parties", e.target.value)} readOnly={isReadOnly} aria-label={`矛盾${i + 1} 涉及方`} />
                 <div style={{ display: "flex", gap: "0.375rem" }}>
@@ -1243,8 +1808,8 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           <div className="card">
             <div className="wv-section-title" tabIndex={-1}>特殊设定 ({data.special_settings.length})</div>
             {data.special_settings.map((ss, i) => (
-              <div key={i} className="wv-entry">
-                <input className="form-input" placeholder="设定名称" value={ss.name} onChange={(e) => updateSpecial(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`设定${i + 1} 名称`} />
+              <div key={i} className={`wv-entry ${isMigrationTarget("special_settings", i) ? "is-migration-target" : ""}`} data-migration-target={`special_settings:${i}`}>
+                <input className="form-input" placeholder="设定名称" value={ss.name} onChange={(e) => updateSpecial(i, "name", e.target.value)} readOnly={isReadOnly} aria-label={`设定${i + 1} 名称`} aria-describedby={isMigrationTarget("special_settings", i) ? "worldview-migration-fix-notice" : undefined} />
                 <input className="form-input" placeholder="描述" value={ss.description} onChange={(e) => updateSpecial(i, "description", e.target.value)} readOnly={isReadOnly} aria-label={`设定${i + 1} 描述`} />
                 <input className="form-input" placeholder="规则" value={ss.rules} onChange={(e) => updateSpecial(i, "rules", e.target.value)} readOnly={isReadOnly} aria-label={`设定${i + 1} 规则`} />
                 {!isReadOnly && <button className="btn btn-ghost btn-sm" onClick={() => removeSpecial(i)} style={{ color: "var(--red)" }} aria-label={`移除设定 ${i + 1}`}><span aria-hidden="true">✕</span></button>}
@@ -1274,7 +1839,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
             <button className="btn btn-primary btn-lg" onClick={handleSave} disabled={loading}>
               {loading ? "保存中..." : "保存世界观"}
             </button>
-            {/* saved 或 hasWorldview 任一为 true 即显示"进入下一步" — 解决 prop 闭锁问题 */}
+            {/* 保存过世界观后可以进入独立设定仓库。 */}
             {(hasWorldview || saved) && (
               <button
                 className="btn btn-danger btn-lg"
@@ -1284,7 +1849,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
                     const storedNow = storeCurrentDraft().stored;
                     if (storedNow) {
                       setNextStepBlocked(true);
-                      setDraftMessage("内容仅保存在本设备，尚未保存到项目。建议先保存世界观后再进入下一步。");
+                      setDraftMessage("内容仅保存在本设备，尚未保存到项目。建议先保存世界观后再打开设定仓库。");
                     } else {
                       setDraftMessage("存在未保存编辑且本地草稿也未能保留，请先复制内容。");
                       return;
@@ -1294,7 +1859,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
                   }
                 }}
               >
-                进入下一步 →
+                打开设定仓库 →
               </button>
             )}
           </div>
@@ -1302,7 +1867,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
           {nextStepBlocked && (
             <div className="draft-notice" style={{ marginTop: "0.875rem" }}>
               <h3>内容仅保存在本设备</h3>
-              <p>编辑已保留到本地草稿（本设备），尚未保存到项目。建议保存世界观后再进入下一步；也可仍要继续。</p>
+              <p>编辑已保留到本地草稿（本设备），尚未保存到项目。建议保存世界观后再打开设定仓库；也可只查看现有设定。</p>
               <div className="draft-notice__actions">
                 <button
                   type="button"
@@ -1312,7 +1877,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
                     onComplete();
                   }}
                 >
-                  仍要进入下一步
+                  仍要打开设定仓库
                 </button>
                 <button
                   type="button"
@@ -1331,7 +1896,7 @@ export default function WorldviewEditor({ projectId, hasWorldview, genre, onComp
         <div className="card" style={{ background: "var(--gold-light)", borderColor: "var(--gold-border)", borderLeftWidth: "3px", borderLeftColor: "var(--gold)" }}>
           <p style={{ fontSize: "13px", color: "var(--gold-dark)", lineHeight: 1.7 }}>
             填写世界观架构。系统会自动解析为结构化要素并分配优先级（核心/重要/次要/背景），
-            然后根据渐进式揭示策略安排各章节的信息展开节奏。
+            保存后可在统一的设定仓库中继续分类查看和管理。
           </p>
         </div>
       )}

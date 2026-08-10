@@ -23,12 +23,191 @@ def _run_alembic(backend_dir, database_url, *args):
     )
 
 
+def _element_version_type_ondelete(database_path):
+    with sqlite3.connect(database_path) as connection:
+        matches = [
+            row
+            for row in connection.execute(
+                "PRAGMA foreign_key_list(element_versions)"
+            )
+            if row[2] == "setting_types" and row[3] == "type_id" and row[4] == "id"
+        ]
+    assert len(matches) == 1
+    return matches[0][6]
+
+
 def test_lore_migration_upgrade_and_downgrade_are_additive(tmp_path):
     backend_dir = os.path.dirname(os.path.dirname(__file__))
     database_path = tmp_path / "lore-migration.db"
     database_url = f"sqlite+aiosqlite:///{database_path}"
 
     _run_alembic(backend_dir, database_url, "upgrade", "head")
+    assert _element_version_type_ondelete(database_path) == "CASCADE"
+
+    _run_alembic(backend_dir, database_url, "downgrade", "f6c8d2e4a005")
+    assert _element_version_type_ondelete(database_path) == "RESTRICT"
+
+    _run_alembic(backend_dir, database_url, "upgrade", "head")
+    assert _element_version_type_ondelete(database_path) == "CASCADE"
+
+
+def test_manual_review_receipt_migration_round_trip_is_additive(tmp_path):
+    backend_dir = os.path.dirname(os.path.dirname(__file__))
+    database_path = tmp_path / "manual-review-receipts.db"
+    database_url = f"sqlite+aiosqlite:///{database_path}"
+
+    _run_alembic(backend_dir, database_url, "upgrade", "head")
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "lore_review_suggestion_create_operations" in tables
+        assert "lore_review_suggestions" in tables
+
+    _run_alembic(backend_dir, database_url, "downgrade", "e1b3c7d9f010")
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "lore_review_suggestion_create_operations" not in tables
+        assert "lore_review_suggestions" in tables
+
+    _run_alembic(backend_dir, database_url, "upgrade", "head")
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "lore_review_suggestion_create_operations" in tables
+
+def test_candidate_review_migration_backfills_existing_candidate_revision(tmp_path):
+    backend_dir = os.path.dirname(os.path.dirname(__file__))
+    database_path = tmp_path / "candidate-review-backfill.db"
+    database_url = f"sqlite+aiosqlite:///{database_path}"
+    _run_alembic(backend_dir, database_url, "upgrade", "c3f5a9d1e002")
+
+    user_id = "1" * 32
+    project_id = "2" * 32
+    batch_id = "3" * 32
+    candidate_id = "4" * 32
+    timestamp = "2026-08-03 16:00:00"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO users (
+                id, email, username, hashed_password, is_admin,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 0, ?, ?)
+            """,
+            (user_id, "legacy@example.com", "legacy-user", "hash", timestamp, timestamp),
+        )
+        connection.execute(
+            """
+            INSERT INTO projects (
+                id, title, genre, status, total_chapters,
+                chapter_word_count, style_intensity, owner_id,
+                lore_storage_mode, lore_migration_version, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 10, 1000, ?, ?, ?, NULL, ?, ?)
+            """,
+            (
+                project_id,
+                "legacy-project",
+                "玄幻",
+                "draft",
+                "standard",
+                user_id,
+                "legacy",
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO lore_extraction_batches (
+                id, project_id, requested_by, idempotency_key, source_kind,
+                source_ref, source_text, source_hash, extractor_version,
+                model_name, status, raw_response, error_code, error_message,
+                retryable, candidate_count, lock_version, llm_started_at,
+                llm_completed_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, NULL, NULL,
+                      NULL, 0, 1, 1, NULL, NULL, ?, ?)
+            """,
+            (
+                batch_id,
+                project_id,
+                user_id,
+                "legacy-batch",
+                "manual_text",
+                "林远性格坚韧",
+                "a" * 64,
+                "v1",
+                "completed",
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO lore_extraction_candidates (
+                id, project_id, batch_id, ordinal, deterministic_key,
+                type_key, name, summary, payload, field_states,
+                relation_suggestions, duplicate_conflict_suggestions,
+                status, revision, accepted_element_id, error_code,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?)
+            """,
+            (
+                candidate_id,
+                project_id,
+                batch_id,
+                "b" * 64,
+                "character",
+                "林远",
+                "旧候选",
+                '{"personality": "坚韧"}',
+                '{"personality": "needs_confirmation"}',
+                "[]",
+                "[]",
+                "pending_review",
+                timestamp,
+                timestamp,
+            ),
+        )
+
+    _run_alembic(backend_dir, database_url, "upgrade", "head")
+    with sqlite3.connect(database_path) as connection:
+        row = connection.execute(
+            """
+            SELECT revision, type_key, name, summary, payload, field_states,
+                   change_kind, created_by, created_at
+            FROM lore_candidate_revisions
+            WHERE candidate_id = ?
+            """,
+            (candidate_id,),
+        ).fetchone()
+        assert row is not None
+        assert row[:4] == (1, "character", "林远", "旧候选")
+        assert row[4] == '{"personality": "坚韧"}'
+        assert row[5] == '{"personality": "needs_confirmation"}'
+        assert row[6:8] == ("extracted", user_id)
+        assert row[8] == timestamp
+        attention = connection.execute(
+            """
+            SELECT needs_attention
+            FROM lore_extraction_candidates
+            WHERE id = ?
+            """,
+            (candidate_id,),
+        ).fetchone()
+        assert attention == (1,)
     with sqlite3.connect(database_path) as connection:
         tables = {
             row[0]
@@ -47,11 +226,28 @@ def test_lore_migration_upgrade_and_downgrade_are_additive(tmp_path):
             "element_state_events",
             "element_relations",
             "element_relation_versions",
+            "lore_extraction_batches",
+            "lore_extraction_candidates",
+            "lore_candidate_field_evidence",
+            "lore_candidate_revisions",
+            "lore_element_create_operations",
+            "lore_relation_create_operations",
+            "lore_review_suggestions",
+            "lore_review_suggestion_events",
+            "lore_merge_operations",
+            "lore_merge_relation_actions",
+            "lore_review_suggestion_create_operations",
+            "project_lore_migration_operations",
         }.issubset(tables)
         project_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(projects)")
         }
         assert {"lore_storage_mode", "lore_migration_version"}.issubset(project_columns)
+        element_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(setting_elements)")
+        }
+        assert "merged_into_element_id" in element_columns
 
         table_sql = {
             name: sql or ""
@@ -68,7 +264,133 @@ def test_lore_migration_upgrade_and_downgrade_are_additive(tmp_path):
         )
         assert "fk_element_relation_project_source" in table_sql["element_relations"]
         assert "fk_element_relation_project_target" in table_sql["element_relations"]
+        assert "uq_element_relation_project_id_id" in table_sql["element_relations"]
         assert "uq_element_relation_version" in table_sql["element_relation_versions"]
+        assert (
+            "uq_lore_extraction_project_idempotency"
+            in table_sql["lore_extraction_batches"]
+        )
+        assert (
+            "fk_lore_extraction_candidate_project_batch"
+            in table_sql["lore_extraction_candidates"]
+        )
+        assert (
+            "fk_lore_extraction_candidate_project_element"
+            in table_sql["lore_extraction_candidates"]
+        )
+        assert (
+            "uq_lore_candidate_field_evidence"
+            in table_sql["lore_candidate_field_evidence"]
+        )
+        candidate_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(lore_extraction_candidates)"
+            )
+        }
+        assert {
+            "suggestion_resolutions",
+            "user_overrides",
+            "needs_attention",
+        }.issubset(
+            candidate_columns
+        )
+        assert (
+            "uq_lore_extraction_candidate_accepted_element"
+            in table_sql["lore_extraction_candidates"]
+        )
+        assert "uq_lore_candidate_revision" in table_sql["lore_candidate_revisions"]
+        assert (
+            "uq_lore_element_create_operation_key"
+            in table_sql["lore_element_create_operations"]
+        )
+        assert (
+            "fk_lore_element_create_operation_element"
+            in table_sql["lore_element_create_operations"]
+        )
+        assert (
+            "uq_lore_relation_create_operation_key"
+            in table_sql["lore_relation_create_operations"]
+        )
+        assert (
+            "fk_lore_relation_create_operation_relation"
+            in table_sql["lore_relation_create_operations"]
+        )
+        assert (
+            "uq_lore_review_suggestion_pair_rule"
+            in table_sql["lore_review_suggestions"]
+        )
+        assert (
+            "fk_lore_review_suggestion_left"
+            in table_sql["lore_review_suggestions"]
+        )
+        assert (
+            "fk_lore_review_suggestion_right"
+            in table_sql["lore_review_suggestions"]
+        )
+        assert (
+            "uq_lore_review_event_operation"
+            in table_sql["lore_review_suggestion_events"]
+        )
+        assert (
+            "fk_lore_review_event_suggestion"
+            in table_sql["lore_review_suggestion_events"]
+        )
+        assert "fk_setting_element_merged_into" in table_sql["setting_elements"]
+        assert "ck_setting_element_no_self_merge" in table_sql["setting_elements"]
+        assert "ck_setting_element_merge_state" in table_sql["setting_elements"]
+        assert "uq_lore_merge_operation_key" in table_sql["lore_merge_operations"]
+        assert (
+            "fk_lore_merge_operation_survivor"
+            in table_sql["lore_merge_operations"]
+        )
+        assert (
+            "fk_lore_merge_operation_suggestion"
+            in table_sql["lore_merge_operations"]
+        )
+        assert (
+            "ck_lore_merge_operation_suggestion_scope"
+            in table_sql["lore_merge_operations"]
+        )
+        assert (
+            "fk_lore_merge_relation_action_operation"
+            in table_sql["lore_merge_relation_actions"]
+        )
+        assert (
+            "ck_lore_merge_relation_action"
+            in table_sql["lore_merge_relation_actions"]
+        )
+        assert (
+            "fk_lore_merge_relation_action_relation"
+            in table_sql["lore_merge_relation_actions"]
+        )
+        assert (
+            "fk_lore_merge_relation_action_retained_relation"
+            in table_sql["lore_merge_relation_actions"]
+        )
+        assert (
+            "uq_project_lore_migration_operation_key"
+            in table_sql["project_lore_migration_operations"]
+        )
+        assert (
+            "ck_project_lore_migration_operation_status"
+            in table_sql["project_lore_migration_operations"]
+        )
+        indexes = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            )
+        }
+        assert "ix_lore_candidate_project_attention_updated" in indexes
+        assert "ix_lore_element_create_operations_project_created" in indexes
+        assert "ix_lore_relation_create_operations_project_created" in indexes
+        assert "ix_lore_review_suggestions_project_status_updated" in indexes
+        assert "ix_lore_review_events_suggestion_created" in indexes
+        assert "ix_setting_elements_merged_into_element_id" in indexes
+        assert "ix_lore_merge_operations_project_created" in indexes
+        assert "ix_lore_merge_relation_actions_operation" in indexes
+        assert "ix_project_lore_migration_operations_project_created" in indexes
 
     _run_alembic(backend_dir, database_url, "downgrade", "a1d3c7e9f002")
     with sqlite3.connect(database_path) as connection:
@@ -81,6 +403,14 @@ def test_lore_migration_upgrade_and_downgrade_are_additive(tmp_path):
         assert "element_state_events" not in tables
         assert "element_relations" not in tables
         assert "element_relation_versions" not in tables
+        assert "lore_element_create_operations" not in tables
+        assert "lore_relation_create_operations" not in tables
+        assert "lore_review_suggestions" not in tables
+        assert "lore_review_suggestion_events" not in tables
+        assert "lore_merge_operations" not in tables
+        assert "lore_merge_relation_actions" not in tables
+        assert "lore_review_suggestion_create_operations" not in tables
+        assert "project_lore_migration_operations" not in tables
         table_sql = {
             name: sql or ""
             for name, sql in connection.execute(
@@ -88,6 +418,11 @@ def test_lore_migration_upgrade_and_downgrade_are_additive(tmp_path):
             )
         }
         assert "fk_setting_element_project_type" not in table_sql["setting_elements"]
+        element_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(setting_elements)")
+        }
+        assert "merged_into_element_id" not in element_columns
         assert "fk_element_source_project_element" not in table_sql["element_sources"]
         assert (
             "fk_legacy_element_map_project_element"

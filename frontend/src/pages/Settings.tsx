@@ -266,7 +266,7 @@ export default function Settings() {
           <li>在百度千帆控制台创建 API Key（格式 bce-v3/ALTAK-xxx/xxx）</li>
           <li>选择服务商可快速填充 Base URL 和模型名称</li>
           <li>保存后点击「测试连接」验证配置是否正确</li>
-          <li>配置成功后，大纲生成、章节写作、世界观导入都将使用真实 AI</li>
+          <li>配置成功后，章节写作与世界观设定提取将使用真实 AI</li>
           <li>API Key 保存在本地服务器，不会上传到任何第三方</li>
         </ul>
       </div>

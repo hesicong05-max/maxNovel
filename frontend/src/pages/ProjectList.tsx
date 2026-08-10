@@ -6,8 +6,8 @@ import type { Project } from "@/types";
 const STATUS_LABELS: Record<string, string> = {
   draft: "草稿",
   worldview_set: "世界观已设定",
-  outline_pending: "大纲待确认",
-  outline_confirmed: "大纲已确认",
+  outline_pending: "可继续写作",
+  outline_confirmed: "可继续写作",
   writing: "写作中",
   completed: "已完成",
 };
@@ -33,7 +33,7 @@ export default function ProjectList() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("确认删除这个项目？所有世界观、大纲和章节数据都会被删除。")) return;
+    if (!confirm("确认删除这个项目？所有设定、历史规划和章节数据都会被删除。")) return;
     try {
       await api.deleteProject(id);
       setProjects((prev) => prev.filter((p) => p.id !== id));
@@ -84,7 +84,7 @@ export default function ProjectList() {
                   </div>
                   <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.375rem", flexWrap: "wrap" }}>
                     {project.has_worldview && <span className="tag tag-gold">世界观</span>}
-                    {project.has_outline && <span className="tag tag-gold">大纲</span>}
+                    {project.has_outline && <span className="tag tag-gold">历史章节可用</span>}
                     {project.chapter_count > 0 && <span className="tag tag-red">{project.chapter_count}章</span>}
                   </div>
                 </div>

@@ -58,14 +58,10 @@ async def override_get_db():
 
 app.dependency_overrides[get_db] = override_get_db
 
-# Also override async_session for SSE endpoints that create sessions directly
-# (e.g. outline generate-stream, chapter generate-all)
+# Also override async_session for chapter SSE endpoints that create sessions directly.
 # Use `as` aliases to avoid rebinding the `app` FastAPI instance.
 import app.database as _db_mod  # noqa: E402
 _db_mod.async_session = TestSessionLocal
-
-import app.api.outline as _outline_mod  # noqa: E402
-_outline_mod.async_session = TestSessionLocal
 
 import app.api.chapters as _chapters_mod  # noqa: E402
 _chapters_mod.async_session = TestSessionLocal

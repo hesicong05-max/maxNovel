@@ -106,14 +106,6 @@ async def test_all_protected_http_entrypoints_share_one_contract(
 
     requests = [
         ("POST", f"/api/worldview/{project_id}", WORLDVIEW_PAYLOAD),
-        ("POST", f"/api/outline/{project_id}/generate", None),
-        ("POST", f"/api/outline/{project_id}/generate-stream", None),
-        (
-            "PUT",
-            f"/api/outline/{project_id}",
-            {"story_arc": "", "chapters": []},
-        ),
-        ("POST", f"/api/outline/{project_id}/confirm", None),
         (
             "PUT",
             f"/api/chapters/{project_id}/word-counts",
@@ -265,66 +257,6 @@ async def test_runtime_unfreeze_restores_protected_write(
 
 
 @pytest.mark.usefixtures("clean_db")
-async def test_outline_stream_rechecks_freeze_before_fresh_session_save(
-    client, auth_headers, monkeypatch
-):
-    project_id = await _create_project(client, auth_headers)
-    worldview = await client.post(
-        f"/api/worldview/{project_id}",
-        json={
-            **WORLDVIEW_PAYLOAD,
-            "characters": [{"name": "林远"}],
-        },
-        headers=auth_headers,
-    )
-    assert worldview.status_code == 200
-
-    complete_outline = json.dumps(
-        {
-            "story_arc": "林远踏上旅途。",
-            "chapters": [
-                {
-                    "chapter_num": 1,
-                    "title": "启程",
-                    "summary": "林远出发。",
-                    "key_events": ["离开故乡"],
-                    "reveal_elements": ["林远"],
-                }
-            ],
-            "reveal_plan": [],
-        },
-        ensure_ascii=False,
-    )
-
-    async def freeze_after_generation(*_args, **_kwargs):
-        yield complete_outline
-        monkeypatch.setattr(app_settings, "LEGACY_JSON_WRITES_FROZEN", True)
-
-    monkeypatch.setattr(
-        "app.api.outline.llm_client.chat_stream",
-        freeze_after_generation,
-    )
-    response = await client.post(
-        f"/api/outline/{project_id}/generate-stream",
-        headers=auth_headers,
-    )
-    assert response.status_code == 200
-    events = [
-        json.loads(line.removeprefix("data: "))
-        for line in response.text.splitlines()
-        if line.startswith("data: ")
-    ]
-    error = next(event for event in events if event["type"] == "error")
-    assert error["error"]["code"] == PROJECT_WRITE_FROZEN_CODE
-
-    read_response = await client.get(
-        f"/api/outline/{project_id}",
-        headers=auth_headers,
-    )
-    assert read_response.status_code == 404
-
-
-@pytest.mark.usefixtures("clean_db")
 async def test_chapter_stream_rechecks_freeze_before_final_commit(
     client, auth_headers, db_session, monkeypatch
 ):
@@ -338,25 +270,24 @@ async def test_chapter_stream_rechecks_freeze_before_final_commit(
         headers=auth_headers,
     )
     assert worldview.status_code == 200
-    db_session.add(
-        Outline(
-            project_id=project_id,
-            story_arc="林远踏上旅途。",
-            chapters=json.dumps(
-                [
-                    {
-                        "chapter_num": 1,
-                        "title": "启程",
-                        "summary": "林远出发。",
-                        "key_events": ["离开故乡"],
-                        "reveal_elements": ["林远"],
-                    }
-                ],
-                ensure_ascii=False,
-            ),
-            reveal_plan="{malformed",
-        )
+    outline = Outline(
+        project_id=project_id,
+        story_arc="林远踏上旅途。",
+        chapters=json.dumps(
+            [
+                {
+                    "chapter_num": 1,
+                    "title": "启程",
+                    "summary": "林远出发。",
+                    "key_events": ["离开故乡"],
+                    "reveal_elements": ["林远"],
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        reveal_plan="{malformed",
     )
+    db_session.add(outline)
     await db_session.commit()
 
     outline_response = await client.get(
@@ -395,6 +326,11 @@ async def test_chapter_stream_rechecks_freeze_before_final_commit(
     assert read_response.status_code == 404
 
     monkeypatch.setattr(app_settings, "LEGACY_JSON_WRITES_FROZEN", False)
+    # Batch generation now validates all legacy collections before it changes
+    # project state. Repair this deliberately malformed fixture so this second
+    # half continues to isolate the final-commit freeze recheck.
+    outline.reveal_plan = "[]"
+    await db_session.commit()
     batch_response = await client.post(
         f"/api/chapters/{project_id}/generate-all",
         headers=auth_headers,
@@ -487,7 +423,7 @@ async def test_invalid_legacy_outline_is_not_generated_or_overwritten(
     assert events == [
         {
             "type": "error",
-            "error": "大纲章节配置无法读取，请重新保存大纲后重试",
+            "error": "历史章节安排暂时无法读取，原数据仍保留；当前无法生成新章节",
             "code": "LEGACY_OUTLINE_CHAPTERS_INVALID",
         }
     ]

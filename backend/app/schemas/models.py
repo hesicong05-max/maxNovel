@@ -95,10 +95,20 @@ class WorldviewCreate(BaseModel):
     source: str = "manual"  # manual / imported / hybrid
 
 
+class WorldviewSaveRequest(WorldviewCreate):
+    expected_source_checksum: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+
+
 class WorldviewResponse(WorldviewCreate):
     id: str
     project_id: str
     parsed_elements: list[dict[str, Any]] = Field(default_factory=list)
+    source_checksum: str
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -125,32 +135,6 @@ class ProjectResponse(BaseModel):
     has_worldview: bool = False
     has_outline: bool = False
     chapter_count: int = 0
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class OutlineChapterEntry(BaseModel):
-    chapter_num: int = Field(ge=1, le=50)
-    title: str = Field(default="", max_length=200)
-    summary: str = Field(default="", max_length=10_000)
-    key_events: list[str] = Field(default_factory=list, max_length=50)
-    reveal_elements: list[str] = Field(default_factory=list, max_length=200)
-    target_word_count: int | None = Field(default=None, ge=500, le=10_000)
-
-
-class OutlineCreate(BaseModel):
-    story_arc: str = Field(default="", max_length=100_000)
-    chapters: list[OutlineChapterEntry] = Field(default_factory=list, max_length=50)
-
-
-class OutlineResponse(BaseModel):
-    id: str
-    project_id: str
-    story_arc: str
-    chapters: list[dict[str, Any]]
-    reveal_plan: list[dict[str, Any]]
-    created_at: datetime
-    updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 

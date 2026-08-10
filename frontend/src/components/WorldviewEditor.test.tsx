@@ -4,10 +4,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "@/services/api";
 import {
   draftStorageKey,
+  fingerprintDraftBase,
+  loadDraft,
   saveDraft,
   type DraftScope,
 } from "@/services/maintenanceDrafts";
 import type { WorldviewData } from "@/types";
+import type { LoreExtractionBatch, LoreMigrationPreviewResponse, LoreOverview } from "@/types/lore";
 import WorldviewEditor from "./WorldviewEditor";
 
 vi.mock("./AuthContext", () => ({
@@ -32,6 +35,9 @@ vi.mock("@/services/api", async (importOriginal) => {
       setWorldview: vi.fn(),
       importWorldview: vi.fn(),
       uploadWorldviewFile: vi.fn(),
+      getLoreOverview: vi.fn(),
+      getLoreMigrationPreview: vi.fn(),
+      createLoreExtraction: vi.fn(),
     },
   };
 });
@@ -52,6 +58,7 @@ const serverWorldview: Awaited<ReturnType<typeof api.getWorldview>> = {
   id: "worldview-1",
   parsed_elements: [],
   source: "manual",
+  source_checksum: "a".repeat(64),
 };
 
 const scope: DraftScope = {
@@ -60,6 +67,103 @@ const scope: DraftScope = {
   kind: "worldview",
   objectId: "worldview",
 };
+
+const extractionScope: DraftScope = {
+  userId: "user-1",
+  projectId: "project-1",
+  kind: "lore-extraction",
+  objectId: "worldview-import",
+};
+
+const relationalOverview: LoreOverview = {
+  formal_total: 0,
+  confirmed_active: 0,
+  pending_review: 0,
+  needs_attention: 0,
+  disabled: 0,
+  archived: 0,
+  review_pending: 0,
+  migration_status: { storage_mode: "relational", state: "ready", read_only: false },
+  capabilities: {
+    candidate_review: true,
+    candidate_accept: true,
+    formal_create: true,
+    formal_conflict_tracking: true,
+    formal_merge_preview: true,
+    formal_merge_commit: true,
+    search_fields: [],
+  },
+  count_definitions: {},
+};
+
+function migrationPreview(
+  overrides: Partial<LoreMigrationPreviewResponse> = {}
+): LoreMigrationPreviewResponse {
+  return {
+    preview_schema_version: 1,
+    mapping_version: 1,
+    project_id: "project-1",
+    storage_mode: "legacy",
+    source_checksum: "a".repeat(64),
+    semantic_result_checksum: "b".repeat(64),
+    checked_at: "2026-08-07T00:00:00Z",
+    overall_status: "blocked",
+    dry_run: true,
+    read_only: true,
+    writes_performed: 0,
+    commit_available: false,
+    counts: { legacy_total: 1, mappable: 0, review_required: 0, possible_conflict: 0, blocked: 1 },
+    by_legacy_category: { characters: 1 },
+    by_target_type: { character: 1 },
+    items: [{
+      legacy_category: "characters",
+      legacy_index: 0,
+      legacy_id: null,
+      item_fingerprint: "c".repeat(64),
+      planned_element_id: "element-1",
+      proposed_type_key: "character",
+      name: "林岚",
+      classification: "blocked",
+      reason_codes: ["parsed_name_mismatch"],
+      source_locator: "worldviews:project-1:characters:0",
+      source_kind: "imported",
+      source_label: "文档导入",
+      exact_excerpt_available: false,
+      original_value: { name: "林岚" },
+      mapped_fields: {},
+      unmapped_fields: [],
+    }],
+    issues: [],
+    ...overrides,
+  };
+}
+
+function extractionBatch(
+  overrides: Partial<LoreExtractionBatch> = {}
+): LoreExtractionBatch {
+  return {
+    id: "batch-1",
+    project_id: "project-1",
+    status: "completed",
+    source_kind: "worldview_import",
+    source_ref: "世界观编辑器导入原文",
+    source_hash: "a".repeat(64),
+    source_preserved: true,
+    extractor_version: "v1",
+    model_name: "model",
+    candidate_count: 3,
+    pending_review_count: 3,
+    accepted_count: 0,
+    rejected_count: 0,
+    failed_count: 0,
+    retryable: false,
+    error_code: null,
+    error_message: null,
+    created_at: "2026-08-07T00:00:00Z",
+    updated_at: "2026-08-07T00:00:00Z",
+    ...overrides,
+  };
+}
 
 function renderEditor() {
   return render(
@@ -95,11 +199,214 @@ describe("WorldviewEditor maintenance drafts", () => {
       filename: "worldview.txt",
       char_count: 0,
     });
+    vi.mocked(api.getLoreOverview).mockResolvedValue({
+      formal_total: 0,
+      confirmed_active: 0,
+      pending_review: 0,
+      needs_attention: 0,
+      disabled: 0,
+      archived: 0,
+      review_pending: 0,
+      migration_status: { storage_mode: "legacy", state: "legacy", read_only: true },
+      capabilities: {
+        candidate_review: true,
+        candidate_accept: false,
+        formal_create: false,
+        formal_conflict_tracking: false,
+        formal_merge_preview: false,
+        formal_merge_commit: false,
+        search_fields: [],
+      },
+      count_definitions: {},
+    });
     vi.spyOn(window, "alert").mockImplementation(() => {});
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText: vi.fn().mockResolvedValue(undefined) },
     });
+  });
+
+  it("submits the loaded server checksum with an existing worldview save", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    await screen.findByText("世界观创建方式");
+    await user.click(screen.getByRole("button", { name: "+ 添加角色" }));
+    await user.type(screen.getByPlaceholderText("姓名"), "并发保护角色");
+    await user.click(screen.getByRole("button", { name: "保存世界观" }));
+
+    await waitFor(() => expect(api.setWorldview).toHaveBeenCalledWith(
+      "project-1",
+      expect.objectContaining({ expected_source_checksum: "a".repeat(64) })
+    ));
+  });
+
+  it("preserves the local draft and requires reload after a stale save", async () => {
+    vi.mocked(api.setWorldview).mockRejectedValueOnce(new ApiError(409, {
+      detail: "服务器上的世界观已发生变化",
+      code: "WORLDVIEW_SOURCE_STALE",
+      reload_required: true,
+    }));
+    const user = userEvent.setup();
+    renderEditor();
+    await screen.findByText("世界观创建方式");
+    await user.click(screen.getByRole("button", { name: "+ 添加角色" }));
+    await user.type(screen.getByPlaceholderText("姓名"), "本地未覆盖角色");
+    await user.click(screen.getByRole("button", { name: "保存世界观" }));
+
+    expect(await screen.findByText(/服务器上的世界观已更新，本地修改已保留/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新加载项目版本" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试保存" })).not.toBeInTheDocument();
+    expect(loadDraft(scope).status).not.toBe("missing");
+
+    await user.click(screen.getByRole("button", { name: "重新加载项目版本" }));
+    const recoveryHeading = await screen.findByRole("heading", { name: "发现本地草稿" });
+    expect(screen.queryByText(/服务器上的世界观已更新，本地修改已保留/)).toBeNull();
+    await waitFor(() => expect(recoveryHeading.closest("div[tabindex]" )).toHaveFocus());
+  });
+
+  it("requires an explicit imported-to-hybrid action before focusing a migration item", async () => {
+    vi.mocked(api.getLoreMigrationPreview).mockResolvedValueOnce(migrationPreview());
+    vi.mocked(api.getWorldview).mockResolvedValueOnce({
+      ...serverWorldview,
+      source: "imported",
+      raw_text: "林岚来自云港。",
+      characters: [{
+        name: "林岚",
+        personality: "沉稳",
+        background: "",
+        motivation: "",
+        ability: "",
+        relations: [],
+      }],
+    });
+    const user = userEvent.setup();
+    render(
+      <WorldviewEditor
+        projectId="project-1"
+        hasWorldview
+        genre="玄幻"
+        migrationTarget={{
+          category: "characters",
+          index: 0,
+          itemFingerprint: "c".repeat(64),
+          sourceChecksum: "a".repeat(64),
+        }}
+        onReturnToMigration={vi.fn()}
+        onComplete={vi.fn()}
+        onBack={vi.fn()}
+      />
+    );
+
+    const action = await screen.findByRole("button", { name: "切换为混合模式并定位" });
+    const input = screen.getByRole("textbox", { name: "角色1 姓名" });
+    expect(input).toHaveAttribute("readonly");
+    await user.click(action);
+    expect(input).not.toHaveAttribute("readonly");
+    await waitFor(() => expect(input).toHaveFocus());
+  });
+
+  it("rejects a migration target when its item fingerprint no longer matches", async () => {
+    const changedItem = {
+      ...migrationPreview().items[0],
+      item_fingerprint: "d".repeat(64),
+    };
+    vi.mocked(api.getLoreMigrationPreview).mockResolvedValueOnce(
+      migrationPreview({ items: [changedItem] })
+    );
+    render(
+      <WorldviewEditor
+        projectId="project-1"
+        hasWorldview
+        genre="玄幻"
+        migrationTarget={{
+          category: "characters",
+          index: 0,
+          itemFingerprint: "c".repeat(64),
+          sourceChecksum: "a".repeat(64),
+        }}
+        onReturnToMigration={vi.fn()}
+        onComplete={vi.fn()}
+        onBack={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByText(/这项资料的位置已经变化/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /定位到这项资料/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "返回并重新检查" })).toBeInTheDocument();
+  });
+
+  it("rejects a legacy correction link after the project becomes relational", async () => {
+    vi.mocked(api.getLoreMigrationPreview).mockResolvedValueOnce(
+      migrationPreview({ storage_mode: "relational" })
+    );
+    vi.mocked(api.getWorldview).mockResolvedValueOnce({
+      ...serverWorldview,
+      characters: [{
+        name: "林岚",
+        personality: "沉稳",
+        background: "",
+        motivation: "",
+        ability: "",
+        relations: [],
+      }],
+    });
+    render(
+      <WorldviewEditor
+        projectId="project-1"
+        hasWorldview
+        genre="玄幻"
+        migrationTarget={{
+          category: "characters",
+          index: 0,
+          itemFingerprint: "c".repeat(64),
+          sourceChecksum: "a".repeat(64),
+        }}
+        onReturnToMigration={vi.fn()}
+        onComplete={vi.fn()}
+        onBack={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByText(/这项资料的位置已经变化/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /定位到这项资料/ })).toBeNull();
+  });
+
+  it("separates migration preview network errors and supports an explicit retry", async () => {
+    vi.mocked(api.getLoreMigrationPreview)
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValueOnce(migrationPreview());
+    vi.mocked(api.getWorldview).mockResolvedValueOnce({
+      ...serverWorldview,
+      characters: [{
+        name: "林岚",
+        personality: "沉稳",
+        background: "",
+        motivation: "",
+        ability: "",
+        relations: [],
+      }],
+    });
+    const user = userEvent.setup();
+    render(
+      <WorldviewEditor
+        projectId="project-1"
+        hasWorldview
+        genre="玄幻"
+        migrationTarget={{
+          category: "characters",
+          index: 0,
+          itemFingerprint: "c".repeat(64),
+          sourceChecksum: "a".repeat(64),
+        }}
+        onReturnToMigration={vi.fn()}
+        onComplete={vi.fn()}
+        onBack={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByText(/暂时无法核对这项资料/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "重试核对" }));
+    expect(await screen.findByRole("button", { name: "定位到这项资料" })).toBeInTheDocument();
   });
 
   it("offers a conflicting device draft without overwriting server content", async () => {
@@ -399,7 +706,7 @@ describe("WorldviewEditor maintenance drafts", () => {
       screen.getByPlaceholderText(/在此粘贴世界观文档内容/),
       "解析完成但尚未保存到项目的世界观原始资料。"
     );
-    await user.click(screen.getByRole("button", { name: "开始导入解析" }));
+    await user.click(screen.getByRole("button", { name: "兼容解析并填充表单" }));
 
     await waitFor(
       () =>
@@ -556,7 +863,7 @@ describe("WorldviewEditor maintenance drafts", () => {
       screen.getByPlaceholderText(/在此粘贴世界观文档内容/),
       "项目一等待解析的世界观内容"
     );
-    await user.click(screen.getByRole("button", { name: "开始导入解析" }));
+    await user.click(screen.getByRole("button", { name: "兼容解析并填充表单" }));
     view.rerender(
       <WorldviewEditor
         projectId="project-2"
@@ -684,8 +991,8 @@ describe("WorldviewEditor maintenance drafts", () => {
       { timeout: 1500 }
     );
 
-    // Click "进入下一步"
-    await user.click(screen.getByRole("button", { name: /进入下一步/ }));
+    // Open the lore repository with unsaved local edits.
+    await user.click(screen.getByRole("button", { name: /打开设定仓库/ }));
 
     // Should show confirmation, not call onComplete
     expect(onComplete).not.toHaveBeenCalled();
@@ -694,7 +1001,7 @@ describe("WorldviewEditor maintenance drafts", () => {
     ).toBeInTheDocument();
 
     // User chooses to proceed
-    await user.click(screen.getByRole("button", { name: "仍要进入下一步" }));
+    await user.click(screen.getByRole("button", { name: "仍要打开设定仓库" }));
     expect(onComplete).toHaveBeenCalledOnce();
   });
 
@@ -876,7 +1183,7 @@ describe("WorldviewEditor maintenance drafts", () => {
       screen.getByPlaceholderText(/在此粘贴世界观文档内容/),
       "原始世界观内容用于解析。"
     );
-    await user.click(screen.getByRole("button", { name: "开始导入解析" }));
+    await user.click(screen.getByRole("button", { name: "兼容解析并填充表单" }));
 
     // After parse, the tag should show
     expect(
@@ -907,7 +1214,7 @@ describe("WorldviewEditor maintenance drafts", () => {
       screen.getByPlaceholderText(/在此粘贴世界观文档内容/),
       "AI 解析失败的原文内容。"
     );
-    await user.click(screen.getByRole("button", { name: "开始导入解析" }));
+    await user.click(screen.getByRole("button", { name: "兼容解析并填充表单" }));
 
     // 使用 role="alert" 定位错误提示区域，避免匹配到 textarea value
     expect(await screen.findByRole("alert")).toHaveTextContent("AI 解析失败");
@@ -938,7 +1245,7 @@ describe("WorldviewEditor maintenance drafts", () => {
       screen.getByPlaceholderText(/在此粘贴世界观文档内容/),
       "维护冻结时尝试导入的内容。"
     );
-    await user.click(screen.getByRole("button", { name: "开始导入解析" }));
+    await user.click(screen.getByRole("button", { name: "兼容解析并填充表单" }));
 
     expect(await screen.findByText(/项目正在维护/)).toBeInTheDocument();
     expect(screen.queryByText(/AI 解析失败/)).toBeNull();
@@ -1027,7 +1334,7 @@ describe("WorldviewEditor maintenance drafts", () => {
       "原始解析文本必须足够长的内容"
     );
     // Parse
-    await user.click(screen.getByRole("button", { name: "开始导入解析" }));
+    await user.click(screen.getByRole("button", { name: "兼容解析并填充表单" }));
     await screen.findByText(/已提取 1 个要素/);
 
     // Modify the import text
@@ -1218,7 +1525,7 @@ describe("WorldviewEditor maintenance drafts", () => {
       screen.getByPlaceholderText(/在此粘贴世界观文档内容/),
       "初始世界观原文内容足够长"
     );
-    await user.click(screen.getByRole("button", { name: "开始导入解析" }));
+    await user.click(screen.getByRole("button", { name: "兼容解析并填充表单" }));
 
     // Should have parsed successfully
     await screen.findByText(/已提取 1 个要素/);
@@ -1377,7 +1684,7 @@ describe("WorldviewEditor maintenance drafts", () => {
         ),
       { timeout: 1500 }
     );
-    await user.click(screen.getByRole("button", { name: /进入下一步/ }));
+    await user.click(screen.getByRole("button", { name: /打开设定仓库/ }));
     expect(
       await screen.findByRole("heading", { name: "内容仅保存在本设备" })
     ).toBeInTheDocument();
@@ -1387,9 +1694,9 @@ describe("WorldviewEditor maintenance drafts", () => {
     await user.click(screen.getByRole("button", { name: "保存世界观" }));
 
     // Save success feedback should be visible
-    expect(
-      await screen.findByRole("heading", { name: "世界观已保存" })
-    ).toBeInTheDocument();
+    const savedHeading = await screen.findByRole("heading", { name: "世界观已保存" });
+    expect(savedHeading).toBeInTheDocument();
+    await waitFor(() => expect(savedHeading.closest('[role="status"]')).toHaveFocus());
     // Old local-only warning should be cleared
     expect(
       screen.queryByRole("heading", { name: "内容仅保存在本设备" })
@@ -1431,7 +1738,7 @@ describe("WorldviewEditor maintenance drafts", () => {
       screen.getByPlaceholderText(/在此粘贴世界观文档内容/),
       "导入过程中出现维护冻结的世界观。"
     );
-    await user.click(screen.getByRole("button", { name: "开始导入解析" }));
+    await user.click(screen.getByRole("button", { name: "兼容解析并填充表单" }));
 
     // Maintenance notice should show draft is stored (first draft succeeded)
     expect(await screen.findByText(/项目正在维护/)).toBeInTheDocument();
@@ -1463,7 +1770,7 @@ describe("WorldviewEditor maintenance drafts", () => {
       screen.getByPlaceholderText(/在此粘贴世界观文档内容/),
       "两次草稿写入都失败的世界观。"
     );
-    await user.click(screen.getByRole("button", { name: "开始导入解析" }));
+    await user.click(screen.getByRole("button", { name: "兼容解析并填充表单" }));
 
     // Maintenance notice should show draft NOT stored
     expect(await screen.findByText(/项目正在维护/)).toBeInTheDocument();
@@ -1503,7 +1810,7 @@ describe("WorldviewEditor maintenance drafts", () => {
       screen.getByPlaceholderText(/在此粘贴世界观文档内容/),
       "第一次解析的世界观原文内容。"
     );
-    await user.click(screen.getByRole("button", { name: "开始导入解析" }));
+    await user.click(screen.getByRole("button", { name: "兼容解析并填充表单" }));
 
     // Parse should complete
     expect(await screen.findByText(/已提取 1 个要素/)).toBeInTheDocument();
@@ -1656,6 +1963,190 @@ describe("WorldviewEditor maintenance drafts", () => {
     expect(
       screen.queryByText("世界观已成功保存到项目。")
     ).toBeNull();
+  });
+
+  it("uses the strict candidate extraction path for relational projects", async () => {
+    const user = userEvent.setup();
+    const onExtractionComplete = vi.fn();
+    vi.mocked(api.getLoreOverview).mockResolvedValue(relationalOverview);
+    vi.mocked(api.createLoreExtraction).mockResolvedValue(extractionBatch());
+    render(<WorldviewEditor projectId="project-1" hasWorldview={false} genre="玄幻" onComplete={vi.fn()} onExtractionComplete={onExtractionComplete} onBack={vi.fn()} />);
+
+    await user.click(await screen.findByRole("button", { name: /导入文档/ }));
+    await user.type(screen.getByRole("textbox", { name: "导入世界观文档原文" }), "林远性格坚韧。苏瑶性格冷静。天玄宗是正道宗门。");
+    await user.click(await screen.findByRole("button", { name: "提取为待审核设定" }));
+
+    await waitFor(() => expect(api.createLoreExtraction).toHaveBeenCalledTimes(1));
+    expect(api.importWorldview).not.toHaveBeenCalled();
+    expect(vi.mocked(api.createLoreExtraction).mock.calls[0][1]).toMatchObject({
+      document_text: "林远性格坚韧。苏瑶性格冷静。天玄宗是正道宗门。",
+      source_kind: "worldview_import",
+    });
+    expect(onExtractionComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses the persisted operation key when a network outcome is unknown", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getLoreOverview).mockResolvedValue(relationalOverview);
+    vi.mocked(api.createLoreExtraction)
+      .mockRejectedValueOnce(new ApiError(504, { detail: "gateway timeout" }))
+      .mockResolvedValueOnce(extractionBatch({
+        id: "batch-2",
+        status: "running",
+        source_ref: null,
+        source_hash: "b".repeat(64),
+        candidate_count: 0,
+        pending_review_count: 0,
+        retryable: true,
+      }));
+    render(<WorldviewEditor projectId="project-1" hasWorldview={false} genre="玄幻" onComplete={vi.fn()} onBack={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: /导入文档/ }));
+    await user.type(screen.getByRole("textbox", { name: "导入世界观文档原文" }), "林远性格坚韧，目标是守护故乡。苏瑶性格冷静。");
+    await user.click(await screen.findByRole("button", { name: "提取为待审核设定" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("结果尚不确定");
+    expect(screen.queryByRole("button", { name: "放弃任务状态" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "核对上次提取结果" }));
+    await waitFor(() => expect(api.createLoreExtraction).toHaveBeenCalledTimes(2));
+    const firstKey = vi.mocked(api.createLoreExtraction).mock.calls[0][1].idempotency_key;
+    const secondKey = vi.mocked(api.createLoreExtraction).mock.calls[1][1].idempotency_key;
+    expect(secondKey).toBe(firstKey);
+  });
+
+  it("lets the user discard a deterministic 409 conflict before starting a new task", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(api.getLoreOverview).mockResolvedValue(relationalOverview);
+    vi.mocked(api.createLoreExtraction)
+      .mockRejectedValueOnce(new ApiError(409, {
+        detail: "same key has different source",
+        code: "EXTRACTION_IDEMPOTENCY_CONFLICT",
+      }))
+      .mockResolvedValueOnce(extractionBatch());
+    render(<WorldviewEditor projectId="project-1" hasWorldview={false} genre="玄幻" onComplete={vi.fn()} onExtractionComplete={vi.fn()} onBack={vi.fn()} />);
+
+    await user.type(await screen.findByRole("textbox", { name: "导入世界观文档原文" }), "林远是一名年轻的守护者，苏瑶负责调查历史真相。");
+    await user.click(screen.getByRole("button", { name: "提取为待审核设定" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("任务标识与原文不一致");
+    const firstKey = vi.mocked(api.createLoreExtraction).mock.calls[0][1].idempotency_key;
+    await user.click(screen.getByRole("button", { name: "放弃任务状态" }));
+    await user.click(screen.getByRole("button", { name: "提取为待审核设定" }));
+
+    await waitFor(() => expect(api.createLoreExtraction).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.createLoreExtraction).mock.calls[1][1].idempotency_key).not.toBe(firstKey);
+  });
+
+  it("restores an uncertain extraction after refresh without calling AI automatically", async () => {
+    const user = userEvent.setup();
+    const documentText = "林远性格坚韧，目标是守护故乡。苏瑶性格冷静。";
+    const hash = await fingerprintDraftBase({ documentText });
+    expect(hash.status).toBe("available");
+    if (hash.status !== "available") throw new Error("测试环境无法生成指纹");
+    saveDraft(extractionScope, {
+      documentText,
+      documentHash: hash.value,
+      idempotencyKey: "extract-persisted-1",
+      phase: "outcome_unknown",
+      batchId: null,
+      candidateCount: null,
+      errorCode: null,
+      errorStatus: 504,
+      retryable: false,
+    }, null);
+    const onExtractionComplete = vi.fn();
+    vi.mocked(api.getLoreOverview).mockResolvedValue(relationalOverview);
+    vi.mocked(api.createLoreExtraction).mockResolvedValue(extractionBatch());
+
+    render(<WorldviewEditor projectId="project-1" hasWorldview={false} genre="玄幻" onComplete={vi.fn()} onExtractionComplete={onExtractionComplete} onBack={vi.fn()} />);
+
+    expect(await screen.findByDisplayValue(documentText)).toBeInTheDocument();
+    expect(api.createLoreExtraction).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "核对上次提取结果" }));
+    await waitFor(() => expect(api.createLoreExtraction).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.createLoreExtraction).mock.calls[0][1].idempotency_key).toBe("extract-persisted-1");
+    expect(api.importWorldview).not.toHaveBeenCalled();
+    expect(onExtractionComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers manual warehouse creation when strict extraction finds no candidates", async () => {
+    const user = userEvent.setup();
+    const onComplete = vi.fn();
+    vi.mocked(api.getLoreOverview).mockResolvedValue(relationalOverview);
+    vi.mocked(api.createLoreExtraction).mockResolvedValue(extractionBatch({
+      candidate_count: 0,
+      pending_review_count: 0,
+    }));
+    render(<WorldviewEditor projectId="project-1" hasWorldview={false} genre="玄幻" onComplete={onComplete} onBack={vi.fn()} />);
+
+    await user.type(await screen.findByRole("textbox", { name: "导入世界观文档原文" }), "这是一段没有可确认独立设定的描述文本。");
+    await user.click(screen.getByRole("button", { name: "提取为待审核设定" }));
+
+    expect(await screen.findByText(/未识别到可确认的独立设定/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "前往仓库手动创建" }));
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires the source to change before retrying a 413 extraction", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getLoreOverview).mockResolvedValue(relationalOverview);
+    vi.mocked(api.createLoreExtraction).mockRejectedValue(
+      new ApiError(413, { detail: "too long" })
+    );
+    render(<WorldviewEditor projectId="project-1" hasWorldview={false} genre="玄幻" onComplete={vi.fn()} onBack={vi.fn()} />);
+
+    const input = await screen.findByRole("textbox", { name: "导入世界观文档原文" });
+    await user.type(input, "林远是一名年轻的守护者，他必须遵守严格的能力限制。");
+    await user.click(screen.getByRole("button", { name: "提取为待审核设定" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("20,000");
+    const retry = screen.getByRole("button", { name: "修改后重新提取" });
+    expect(retry).toBeDisabled();
+    await user.type(input, "已精简");
+    expect(retry).toBeEnabled();
+  });
+
+  it("keeps the same task key while maintenance blocks extraction", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getLoreOverview).mockResolvedValue(relationalOverview);
+    vi.mocked(api.createLoreExtraction)
+      .mockRejectedValueOnce(new ApiError(503, { detail: "maintenance", retryable: true }))
+      .mockResolvedValueOnce(extractionBatch({ status: "running", candidate_count: 0, pending_review_count: 0 }));
+    render(<WorldviewEditor projectId="project-1" hasWorldview={false} genre="玄幻" onComplete={vi.fn()} onBack={vi.fn()} />);
+
+    await user.type(await screen.findByRole("textbox", { name: "导入世界观文档原文" }), "林远是一名年轻的守护者，苏瑶则负责调查历史真相。");
+    await user.click(screen.getByRole("button", { name: "提取为待审核设定" }));
+
+    expect(await screen.findByRole("button", { name: "维护结束后重试提取" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "放弃任务状态" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "维护结束后重试提取" }));
+    await waitFor(() => expect(api.createLoreExtraction).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.createLoreExtraction).mock.calls[1][1].idempotency_key).toBe(
+      vi.mocked(api.createLoreExtraction).mock.calls[0][1].idempotency_key
+    );
+  });
+
+  it("fails closed when the project lore mode cannot be confirmed", async () => {
+    vi.mocked(api.getLoreOverview).mockRejectedValue(new ApiError(503, { detail: "maintenance" }));
+    render(<WorldviewEditor projectId="project-1" hasWorldview={false} genre="玄幻" onComplete={vi.fn()} onBack={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "无法确认设定仓库模式" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "手动创建" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "导入世界观文档原文" })).toBeNull();
+    expect(screen.getByRole("button", { name: "重新确认仓库模式" })).toBeInTheDocument();
+  });
+
+  it("blocks extraction until a corrupt extraction task is explicitly discarded", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getLoreOverview).mockResolvedValue(relationalOverview);
+    localStorage.setItem(draftStorageKey(extractionScope), "{not-json");
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<WorldviewEditor projectId="project-1" hasWorldview={false} genre="玄幻" onComplete={vi.fn()} onBack={vi.fn()} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("提取状态已损坏");
+    expect(screen.getByRole("button", { name: "提取为待审核设定" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "放弃任务状态" }));
+    expect(screen.getByRole("button", { name: "提取为待审核设定" })).toBeDisabled();
+    expect(localStorage.getItem(draftStorageKey(extractionScope))).toBeNull();
   });
 
   it("does not show redundant ai", async () => {

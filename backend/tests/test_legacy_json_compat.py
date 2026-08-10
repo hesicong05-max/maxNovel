@@ -58,3 +58,13 @@ def test_none_and_empty_list_are_valid_empty_values():
     assert read_legacy_object_list(None).items == []
     assert read_legacy_object_list([]).valid is True
     assert read_legacy_object_list([]).items == []
+
+
+def test_triple_encoded_list_exceeds_the_bounded_reader():
+    result = read_legacy_object_list(
+        '"\\"[{\\\\\\"chapter_num\\\\\\": 1}]\\""'
+    )
+
+    assert result.valid is False
+    assert result.items == []
+    assert result.error_category == "not_a_list"

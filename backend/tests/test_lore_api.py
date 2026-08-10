@@ -30,7 +30,18 @@ async def _create_project(client, headers, title="设定库测试"):
         },
     )
     assert response.status_code == 200
-    return response.json()["id"]
+    project_id = response.json()["id"]
+    # This file verifies the legacy projection explicitly. New product projects
+    # are relational as of DEV-015A, so keep these fixtures intentional.
+    from sqlalchemy import update
+    from app.models.project import Project
+    from tests.conftest import TestSessionLocal
+    async with TestSessionLocal() as session:
+        await session.execute(
+            update(Project).where(Project.id == project_id).values(lore_storage_mode="legacy")
+        )
+        await session.commit()
+    return project_id
 
 
 async def _set_worldview(client, headers, project_id, extra_characters=None):
@@ -53,6 +64,10 @@ async def _set_worldview(client, headers, project_id, extra_characters=None):
         },
     ]
     characters.extend(extra_characters or [])
+    current = await client.get(f"/api/worldview/{project_id}", headers=headers)
+    expected_source_checksum = (
+        current.json()["source_checksum"] if current.status_code == 200 else None
+    )
     response = await client.post(
         f"/api/worldview/{project_id}",
         headers=headers,
@@ -72,6 +87,7 @@ async def _set_worldview(client, headers, project_id, extra_characters=None):
             "special_settings": [],
             "raw_text": None,
             "source": "manual",
+            "expected_source_checksum": expected_source_checksum,
         },
     )
     assert response.status_code == 200
@@ -103,6 +119,26 @@ async def test_lore_list_is_authenticated_read_only_projection(
     }
     assert all("payload" not in item for item in data["items"])
     assert all(item["confirmation_status"] == "confirmed" for item in data["items"])
+    assert data["facets"]["lifecycle_statuses"] == [
+        {"key": "active", "label": "活动", "count": 3}
+    ]
+    assert data["facets"]["enabled_statuses"] == [
+        {"key": "enabled", "label": "已启用", "count": 3}
+    ]
+    assert data["facets"]["relation_statuses"] == [
+        {"key": "without_relations", "label": "无关联", "count": 3}
+    ]
+    overview = await client.get(
+        f"/api/projects/{project_id}/lore/overview",
+        headers=auth_headers,
+    )
+    assert overview.status_code == 200
+    assert overview.json()["formal_total"] == 3
+    assert overview.json()["confirmed_active"] == 3
+    assert overview.json()["count_definitions"]["formal_total"] == {
+        "entity": "formal_lore"
+    }
+    assert overview.json()["capabilities"]["formal_create"] is False
 
 
 @pytest.mark.usefixtures("clean_db")

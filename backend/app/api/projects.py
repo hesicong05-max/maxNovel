@@ -75,6 +75,10 @@ async def create_project(
         style_intensity=data.style_intensity,
         status=ProjectStatus.DRAFT,
         owner_id=current_user.id,
+        # DEV-015A: only newly-created, empty projects start on the relational
+        # Lore path. Existing rows keep their persisted legacy mode and are not
+        # migrated or rewritten by project creation.
+        lore_storage_mode="relational",
     )
     db.add(project)
     await db.commit()

@@ -290,7 +290,6 @@ describe("API - maintenance error contract", () => {
   });
 
   it.each([
-    ["outline", () => api.generateOutlineStream("project-1")],
     ["chapter", () => api.streamChapter("project-1", 1)],
     ["batch", () => api.streamBatchGenerate("project-1")],
   ])("parses %s SSE maintenance error objects without retrying", async (_, factory) => {
@@ -337,6 +336,327 @@ describe("API - maintenance error contract", () => {
 
     const generator = api.streamChapter("project-1", 1);
     await expect(generator.next()).rejects.toSatisfy(isProjectWriteFrozenError);
+  });
+});
+
+describe("API - lore repository", () => {
+  beforeEach(() => {
+    setAuthToken("valid-token");
+    vi.restoreAllMocks();
+  });
+
+  it("encodes lore filters without dropping false boolean values", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        items: [],
+        next_cursor: null,
+        has_more: false,
+        total: 0,
+        facets: {},
+        migration_status: { storage_mode: "normalized", state: "ready", read_only: false },
+      }), { status: 200, headers: { "Content-Type": "application/json" } })
+    );
+
+    await api.listLoreElements("project/one", {
+      q: "龙 城",
+      enabled: false,
+      has_relation: true,
+      limit: 20,
+    });
+
+    const [url] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(url).toBe(
+      "/api/projects/project/one/lore/elements?q=%E9%BE%99+%E5%9F%8E&enabled=false&has_relation=true&limit=20"
+    );
+  });
+
+  it("parses nested FastAPI error details and reload requirement", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        detail: {
+          code: "LORE_CURSOR_STALE",
+          message: "列表游标已失效。",
+          reload_required: true,
+        },
+      }), { status: 409, headers: { "Content-Type": "application/json" } })
+    );
+
+    await expect(api.listLoreElements("project-1", { cursor: "stale" })).rejects.toMatchObject({
+      name: "ApiError",
+      status: 409,
+      code: "LORE_CURSOR_STALE",
+      detail: "列表游标已失效。",
+      reloadRequired: true,
+    });
+  });
+
+  it("sends candidate mutations to the scoped endpoints with expected_version", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const edit = {
+      expected_version: 7,
+      type_key: "character",
+      name: "林渊",
+      summary: "",
+      payload: { personality: "谨慎" },
+      field_states: { personality: "provided" as const },
+      suggestion_resolutions: {},
+    };
+    await api.editLoreCandidate("project-1", "batch-1", "candidate-1", edit);
+    await api.acceptLoreCandidate("project-1", "batch-1", "candidate-1", {
+      expected_version: 8,
+      suggestion_resolutions: {},
+    });
+    await api.rejectLoreCandidate("project-1", "batch-1", "candidate-1", {
+      expected_version: 8,
+      suggestion_resolutions: {},
+    });
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(1,
+      "/api/projects/project-1/lore/extractions/batch-1/candidates/candidate-1",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify(edit) })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(2,
+      "/api/projects/project-1/lore/extractions/batch-1/candidates/candidate-1/accept",
+      expect.objectContaining({ method: "POST", body: expect.stringContaining('"expected_version":8') })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(3,
+      "/api/projects/project-1/lore/extractions/batch-1/candidates/candidate-1/reject",
+      expect.objectContaining({ method: "POST", body: expect.stringContaining('"expected_version":8') })
+    );
+  });
+
+  it("sends formal element edits and reversible state changes with lock versions", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const edit = {
+      expected_version: 4,
+      name: "寒川城",
+      summary: "北境城邦",
+      payload: { description: "终年积雪" },
+      field_states: { description: "provided" as const },
+    };
+
+    await api.updateLoreElement("project-1", "element-1", edit);
+    await api.changeLoreElementState("project-1", "element-1", "disable", {
+      expected_version: 5,
+      reason: "暂不参与生成",
+    });
+    await api.changeLoreElementState("project-1", "element-1", "restore-archive", {
+      expected_version: 6,
+    });
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(1,
+      "/api/projects/project-1/lore/elements/element-1",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify(edit) })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(2,
+      "/api/projects/project-1/lore/elements/element-1/disable",
+      expect.objectContaining({ method: "POST", body: expect.stringContaining('"expected_version":5') })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(3,
+      "/api/projects/project-1/lore/elements/element-1/restore-archive",
+      expect.objectContaining({ method: "POST", body: expect.stringContaining('"expected_version":6') })
+    );
+  });
+
+  it("uses the relation catalog and versioned relation write endpoints", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ items: [], has_more: false, total: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const create = {
+      operation_key: "lore-relation:test-operation-0001",
+      target_element_id: "element-2",
+      source_expected_version: 4,
+      target_expected_version: 7,
+      relation_type: "member_of",
+      description: "用户确认",
+    };
+
+    await api.listLoreRelationTypes("project-1");
+    await api.listLoreRelations("project-1", "element-1", { status: "active", limit: 20 });
+    await api.getLoreRelation("project-1", "relation-1");
+    await api.createLoreRelation("project-1", "element-1", create);
+    await api.updateLoreRelation("project-1", "relation-1", {
+      expected_version: 1,
+      forward_label: "隶属于",
+      reverse_label: "成员包括",
+      description: "用户确认",
+      metadata: {},
+    });
+    await api.changeLoreRelationState("project-1", "relation-1", "archive", {
+      expected_version: 2,
+      reason: "剧情变化",
+    });
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(1,
+      "/api/projects/project-1/lore/relation-types",
+      expect.objectContaining({ headers: expect.any(Object) })
+    );
+    expect(fetchSpy.mock.calls[1][0]).toBe(
+      "/api/projects/project-1/lore/elements/element-1/relations?status=active&limit=20"
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(3,
+      "/api/projects/project-1/lore/relations/relation-1",
+      expect.objectContaining({ headers: expect.any(Object) })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(4,
+      "/api/projects/project-1/lore/elements/element-1/relations",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(create) })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(5,
+      "/api/projects/project-1/lore/relations/relation-1",
+      expect.objectContaining({ method: "PATCH", body: expect.stringContaining('"expected_version":1') })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(6,
+      "/api/projects/project-1/lore/relations/relation-1/archive",
+      expect.objectContaining({ method: "POST", body: expect.stringContaining('"expected_version":2') })
+    );
+  });
+
+  it("uses the scoped review scan, filters, detail, and idempotent decision endpoints", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ items: [], has_more: false, total: 0 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const decision = {
+      operation_key: "review-operation-0001",
+      expected_version: 3,
+      expected_evidence_revision: 2,
+      decision: "confirmed_duplicate" as const,
+      note: "作者确认",
+    };
+
+    await api.scanLoreReviews("project-1");
+    await api.listLoreReviews("project-1", {
+      q: "林岚",
+      kind: "possible_conflict",
+      review_status: "needs_review",
+      limit: 20,
+    });
+    await api.getLoreReview("project-1", "review-1");
+    await api.decideLoreReview("project-1", "review-1", decision);
+    const preview = {
+      suggestion_expected_version: 3,
+      expected_evidence_revision: 2,
+      survivor_element_id: "left-1",
+      merged_element_id: "right-1",
+      survivor_expected_lock_version: 1,
+      survivor_expected_content_version: 1,
+      merged_expected_lock_version: 1,
+      merged_expected_content_version: 1,
+      name_choice: "survivor" as const,
+      summary_choice: "survivor" as const,
+      field_choices: { personality: "survivor" as const },
+      final_name: "林岚",
+      final_summary: "",
+      final_payload: { personality: "谨慎" },
+      final_field_states: { personality: "provided" as const },
+    };
+    await api.previewLoreMerge("project-1", "review-1", preview);
+    const commit = {
+      operation_key: "merge-operation-1234",
+      preview_token: "signed-preview-token",
+      preview,
+    };
+    await api.commitLoreMerge("project-1", "review-1", commit);
+    await api.getLoreMergeOperationByKey("project-1", "merge:key/1");
+    await api.listLoreElementMergeHistory("project-1", "element-1");
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(1,
+      "/api/projects/project-1/lore/reviews/scan",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(fetchSpy.mock.calls[1][0]).toBe(
+      "/api/projects/project-1/lore/reviews?q=%E6%9E%97%E5%B2%9A&kind=possible_conflict&review_status=needs_review&limit=20"
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(3,
+      "/api/projects/project-1/lore/reviews/review-1",
+      expect.objectContaining({ headers: expect.any(Object) })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(4,
+      "/api/projects/project-1/lore/reviews/review-1/decide",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(decision) })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(5,
+      "/api/projects/project-1/lore/reviews/review-1/merge-preview",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(preview) })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(6,
+      "/api/projects/project-1/lore/reviews/review-1/merge-commit",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(commit) })
+    );
+    expect(fetchSpy.mock.calls[6][0]).toBe(
+      "/api/projects/project-1/lore/merge-operations/by-key/merge%3Akey%2F1"
+    );
+    expect(fetchSpy.mock.calls[7][0]).toBe(
+      "/api/projects/project-1/lore/elements/element-1/merge-history"
+    );
+  });
+
+  it("posts author review clues to the project-scoped manual endpoint", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ replayed: false, created: true }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const input = {
+      operation_key: "manual-review-operation-0001",
+      kind: "possible_conflict" as const,
+      left_element_id: "left-1",
+      right_element_id: "right-1",
+      left_expected_lock_version: 2,
+      right_expected_lock_version: 3,
+      note: "作者提报的冲突说明",
+    };
+    await api.createManualLoreReview("project-1", input);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/projects/project-1/lore/reviews/manual",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(input) })
+    );
+  });
+
+  it("preserves the existing suggestion id from a pair-conflict response", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        detail: {
+          code: "LORE_MANUAL_REVIEW_PAIR_CONFLICT",
+          message: "这两项设定已有不同的用户线索",
+          suggestion_id: "review-existing",
+          retryable: false,
+        },
+      }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    await expect(api.createManualLoreReview("project-1", {
+      operation_key: "manual-review-operation-0002",
+      kind: "possible_conflict",
+      left_element_id: "left-1",
+      right_element_id: "right-1",
+      left_expected_lock_version: 2,
+      right_expected_lock_version: 3,
+      note: "另一条说明",
+    })).rejects.toMatchObject({
+      status: 409,
+      code: "LORE_MANUAL_REVIEW_PAIR_CONFLICT",
+      suggestionId: "review-existing",
+    } satisfies Partial<ApiError>);
   });
 });
 
@@ -445,5 +765,177 @@ describe("API - Community", () => {
       expect.objectContaining({ method: "POST" })
     );
     expect(result.like_count).toBe(42);
+  });
+});
+
+describe("API - Lore extraction", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("creates an idempotent source-grounded extraction batch", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ id: "batch-1", status: "completed" }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    await api.createLoreExtraction("project-1", {
+      idempotency_key: "extract-operation-1",
+      document_text: "林远性格坚韧，目标是守护故乡。",
+      source_kind: "worldview_import",
+      source_ref: "世界观编辑器导入原文",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/projects/project-1/lore/extractions",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          idempotency_key: "extract-operation-1",
+          document_text: "林远性格坚韧，目标是守护故乡。",
+          source_kind: "worldview_import",
+          source_ref: "世界观编辑器导入原文",
+        }),
+      })
+    );
+  });
+});
+
+describe("API - Lore migration operations", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("submits the frozen request and safely encodes the operation key lookup", async () => {
+    const response = { id: "operation-1", status: "validating" };
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    ));
+    const input = {
+      operation_key: "lore-migration:key:0001",
+      preview_schema_version: 1,
+      mapping_version: 1,
+      expected_source_checksum: "a".repeat(64),
+      expected_semantic_result_checksum: "b".repeat(64),
+      confirm_legacy_retained_no_automatic_rollback: true as const,
+    };
+
+    await api.commitLoreMigration("project-1", input);
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "/api/projects/project-1/lore/migration-operations",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(input) })
+    );
+    await api.getLoreMigrationOperationByKey("project-1", input.operation_key);
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      `/api/projects/project-1/lore/migration-operations/by-key/${encodeURIComponent(input.operation_key)}`,
+      expect.any(Object)
+    );
+  });
+
+  it("parses nested unknown-outcome errors without exposing response internals", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      detail: {
+        code: "LORE_MIGRATION_OUTCOME_UNKNOWN",
+        message: "结果待确认",
+        retryable: true,
+        outcome_unknown: true,
+      },
+    }), {
+      status: 503,
+      headers: { "Content-Type": "application/json" },
+    }));
+
+    await expect(api.commitLoreMigration("project-1", {
+      operation_key: "lore-migration:key-0001",
+      preview_schema_version: 1,
+      mapping_version: 1,
+      expected_source_checksum: "a".repeat(64),
+      expected_semantic_result_checksum: "b".repeat(64),
+      confirm_legacy_retained_no_automatic_rollback: true,
+    })).rejects.toMatchObject({
+      status: 503,
+      code: "LORE_MIGRATION_OUTCOME_UNKNOWN",
+      retryable: true,
+      outcomeUnknown: true,
+    });
+  });
+
+  it("creates, lists, and revokes auditable migration resolutions", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    ));
+    const input = {
+      operation_key: "migration-resolution:key-0001",
+      preview_schema_version: 1,
+      mapping_version: 1,
+      expected_source_checksum: "a".repeat(64),
+      expected_semantic_result_checksum: "b".repeat(64),
+      item_fingerprint: "c".repeat(64),
+      group_fingerprint: null,
+      legacy_category: "special_settings",
+      legacy_index: 0,
+      reason_code: "type_confirmation_required",
+      decision_code: "confirm_type",
+      decision_payload: { type_key: "rule" },
+      expected_resolution_version: null,
+    };
+
+    await api.getLoreMigrationResolutions("project-1");
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "/api/projects/project-1/lore/migration-resolutions",
+      expect.any(Object)
+    );
+    await api.decideLoreMigrationResolution("project-1", input);
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "/api/projects/project-1/lore/migration-resolutions",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(input) })
+    );
+    const revoke = {
+      operation_key: "migration-resolution:revoke-0001",
+      expected_source_checksum: "a".repeat(64),
+      expected_resolution_version: 1,
+    };
+    await api.revokeLoreMigrationResolution("project-1", "d".repeat(32), revoke);
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      `/api/projects/project-1/lore/migration-resolutions/${"d".repeat(32)}/revoke`,
+      expect.objectContaining({ method: "POST", body: JSON.stringify(revoke) })
+    );
+  });
+});
+
+describe("API - Worldview optimistic save", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("sends the expected source checksum with the complete worldview payload", async () => {
+    const response = {
+      id: "worldview-1",
+      source_checksum: "b".repeat(64),
+      parsed_elements: [],
+    };
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const input = {
+      characters: [],
+      geography: [],
+      factions: [],
+      power_system: [],
+      history: [],
+      conflicts: [],
+      special_settings: [],
+      source: "manual" as const,
+      expected_source_checksum: "a".repeat(64),
+    };
+
+    await api.setWorldview("project-1", input);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/worldview/project-1",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(input) })
+    );
   });
 });

@@ -141,6 +141,73 @@ def test_projection_decodes_historical_text_json_columns_losslessly():
     )
 
 
+def test_projection_decodes_double_encoded_historical_columns_equivalently():
+    normal = _worldview()
+    double_encoded = _worldview(
+        **{
+            category: json.dumps(
+                json.dumps(getattr(normal, category), ensure_ascii=False),
+                ensure_ascii=False,
+            )
+            for category in (
+                "characters",
+                "geography",
+                "factions",
+                "power_system",
+                "history",
+                "conflicts",
+                "special_settings",
+            )
+        },
+        parsed_elements=json.dumps(
+            json.dumps(normal.parsed_elements, ensure_ascii=False),
+            ensure_ascii=False,
+        ),
+    )
+
+    projection = project_legacy_worldview("project-a", double_encoded)
+
+    assert validate_projection(projection)["valid"] is True
+    assert legacy_worldview_checksum(double_encoded) == legacy_worldview_checksum(normal)
+    assert legacy_structured_payload(double_encoded) == legacy_structured_payload(normal)
+
+
+def test_projection_rejects_triple_encoded_collection_without_exposing_content():
+    normal = _worldview()
+    triple_encoded = json.dumps(
+        json.dumps(json.dumps(normal.geography, ensure_ascii=False), ensure_ascii=False),
+        ensure_ascii=False,
+    )
+
+    projection = project_legacy_worldview(
+        "project-a", _worldview(geography=triple_encoded)
+    )
+
+    report = validate_projection(projection)
+    assert report["valid"] is False
+    assert "geography:invalid_collection" in report["warnings"]
+    assert "云港" not in str(report)
+
+
+def test_projection_rejects_invalid_parsed_elements_without_silent_id_loss():
+    unsafe_values = [
+        json.dumps(json.dumps(json.dumps([{"name": "秘密解析索引"}]))),
+        "not-json-秘密解析索引",
+        [{"name": "林岚"}, "秘密解析索引"],
+    ]
+
+    for parsed_elements in unsafe_values:
+        projection = project_legacy_worldview(
+            "project-a",
+            _worldview(parsed_elements=parsed_elements),
+        )
+        report = validate_projection(projection)
+
+        assert report["valid"] is False
+        assert "parsed_elements:invalid_collection" in report["warnings"]
+        assert "秘密解析索引" not in str(report)
+
+
 def test_invalid_collection_fails_validation_without_crashing():
     projection = project_legacy_worldview(
         "project-a",
