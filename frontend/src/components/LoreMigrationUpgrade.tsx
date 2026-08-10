@@ -94,12 +94,14 @@ export default function LoreMigrationUpgrade({
   report,
   onRequestPreviewReload,
   onUpgraded,
+  onMigrationStageChange,
 }: {
   projectId: string;
   userId: string;
   report: LoreMigrationPreviewResponse | null;
   onRequestPreviewReload: () => void;
   onUpgraded: () => void;
+  onMigrationStageChange: (active: boolean) => void;
 }) {
   const migrationScope = useMemo<DraftScope>(() => ({
     userId,
@@ -131,6 +133,12 @@ export default function LoreMigrationUpgrade({
   const checkLock = useRef(false);
   const recoveryStarted = useRef(false);
   const pollCount = useRef(0);
+  const migrationStageActive = operation?.status === "ready" || Boolean(stored && stored.phase !== "confirming");
+
+  useEffect(() => {
+    if (!storageChecked && !migrationStageActive) return;
+    onMigrationStageChange(migrationStageActive);
+  }, [migrationStageActive, onMigrationStageChange, storageChecked]);
 
   function persist(next: StoredMigrationDraft): boolean {
     const saved = saveDraft(migrationScope, next, null);
@@ -157,13 +165,6 @@ export default function LoreMigrationUpgrade({
         ? "已核对：这次升级此前已经完成，没有重复创建设定。"
         : "设定仓库升级完成。原世界观资料仍保留为历史来源。"
       );
-      const cleared = clearDraft(migrationScope);
-      if (cleared.status === "unavailable") {
-        setNotice("设定仓库升级完成，但本机请求记录未能清除；请勿再次提交，可刷新后继续核对同一结果。");
-      } else {
-        setStored(null);
-      }
-      onUpgraded();
       return;
     }
     const phase: MigrationPhase = next.status === "validating" ? "validating" : "failed";
@@ -446,6 +447,16 @@ export default function LoreMigrationUpgrade({
     onRequestPreviewReload();
   }
 
+  function viewMigratedLore() {
+    const cleared = clearDraft(migrationScope);
+    if (cleared.status === "unavailable") {
+      setNotice("设定仓库已升级，但本机请求记录未能清除。系统不会重复升级，请检查浏览器存储设置。");
+      return;
+    }
+    setStored(null);
+    onUpgraded();
+  }
+
   function handleDialogKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -467,10 +478,16 @@ export default function LoreMigrationUpgrade({
   }
 
   if (operation?.status === "ready") {
+    const elementCount = operation.counts.elements;
+    const migratedCount = typeof elementCount === "number" && Number.isFinite(elementCount) && elementCount >= 0
+      ? Math.floor(elementCount)
+      : stored?.legacyTotal ?? 0;
     return <section className="lore-migration-upgrade__success" role="status">
       <h2 ref={successRef} tabIndex={-1}>设定仓库升级完成</h2>
       <p>{notice}</p>
+      <p>已迁移 {migratedCount} 项设定。</p>
       <p>原世界观资料仍保留为历史来源；后续请在设定仓库中管理独立设定。</p>
+      <button className="btn btn-primary" type="button" onClick={viewMigratedLore}>查看已迁移设定</button>
     </section>;
   }
 

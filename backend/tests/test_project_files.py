@@ -105,6 +105,42 @@ class TestSaveWorldviewFile:
         data = json.loads(filepath.read_text(encoding="utf-8"))
         assert data["characters"] == [{"name": "Updated Hero"}]
 
+    def test_decodes_double_encoded_collections_before_export(
+        self, mock_worldview, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
+        expected = mock_worldview.characters
+        mock_worldview.characters = json.dumps(
+            json.dumps(expected, ensure_ascii=False), ensure_ascii=False
+        )
+
+        save_worldview_file("proj_123", mock_worldview)
+
+        data = json.loads(
+            (tmp_path / "proj_123" / "worldview.json").read_text(encoding="utf-8")
+        )
+        assert data["characters"] == expected
+
+    def test_invalid_collection_does_not_overwrite_existing_export(
+        self, mock_worldview, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
+        save_worldview_file("proj_123", mock_worldview)
+        filepath = tmp_path / "proj_123" / "worldview.json"
+        original = filepath.read_bytes()
+        mock_worldview.characters = json.dumps(
+            json.dumps(
+                json.dumps([{"name": "不应导出"}], ensure_ascii=False),
+                ensure_ascii=False,
+            ),
+            ensure_ascii=False,
+        )
+
+        save_worldview_file("proj_123", mock_worldview)
+
+        assert filepath.read_bytes() == original
+        assert list(filepath.parent.glob(".worldview.*.tmp")) == []
+
     def test_handles_missing_attributes(self, tmp_path, monkeypatch):
         """Function handles objects with missing attributes gracefully."""
         monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)

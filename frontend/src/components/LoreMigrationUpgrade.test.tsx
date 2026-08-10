@@ -87,14 +87,16 @@ function mockApi(overrides: Partial<typeof apiModule.api> = {}) {
 function renderUpgrade(preview: LoreMigrationPreviewResponse | null = report) {
   const onUpgraded = vi.fn();
   const onRequestPreviewReload = vi.fn();
+  const onMigrationStageChange = vi.fn();
   render(<LoreMigrationUpgrade
     projectId="project-1"
     userId="user-1"
     report={preview}
     onUpgraded={onUpgraded}
     onRequestPreviewReload={onRequestPreviewReload}
+    onMigrationStageChange={onMigrationStageChange}
   />);
-  return { onUpgraded, onRequestPreviewReload };
+  return { onUpgraded, onRequestPreviewReload, onMigrationStageChange };
 }
 
 describe("LoreMigrationUpgrade", () => {
@@ -122,6 +124,10 @@ describe("LoreMigrationUpgrade", () => {
       operation_key: expect.stringMatching(/^lore-migration:/),
       confirm_legacy_retained_no_automatic_rollback: true,
     }));
+    expect(onUpgraded).not.toHaveBeenCalled();
+    expect(localStorage.getItem(draftStorageKey(migrationScope))).not.toBeNull();
+    expect(screen.getByText("已迁移 3 项设定。")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "查看已迁移设定" }));
     expect(onUpgraded).toHaveBeenCalledOnce();
     expect(localStorage.getItem(draftStorageKey(migrationScope))).toBeNull();
   });

@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from app.core.legacy_json import read_legacy_json, read_legacy_object_list
+
 
 LEGACY_CATEGORY_MAP = {
     "characters": ("character", "角色"),
@@ -182,14 +184,10 @@ def _legacy_collection_value(value: Any) -> Any:
     """Normalize a legacy collection stored as JSON or historical Text."""
     if value is None:
         return []
-    if isinstance(value, str):
-        try:
-            decoded = json.loads(value)
-        except (TypeError, json.JSONDecodeError):
-            return value
-        if isinstance(decoded, list):
-            return _json_value(decoded)
-    return _json_value(value)
+    result = read_legacy_json(value)
+    if not result.valid:
+        return {"__legacy_json_error__": result.error_category}
+    return _json_value(result.value)
 
 
 def legacy_worldview_checksum(worldview: Any | None) -> str:
@@ -322,14 +320,15 @@ def project_legacy_worldview(
     if worldview is None:
         return LoreProjection([], checksum, [])
 
-    parsed = _legacy_collection_value(
+    parsed_result = read_legacy_object_list(
         getattr(worldview, "parsed_elements", None)
     )
     parsed_by_category: dict[str, list[dict[str, Any]]] = {}
-    if isinstance(parsed, list):
-        for raw in parsed:
-            if not isinstance(raw, dict):
-                continue
+    warnings: list[str] = []
+    if not parsed_result.valid:
+        warnings.append("parsed_elements:invalid_collection")
+    else:
+        for raw in parsed_result.items:
             parsed_by_category.setdefault(str(raw.get("category", "")), []).append(raw)
 
     source_kind, source_label = _source_info(
@@ -337,7 +336,6 @@ def project_legacy_worldview(
     )
     created_at = getattr(worldview, "created_at", None) or datetime(1970, 1, 1)
     elements: list[ProjectedLoreElement] = []
-    warnings: list[str] = []
 
     for legacy_category, (type_key, type_display_name) in LEGACY_CATEGORY_MAP.items():
         values = _legacy_collection_value(

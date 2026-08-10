@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from typing import Any, Iterable
 
+from app.core.legacy_json import read_legacy_json, read_legacy_object_list
 from app.core.lore_migration import (
     BUILTIN_TYPE_KEYS,
     PARSED_CATEGORY_MAP,
@@ -67,13 +68,10 @@ _DUPLICATE_REASONS = frozenset({
 
 
 def _legacy_value(value: Any) -> Any:
-    if isinstance(value, str):
-        try:
-            decoded = json.loads(value)
-        except json.JSONDecodeError:
-            return value
-        return decoded
-    return value
+    result = read_legacy_json(value)
+    if result.valid:
+        return result.value
+    return {"__legacy_json_error__": result.error_category}
 
 
 def migration_preview_source_checksum(worldview: Any | None) -> str:
@@ -160,15 +158,18 @@ def _promote(item: dict[str, Any], classification: str, reason_code: str) -> Non
         item["reason_codes"].append(reason_code)
 
 
-def _parsed_by_category(worldview: Any) -> dict[str, list[dict[str, Any]]]:
-    parsed = _legacy_value(getattr(worldview, "parsed_elements", None))
+def _parsed_by_category(
+    worldview: Any,
+) -> tuple[dict[str, list[dict[str, Any]]], str | None]:
+    parsed_result = read_legacy_object_list(
+        getattr(worldview, "parsed_elements", None)
+    )
     result: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    if not isinstance(parsed, list):
-        return result
-    for value in parsed:
-        if isinstance(value, dict):
-            result[str(value.get("category") or "")].append(value)
-    return result
+    if not parsed_result.valid:
+        return result, parsed_result.error_category
+    for value in parsed_result.items:
+        result[str(value.get("category") or "")].append(value)
+    return result, None
 
 
 def project_legacy_item_fields(
@@ -251,7 +252,13 @@ def build_migration_preview(
 
     if worldview is not None:
         source = str(getattr(worldview, "source", "") or "").strip()
-        parsed = _parsed_by_category(worldview)
+        parsed, parsed_error = _parsed_by_category(worldview)
+        if parsed_error is not None:
+            issues.append(_issue(
+                "invalid_collection", "blocked", None, None,
+                "旧资料的解析索引无法安全读取。",
+                "修正 parsed_elements 的数据结构后重新检查。",
+            ))
         seen_legacy_ids: Counter[str] = Counter()
         for values in parsed.values():
             for parsed_item in values:

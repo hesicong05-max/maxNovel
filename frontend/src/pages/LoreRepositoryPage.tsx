@@ -79,6 +79,16 @@ const SOURCE_KIND: Record<string, string> = {
   legacy_import: "旧数据导入",
 };
 
+const LEGACY_CATEGORY: Record<string, string> = {
+  characters: "角色",
+  geography: "地点",
+  factions: "阵营",
+  power_system: "能力体系",
+  history: "历史事件",
+  conflicts: "冲突",
+  special_settings: "其他重要设定",
+};
+
 const CONFIRMATION_STATUS: Record<string, string> = {
   candidate: "待确认",
   confirmed: "已确认",
@@ -730,7 +740,15 @@ export default function LoreRepositoryPage() {
       <LoreMigrationPreview
         projectId={id}
         userId={user.id}
-        onUpgraded={() => setReloadToken((value) => value + 1)}
+        onUpgraded={() => {
+          setMigrationPreviewOpen(false);
+          setSelectedFormalId(null);
+          setSelectedCandidateId(null);
+          focusFormalAfterMutation.current = true;
+          setSearchDraft("");
+          setSearchParams(new URLSearchParams({ scope: "formal" }), { replace: true });
+          setReloadToken((value) => value + 1);
+        }}
         onEditItem={(category, index, itemFingerprint, sourceChecksum) => {
           navigate(`/project/${id}?migration_fix=${encodeURIComponent(
             `${category}:${index}:${itemFingerprint}:${sourceChecksum}`
@@ -1102,6 +1120,12 @@ function FormalDetail({
   const [preservedDraft, setPreservedDraft] = useState("");
   const [relationDirty, setRelationDirty] = useState(false);
   const [relationBusy, setRelationBusy] = useState(false);
+  const [rawSourceEvidence, setRawSourceEvidence] = useState<{
+    sourceKey: string;
+    status: "loading" | "ready" | "error";
+    rawText?: string;
+    message?: string;
+  } | null>(null);
   const nameRef = useRef<HTMLInputElement | null>(null);
   const errorRef = useRef<HTMLDivElement | null>(null);
   const confirmRef = useRef<HTMLDivElement | null>(null);
@@ -1133,6 +1157,37 @@ function FormalDetail({
     setPendingIntent(null);
     setEditing(true);
     requestAnimationFrame(() => nameRef.current?.focus());
+  }
+
+  async function loadLegacyRawSource(sourceKey: string, sourceChecksum: string | null) {
+    if (rawSourceEvidence?.status === "loading") return;
+    if (!sourceChecksum || !/^[a-f0-9]{64}$/.test(sourceChecksum)) {
+      setRawSourceEvidence({
+        sourceKey,
+        status: "error",
+        message: "该历史来源缺少可验证的迁移版本，不能将当前世界观原文当作当时证据展示。",
+      });
+      return;
+    }
+    setRawSourceEvidence({ sourceKey, status: "loading" });
+    try {
+      const worldview = await api.getWorldview(projectId);
+      if (worldview.source_checksum !== sourceChecksum) {
+        setRawSourceEvidence({
+          sourceKey,
+          status: "error",
+          message: "当前保留的世界观原文版本与迁移时不一致，本次不展示，以免误认为原证据。",
+        });
+        return;
+      }
+      if (!worldview.raw_text?.trim()) {
+        setRawSourceEvidence({ sourceKey, status: "error", message: "该历史来源没有可查看的完整原文。" });
+        return;
+      }
+      setRawSourceEvidence({ sourceKey, status: "ready", rawText: worldview.raw_text });
+    } catch (error) {
+      setRawSourceEvidence({ sourceKey, status: "error", message: errorMessage(error) });
+    }
   }
 
   function cancelEdit() {
@@ -1351,7 +1406,27 @@ function FormalDetail({
       ) : (
         <>
           <dl className="lore-fields">{definitions.map((definition) => <div key={definition.key}><dt>{definition.label}<span>{FIELD_STATE[baseDetail.field_states[definition.key]] || "状态待确认"}</span></dt><dd>{valueText(baseDetail.payload[definition.key])}</dd></div>)}</dl>
-          <section className="lore-sources"><h3>原始出处</h3>{baseDetail.sources.length ? baseDetail.sources.map((source, index) => <article key={source.id ?? `${source.kind}-${index}`}><strong>{SOURCE_KIND[source.kind] || "其他来源"}{source.is_primary ? " · 主要来源" : ""}</strong><p>{source.excerpt || "未提供原文摘录"}</p>{source.reference && <small>{source.reference}</small>}</article>) : <p>暂无来源记录</p>}</section>
+          <section className="lore-sources"><h3>原始出处</h3>{baseDetail.sources.length ? baseDetail.sources.map((source, index) => {
+            const sourceKey = source.id ?? `${source.kind}-${index}`;
+            const locator = source.locator ?? {};
+            const legacyCategory = typeof locator.legacy_category === "string" ? locator.legacy_category : null;
+            const legacyIndex = typeof locator.legacy_index === "number" ? locator.legacy_index : null;
+            const sourceChecksum = typeof locator.source_checksum === "string" ? locator.source_checksum : null;
+            const authorConfirmedUnlocated = locator.author_confirmed_unlocated === true;
+            const evidence = rawSourceEvidence?.sourceKey === sourceKey ? rawSourceEvidence : null;
+            return <article key={sourceKey}>
+              <strong>{SOURCE_KIND[source.kind] || "其他来源"}{source.is_primary ? " · 主要来源" : ""}</strong>
+              {legacyCategory !== null && legacyIndex !== null && <small className="lore-source-locator">旧世界观 › {LEGACY_CATEGORY[legacyCategory] ?? legacyCategory} › 第 {legacyIndex + 1} 项</small>}
+              {authorConfirmedUnlocated ? <>
+                <p className="lore-source-warning">作者已核对完整原文，但迁移时未精确定位到具体段落。</p>
+                <p><strong>迁移时保留的结构化快照（非精确原文摘录）</strong>{source.excerpt || "未保留结构化快照"}</p>
+                <button className="btn btn-secondary" type="button" disabled={evidence?.status === "loading"} onClick={() => void loadLegacyRawSource(sourceKey, sourceChecksum)}>{evidence?.status === "loading" ? "正在载入完整原文…" : "查看当前保留的完整原文"}</button>
+                {evidence?.status === "error" && <div className="lore-alert lore-source-evidence" role="alert">{evidence.message}</div>}
+                {evidence?.status === "ready" && <details className="lore-source-evidence" open><summary>当前保留的完整原文（只读）</summary><pre>{evidence.rawText}</pre></details>}
+              </> : <p>{source.excerpt || "未提供原文摘录"}</p>}
+              {source.reference && <small>{source.reference}</small>}
+            </article>;
+          }) : <p>暂无来源记录</p>}</section>
           <LoreMergeHistory projectId={projectId} elementId={baseDetail.id} fieldDefinitions={definitions} refreshToken={baseDetail.lock_version} />
           <LoreRelationsPanel
             projectId={projectId}

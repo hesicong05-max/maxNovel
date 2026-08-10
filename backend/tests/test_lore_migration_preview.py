@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -67,6 +68,81 @@ def test_preview_is_stable_zero_write_plan_with_dedicated_type_mapping():
     special = next(item for item in first["items"] if item["legacy_category"] == "special_settings")
     assert special["proposed_type_key"] is None
     assert special["classification"] == "review_required"
+
+
+def test_preview_treats_double_encoded_collections_as_semantically_equivalent():
+    normal = _worldview()
+    double_encoded = _worldview(
+        **{
+            category: json.dumps(
+                json.dumps(getattr(normal, category), ensure_ascii=False),
+                ensure_ascii=False,
+            )
+            for category in (
+                "characters",
+                "geography",
+                "factions",
+                "power_system",
+                "history",
+                "conflicts",
+                "special_settings",
+            )
+        },
+        parsed_elements=json.dumps(
+            json.dumps(normal.parsed_elements, ensure_ascii=False),
+            ensure_ascii=False,
+        ),
+    )
+
+    expected = build_migration_preview("project-a", "legacy", normal)
+    actual = build_migration_preview("project-a", "legacy", double_encoded)
+
+    assert actual["source_checksum"] == expected["source_checksum"]
+    assert actual["semantic_result_checksum"] == expected["semantic_result_checksum"]
+    assert actual["items"] == expected["items"]
+
+
+def test_preview_blocks_triple_encoded_collection_without_leaking_content():
+    worldview = _worldview(
+        geography=json.dumps(
+            json.dumps(
+                json.dumps([{"name": "不应泄露的地点"}], ensure_ascii=False),
+                ensure_ascii=False,
+            ),
+            ensure_ascii=False,
+        )
+    )
+
+    report = build_migration_preview("project-a", "legacy", worldview)
+
+    assert report["overall_status"] == "blocked"
+    assert any(issue["reason_code"] == "invalid_collection" for issue in report["issues"])
+    assert "不应泄露的地点" not in str(report)
+
+
+def test_preview_blocks_invalid_parsed_elements_without_losing_id_alignment():
+    unsafe_values = [
+        json.dumps(json.dumps(json.dumps([{"name": "秘密解析索引"}]))),
+        "not-json-秘密解析索引",
+        [{"name": "林岚"}, "秘密解析索引"],
+    ]
+
+    for parsed_elements in unsafe_values:
+        report = build_migration_preview(
+            "project-a",
+            "legacy",
+            _worldview(parsed_elements=parsed_elements),
+            commit_enabled=True,
+        )
+
+        assert report["overall_status"] == "blocked"
+        assert report["commit_available"] is False
+        assert any(
+            issue["reason_code"] == "invalid_collection"
+            and issue["legacy_category"] is None
+            for issue in report["issues"]
+        )
+        assert "秘密解析索引" not in str(report)
 
 
 def test_preview_only_opens_commit_for_ready_nonempty_legacy_data():

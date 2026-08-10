@@ -477,6 +477,113 @@ describe("LoreRepositoryPage", () => {
     expect(screen.getByText("林渊黑发。")).toBeInTheDocument();
   });
 
+  it("labels unlocated migration snapshots and loads only the matching retained raw source", async () => {
+    const sourceChecksum = "d".repeat(64);
+    const detail = writableFormalDetail({
+      sources: [{
+        id: "migration-source-1",
+        kind: "migration",
+        label: "migration",
+        is_primary: true,
+        created_at: "2026-08-03T00:00:00Z",
+        excerpt: "{\"name\":\"林渊\"}",
+        reference: "worldviews:worldview-1",
+        locator: {
+          legacy_category: "characters",
+          legacy_index: 2,
+          source_checksum: sourceChecksum,
+          exact_excerpt_available: false,
+          author_confirmed_unlocated: true,
+        },
+      }],
+    });
+    const getWorldview = vi.fn().mockResolvedValue({
+      id: "worldview-1",
+      characters: [],
+      geography: [],
+      factions: [],
+      power_system: [],
+      history: [],
+      conflicts: [],
+      special_settings: [],
+      parsed_elements: [],
+      source: "imported",
+      source_checksum: sourceChecksum,
+      raw_text: "这是作者保留的完整世界观原文。",
+    });
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      ...relationApiMocks(),
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn().mockResolvedValue(formalResponse()),
+      getLoreElement: vi.fn().mockResolvedValue(detail),
+      listLoreCandidates: vi.fn().mockResolvedValue(candidateResponse),
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+      getWorldview,
+    });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /林渊/ }));
+    expect(await screen.findByText("旧世界观 › 角色 › 第 3 项")).toBeInTheDocument();
+    expect(screen.getByText("作者已核对完整原文，但迁移时未精确定位到具体段落。")).toBeInTheDocument();
+    expect(screen.getByText("迁移时保留的结构化快照（非精确原文摘录）")).toBeInTheDocument();
+    expect(screen.queryByText("这是作者保留的完整世界观原文。")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "查看当前保留的完整原文" }));
+    expect(await screen.findByText("这是作者保留的完整世界观原文。")).toBeInTheDocument();
+    expect(getWorldview).toHaveBeenCalledWith("project-1");
+  });
+
+  it.each([
+    ["missing", null, false],
+    ["invalid", "not-a-checksum", false],
+    ["mismatched", "e".repeat(64), true],
+  ])("refuses %s migration source checksums before showing retained raw text", async (_case, locatorChecksum, shouldFetch) => {
+    const currentChecksum = "d".repeat(64);
+    const detail = writableFormalDetail({
+      sources: [{
+        id: "migration-source-unsafe",
+        kind: "migration",
+        label: "migration",
+        is_primary: true,
+        created_at: "2026-08-03T00:00:00Z",
+        excerpt: "{\"name\":\"林渊\"}",
+        reference: "worldviews:worldview-1",
+        locator: {
+          legacy_category: "characters",
+          legacy_index: 0,
+          ...(locatorChecksum === null ? {} : { source_checksum: locatorChecksum }),
+          exact_excerpt_available: false,
+          author_confirmed_unlocated: true,
+        },
+      }],
+    });
+    const getWorldview = vi.fn().mockResolvedValue({
+      id: "worldview-1",
+      characters: [], geography: [], factions: [], power_system: [], history: [], conflicts: [], special_settings: [],
+      parsed_elements: [], source: "imported", source_checksum: currentChecksum,
+      raw_text: "绝不能在版本未验证时展示的原文。",
+    });
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      ...relationApiMocks(),
+      getLoreOverview: vi.fn().mockResolvedValue(writableOverview),
+      listLoreElements: vi.fn().mockResolvedValue(formalResponse()),
+      getLoreElement: vi.fn().mockResolvedValue(detail),
+      listLoreCandidates: vi.fn().mockResolvedValue(candidateResponse),
+      listLoreTypes: vi.fn().mockResolvedValue(loreTypesResponse),
+      getWorldview,
+    });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: /林渊/ }));
+    await userEvent.click(screen.getByRole("button", { name: "查看当前保留的完整原文" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      shouldFetch ? "版本与迁移时不一致" : "缺少可验证的迁移版本"
+    );
+    expect(screen.queryByText("绝不能在版本未验证时展示的原文。")).not.toBeInTheDocument();
+    expect(getWorldview).toHaveBeenCalledTimes(shouldFetch ? 1 : 0);
+  });
+
   it("edits a formal element with lock_version and reloads the filtered list", async () => {
     const original = writableFormalDetail();
     const updated = writableFormalDetail({ name: "林渊·修订", lock_version: 5, current_version: 2 });

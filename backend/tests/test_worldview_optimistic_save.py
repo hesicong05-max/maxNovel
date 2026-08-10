@@ -230,3 +230,96 @@ async def test_worldview_get_decodes_historical_json_text_without_rewriting(
     assert response.status_code == 200
     assert response.json()["characters"][0]["name"] == "历史文本角色"
     assert len(response.json()["source_checksum"]) == 64
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_summary_and_progress_decode_double_encoded_elements_without_rewriting(
+    client, auth_headers
+):
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _project(client, auth_headers)
+    created = await client.post(
+        f"/api/worldview/{project_id}",
+        headers=auth_headers,
+        json=_payload("双编码角色"),
+    )
+    assert created.status_code == 200
+
+    async with TestSessionLocal() as session:
+        worldview = await session.scalar(
+            select(Worldview).where(Worldview.project_id == project_id)
+        )
+        parsed = read_legacy_json(worldview.parsed_elements)
+        assert parsed.valid
+        stored_value = json.dumps(
+            json.dumps(parsed.value, ensure_ascii=False), ensure_ascii=False
+        )
+        worldview.parsed_elements = stored_value
+        await session.commit()
+
+    summary = await client.get(
+        f"/api/worldview/{project_id}/summary", headers=auth_headers
+    )
+    progress = await client.get(
+        f"/api/chapters/{project_id}/progress", headers=auth_headers
+    )
+
+    assert summary.status_code == 200, summary.text
+    assert summary.json()["total"] >= 1
+    assert progress.status_code == 200, progress.text
+    assert progress.json()["total_elements"] >= 1
+    async with TestSessionLocal() as session:
+        worldview = await session.scalar(
+            select(Worldview).where(Worldview.project_id == project_id)
+        )
+        assert worldview.parsed_elements == stored_value
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_summary_and_progress_fail_closed_for_over_encoded_elements(
+    client, auth_headers
+):
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _project(client, auth_headers)
+    created = await client.post(
+        f"/api/worldview/{project_id}",
+        headers=auth_headers,
+        json=_payload("不应泄露的角色"),
+    )
+    assert created.status_code == 200
+
+    async with TestSessionLocal() as session:
+        worldview = await session.scalar(
+            select(Worldview).where(Worldview.project_id == project_id)
+        )
+        parsed = read_legacy_json(worldview.parsed_elements)
+        assert parsed.valid
+        stored_value = json.dumps(
+            json.dumps(
+                json.dumps(parsed.value, ensure_ascii=False), ensure_ascii=False
+            ),
+            ensure_ascii=False,
+        )
+        worldview.parsed_elements = stored_value
+        await session.commit()
+
+    summary = await client.get(
+        f"/api/worldview/{project_id}/summary", headers=auth_headers
+    )
+    progress = await client.get(
+        f"/api/chapters/{project_id}/progress", headers=auth_headers
+    )
+
+    assert summary.status_code == 422
+    assert summary.json()["detail"]["code"] == "WORLDVIEW_LEGACY_JSON_INVALID"
+    assert "不应泄露的角色" not in summary.text
+    assert progress.status_code == 422
+    assert progress.json()["detail"]["code"] == "LEGACY_WORLDVIEW_ELEMENTS_INVALID"
+    assert "不应泄露的角色" not in progress.text
+    async with TestSessionLocal() as session:
+        worldview = await session.scalar(
+            select(Worldview).where(Worldview.project_id == project_id)
+        )
+        assert worldview.parsed_elements == stored_value

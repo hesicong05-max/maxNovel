@@ -96,6 +96,60 @@ describe("LoreMigrationPreview", () => {
     expect(screen.getByText("夜禁")).toBeInTheDocument();
   });
 
+  it("shows only the submitted migration stage and preserves its success receipt until exit", async () => {
+    const operationKey = "lore-migration:preview-stage-0001";
+    saveDraft({
+      userId: "user-1",
+      projectId: "project-1",
+      kind: "lore-migration",
+      objectId: "legacy-to-relational-v1",
+    }, {
+      version: 1,
+      phase: "outcome_unknown",
+      checkedAt: report.checked_at,
+      legacyTotal: 2,
+      input: {
+        operation_key: operationKey,
+        preview_schema_version: 1,
+        mapping_version: 1,
+        expected_source_checksum: "a".repeat(64),
+        expected_semantic_result_checksum: "b".repeat(64),
+        confirm_legacy_retained_no_automatic_rollback: true,
+      },
+    }, null);
+    const getLoreMigrationPreview = vi.fn();
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreMigrationPreview,
+      getLoreMigrationOperationByKey: vi.fn().mockResolvedValue({
+        id: "operation-1",
+        project_id: "project-1",
+        operation_key: operationKey,
+        status: "ready",
+        source_checksum: "a".repeat(64),
+        preview_schema_version: 1,
+        mapping_version: 1,
+        semantic_result_checksum: "b".repeat(64),
+        result_checksum: "c".repeat(64),
+        migration_id: "migration-1",
+        error_code: null,
+        counts: { elements: 2 },
+        started_at: "2026-08-07T08:00:01Z",
+        updated_at: "2026-08-07T08:00:02Z",
+        completed_at: "2026-08-07T08:00:02Z",
+        replayed: true,
+      }),
+    });
+
+    render(<LoreMigrationPreview projectId="project-1" userId="user-1" onBack={vi.fn()} onUpgraded={vi.fn()} />);
+
+    expect(await screen.findByRole("heading", { name: "设定仓库升级完成" })).toBeInTheDocument();
+    expect(screen.getByText("已迁移 2 项设定。")).toBeInTheDocument();
+    expect(screen.queryByText("预检已通过")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重新检查" })).not.toBeInTheDocument();
+    expect(getLoreMigrationPreview).not.toHaveBeenCalled();
+  });
+
   it("shows project-level blockers as a successful inspection result", async () => {
     mockPreview(Promise.resolve({
       ...report,

@@ -270,25 +270,24 @@ async def test_chapter_stream_rechecks_freeze_before_final_commit(
         headers=auth_headers,
     )
     assert worldview.status_code == 200
-    db_session.add(
-        Outline(
-            project_id=project_id,
-            story_arc="林远踏上旅途。",
-            chapters=json.dumps(
-                [
-                    {
-                        "chapter_num": 1,
-                        "title": "启程",
-                        "summary": "林远出发。",
-                        "key_events": ["离开故乡"],
-                        "reveal_elements": ["林远"],
-                    }
-                ],
-                ensure_ascii=False,
-            ),
-            reveal_plan="{malformed",
-        )
+    outline = Outline(
+        project_id=project_id,
+        story_arc="林远踏上旅途。",
+        chapters=json.dumps(
+            [
+                {
+                    "chapter_num": 1,
+                    "title": "启程",
+                    "summary": "林远出发。",
+                    "key_events": ["离开故乡"],
+                    "reveal_elements": ["林远"],
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        reveal_plan="{malformed",
     )
+    db_session.add(outline)
     await db_session.commit()
 
     outline_response = await client.get(
@@ -327,6 +326,11 @@ async def test_chapter_stream_rechecks_freeze_before_final_commit(
     assert read_response.status_code == 404
 
     monkeypatch.setattr(app_settings, "LEGACY_JSON_WRITES_FROZEN", False)
+    # Batch generation now validates all legacy collections before it changes
+    # project state. Repair this deliberately malformed fixture so this second
+    # half continues to isolate the final-commit freeze recheck.
+    outline.reveal_plan = "[]"
+    await db_session.commit()
     batch_response = await client.post(
         f"/api/chapters/{project_id}/generate-all",
         headers=auth_headers,

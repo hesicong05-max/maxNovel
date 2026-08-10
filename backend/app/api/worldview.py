@@ -442,6 +442,8 @@ async def get_worldview_summary(
         raise HTTPException(status_code=404, detail="世界观不存在")
 
     summary = worldview_parser.summary(
-        worldview_parser.normalize_elements(worldview.parsed_elements)
+        worldview_parser.normalize_elements(
+            _response_object_list(worldview.parsed_elements, "parsed_elements")
+        )
     )
     return summary

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "@/services/api";
+import { loadDraft, type DraftScope } from "@/services/maintenanceDrafts";
 import type {
   LoreMigrationPreviewClassification,
   LoreMigrationPreviewResponse,
 } from "@/types/lore";
-import LoreMigrationUpgrade from "./LoreMigrationUpgrade";
+import LoreMigrationUpgrade, { isStoredMigrationDraft } from "./LoreMigrationUpgrade";
 import MigrationDecisionPanel from "./MigrationDecisionPanel";
 
 type Filter = "all" | LoreMigrationPreviewClassification;
@@ -105,6 +106,18 @@ export default function LoreMigrationPreview({
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [reloadToken, setReloadToken] = useState(0);
+  const migrationScope = useMemo<DraftScope>(() => ({
+    userId,
+    projectId,
+    kind: "lore-migration",
+    objectId: "legacy-to-relational-v1",
+  }), [projectId, userId]);
+  const [migrationStageActive, setMigrationStageActive] = useState(() => {
+    const loaded = loadDraft<unknown>(migrationScope);
+    if (loaded.status === "corrupt") return true;
+    if (loaded.status !== "available" && loaded.status !== "expired") return false;
+    return isStoredMigrationDraft(loaded.draft.payload) && loaded.draft.payload.phase !== "confirming";
+  });
   const headingRef = useRef<HTMLHeadingElement | null>(null);
 
   useEffect(() => {
@@ -112,6 +125,10 @@ export default function LoreMigrationPreview({
   }, []);
 
   useEffect(() => {
+    if (migrationStageActive) {
+      setLoading(false);
+      return;
+    }
     const controller = new AbortController();
     setLoading(true);
     setError("");
@@ -127,7 +144,7 @@ export default function LoreMigrationPreview({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [projectId, reloadToken]);
+  }, [migrationStageActive, projectId, reloadToken]);
 
   const visibleItems = useMemo(() => (
     report?.items.filter((item) => filter === "all" || (item.effective_classification ?? item.classification) === filter) ?? []
@@ -142,29 +159,29 @@ export default function LoreMigrationPreview({
   ] : [];
 
   return (
-    <section className="lore-migration-preview" aria-busy={loading} aria-labelledby="lore-migration-preview-title">
-      <button className="btn-back" type="button" onClick={onBack}>← 返回设定仓库</button>
+    <section className="lore-migration-preview" aria-busy={!migrationStageActive && loading} aria-labelledby="lore-migration-preview-title">
+      {!migrationStageActive && <button className="btn-back" type="button" onClick={onBack}>← 返回设定仓库</button>}
       <header className="page-header">
         <div>
-          <h1 id="lore-migration-preview-title" ref={headingRef} tabIndex={-1}>旧资料迁移预检</h1>
-          <p>检查旧世界观资料能否安全转换为独立设定模块。</p>
+          <h1 id="lore-migration-preview-title" ref={headingRef} tabIndex={-1}>{migrationStageActive ? "设定仓库升级" : "旧资料迁移预检"}</h1>
+          <p>{migrationStageActive ? "正在处理或核对同一次升级请求。" : "检查旧世界观资料能否安全转换为独立设定模块。"}</p>
         </div>
       </header>
 
-      <div className="lore-migration-preview__notice" role="note">
+      {!migrationStageActive && <div className="lore-migration-preview__notice" role="note">
         <strong>预检本身只检查数据，不会自动迁移。</strong>
         <span>系统不会替你补写、选择类型、合并资料或自动保存；只有预检通过、进入安全升级窗口并由你再次确认后，系统才会开始升级，原资料不会被删除或覆盖。</span>
-      </div>
+      </div>}
 
-      {loading && <div className="lore-empty" role="status">正在检查旧资料…</div>}
-      {!loading && error && (
+      {!migrationStageActive && loading && <div className="lore-empty" role="status">正在检查旧资料…</div>}
+      {!migrationStageActive && !loading && error && (
         <div className="lore-alert" role="alert">
           {error}
           <button type="button" onClick={() => setReloadToken((value) => value + 1)}>重新检查</button>
         </div>
       )}
 
-      {!loading && report && <>
+      {!migrationStageActive && !loading && report && <>
         <div className={`lore-migration-preview__result is-${report.overall_status}`} role={report.overall_status === "blocked" ? "alert" : "status"}>
           <strong>{report.overall_status === "ready" ? "预检已通过" : report.overall_status === "blocked" ? "本次预检未通过" : "预检完成，仍有资料需要确认"}</strong>
           <span>共检查 {report.counts.legacy_total} 项；未创建或修改任何设定。</span>
@@ -258,9 +275,10 @@ export default function LoreMigrationPreview({
         report={report}
         onRequestPreviewReload={() => setReloadToken((value) => value + 1)}
         onUpgraded={onUpgraded}
+        onMigrationStageChange={setMigrationStageActive}
       />
 
-      {!loading && report && <div className="lore-migration-preview__actions">
+      {!migrationStageActive && !loading && report && <div className="lore-migration-preview__actions">
         <button className="btn btn-secondary" type="button" onClick={() => setReloadToken((value) => value + 1)}>重新检查</button>
         <button className="btn btn-secondary" type="button" onClick={onBack}>返回设定仓库</button>
       </div>}

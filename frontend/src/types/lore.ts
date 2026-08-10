@@ -227,6 +227,9 @@ export interface LoreElementDetail extends LoreElementListItem {
     created_at: string;
     excerpt: string | null;
     reference: string | null;
+    locator?: Record<string, unknown>;
+    excerpt_hash?: string | null;
+    confirmation_status?: string;
   }>;
   version_count: number;
   read_only: boolean;

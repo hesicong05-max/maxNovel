@@ -49,6 +49,7 @@ MIN_WORD_COUNT = 500
 MAX_WORD_COUNT = 10000
 
 _LEGACY_OUTLINE_CHAPTERS_INVALID = "LEGACY_OUTLINE_CHAPTERS_INVALID"
+_LEGACY_WORLDVIEW_ELEMENTS_INVALID = "LEGACY_WORLDVIEW_ELEMENTS_INVALID"
 
 
 def _read_outline_object_list(
@@ -63,6 +64,17 @@ def _read_outline_object_list(
             "Invalid legacy outline list project=%s field=%s category=%s",
             outline.project_id,
             field_name,
+            result.error_category,
+        )
+    return result
+
+
+def _read_worldview_elements(worldview: Worldview) -> LegacyObjectListResult:
+    result = read_legacy_object_list(worldview.parsed_elements)
+    if not result.valid:
+        logger.warning(
+            "Invalid legacy worldview elements project=%s category=%s",
+            worldview.project_id,
             result.error_category,
         )
     return result
@@ -330,7 +342,17 @@ async def get_progress(
             character_states={},
         )
 
-    elements = worldview_parser.normalize_elements(worldview.parsed_elements)
+    elements_result = _read_worldview_elements(worldview)
+    if not elements_result.valid:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": _LEGACY_WORLDVIEW_ELEMENTS_INVALID,
+                "message": "旧世界观元素无法安全读取，进度统计未生成。",
+                "retryable": False,
+            },
+        )
+    elements = worldview_parser.normalize_elements(elements_result.items)
 
     # Query memory directly
     mem_result = await db.execute(
@@ -614,6 +636,36 @@ async def _stream_batch_generate(
                 )
                 return
 
+            chapters_result = _read_outline_object_list(outline, "chapters")
+            reveal_plan_result = _read_outline_object_list(outline, "reveal_plan")
+            if not chapters_result.valid or not reveal_plan_result.valid:
+                yield _sse(
+                    {
+                        "type": "error",
+                        "error": "历史章节安排暂时无法读取，原数据仍保留；本次批量生成未开始",
+                        "code": _LEGACY_OUTLINE_CHAPTERS_INVALID,
+                    }
+                )
+                return
+
+            wv_result = await db.execute(
+                select(Worldview).where(Worldview.project_id == project_id)
+            )
+            worldview = wv_result.scalar_one_or_none()
+            if not worldview:
+                yield _sse({"type": "error", "error": "世界观不存在"})
+                return
+            elements_result = _read_worldview_elements(worldview)
+            if not elements_result.valid:
+                yield _sse(
+                    {
+                        "type": "error",
+                        "error": "旧世界观元素无法安全读取，原数据仍保留；本次批量生成未开始",
+                        "code": _LEGACY_WORLDVIEW_ELEMENTS_INVALID,
+                    }
+                )
+                return
+
             # Load existing chapters to know which to skip
             ch_result = await db.execute(
                 select(Chapter).where(Chapter.project_id == project_id)
@@ -831,7 +883,17 @@ async def _generate_chapter_core(
     # Elements in both chapter_entry.reveal_elements and reveal_plan.elements are
     # element NAMES (the LLM is instructed to output names, not IDs).
     # Match by name first, then fall back to ID for backward compatibility.
-    all_elements = worldview_parser.normalize_elements(worldview.parsed_elements)
+    elements_result = _read_worldview_elements(worldview)
+    if not elements_result.valid:
+        yield _sse(
+            {
+                "type": "error",
+                "error": "旧世界观元素无法安全读取，原数据仍保留；当前无法生成新章节",
+                "code": _LEGACY_WORLDVIEW_ELEMENTS_INVALID,
+            }
+        )
+        return
+    all_elements = worldview_parser.normalize_elements(elements_result.items)
     elements_to_reveal: list[dict[str, Any]] = []
     added_ids: set[str] = set()
 

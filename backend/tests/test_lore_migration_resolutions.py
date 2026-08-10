@@ -1,6 +1,7 @@
 """DEV-016A3b auditable legacy migration resolution tests."""
 
 import asyncio
+import json
 
 import pytest
 from sqlalchemy import select, update
@@ -11,6 +12,8 @@ from app.models.lore import (
     ElementSource,
     LegacyLoreResolution,
     LegacyLoreResolutionEvent,
+    ProjectLoreMigrationOperation,
+    SettingElement,
 )
 from app.models.project import Project, Worldview
 
@@ -186,6 +189,105 @@ async def test_type_resolution_is_audited_idempotent_and_changes_only_effective_
         stored_settings = read_legacy_object_list(worldview.special_settings)
         assert stored_settings.valid
         assert stored_settings.items[0]["description"] == "夜间不得飞行"
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_double_encoded_worldview_exits_legacy_mode_exactly_once_and_is_preserved(
+    client, auth_headers, monkeypatch
+):
+    from tests.conftest import TestSessionLocal
+
+    project_id = await _project(client, auth_headers)
+    await _worldview(client, auth_headers, project_id)
+    stored_values: dict[str, str] = {}
+    async with TestSessionLocal() as session:
+        worldview = await session.scalar(
+            select(Worldview).where(Worldview.project_id == project_id)
+        )
+        for field in (
+            "characters",
+            "geography",
+            "factions",
+            "power_system",
+            "history",
+            "conflicts",
+            "special_settings",
+            "parsed_elements",
+        ):
+            decoded = read_legacy_object_list(getattr(worldview, field))
+            assert decoded.valid
+            stored_values[field] = json.dumps(
+                json.dumps(decoded.items, ensure_ascii=False), ensure_ascii=False
+            )
+            setattr(worldview, field, stored_values[field])
+        await session.commit()
+
+    preview = await _preview(client, auth_headers, project_id)
+    special = next(
+        item for item in preview["items"] if item["legacy_category"] == "special_settings"
+    )
+    assert special["original_value"]["description"] == "夜间不得飞行"
+    decision = await client.post(
+        f"/api/projects/{project_id}/lore/migration-resolutions",
+        headers=auth_headers,
+        json=_decision_body(
+            preview,
+            special,
+            operation_key="resolution-double-encoded-0001",
+            reason_code="type_confirmation_required",
+            decision_code="confirm_type",
+            decision_payload={"type_key": "rule"},
+        ),
+    )
+    assert decision.status_code == 200, decision.text
+    ready = await _preview(client, auth_headers, project_id)
+    assert ready["overall_status"] == "ready", ready["issues"]
+    monkeypatch.setattr(app_settings, "LEGACY_JSON_WRITES_FROZEN", True)
+    body = {
+        "operation_key": "migration-double-encoded-0001",
+        "preview_schema_version": ready["preview_schema_version"],
+        "mapping_version": ready["mapping_version"],
+        "expected_source_checksum": ready["source_checksum"],
+        "expected_semantic_result_checksum": ready["semantic_result_checksum"],
+        "confirm_legacy_retained_no_automatic_rollback": True,
+    }
+
+    committed = await client.post(
+        f"/api/projects/{project_id}/lore/migration-operations",
+        headers=auth_headers,
+        json=body,
+    )
+    replay = await client.post(
+        f"/api/projects/{project_id}/lore/migration-operations",
+        headers=auth_headers,
+        json=body,
+    )
+
+    assert committed.status_code == 200, committed.text
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["operation_key"] == committed.json()["operation_key"]
+    async with TestSessionLocal() as session:
+        project = await session.scalar(select(Project).where(Project.id == project_id))
+        worldview = await session.scalar(
+            select(Worldview).where(Worldview.project_id == project_id)
+        )
+        elements = (
+            await session.scalars(
+                select(SettingElement).where(SettingElement.project_id == project_id)
+            )
+        ).all()
+        operations = (
+            await session.scalars(
+                select(ProjectLoreMigrationOperation).where(
+                    ProjectLoreMigrationOperation.project_id == project_id
+                )
+            )
+        ).all()
+        assert project.lore_storage_mode == "relational"
+        assert len(elements) == ready["counts"]["legacy_total"]
+        assert len(operations) == 1
+        for field, expected in stored_values.items():
+            assert getattr(worldview, field) == expected
 
 
 @pytest.mark.usefixtures("clean_db")

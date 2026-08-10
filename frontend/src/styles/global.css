@@ -1407,6 +1407,35 @@ input, select, textarea { font-family: inherit; }
   overflow-wrap: anywhere;
 }
 
+.lore-sources .lore-source-locator {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.lore-sources .lore-source-warning {
+  padding: 0.625rem;
+  border: 1px solid var(--gold-border);
+  border-radius: var(--r-sm);
+  background: var(--gold-light);
+  color: var(--text-1);
+}
+
+.lore-source-evidence {
+  margin-top: 0.625rem;
+}
+
+.lore-source-evidence pre {
+  max-height: 22rem;
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .lore-reasons ul {
   padding-left: 1.25rem;
   color: var(--red-dark);
