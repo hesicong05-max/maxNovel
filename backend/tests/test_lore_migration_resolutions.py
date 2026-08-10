@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select, update
 
 from app.config import settings as app_settings
+from app.core.legacy_json import read_legacy_object_list
 from app.models.lore import (
     ElementSource,
     LegacyLoreResolution,
@@ -182,7 +183,9 @@ async def test_type_resolution_is_audited_idempotent_and_changes_only_effective_
         worldview = await session.scalar(
             select(Worldview).where(Worldview.project_id == project_id)
         )
-        assert worldview.special_settings[0]["description"] == "夜间不得飞行"
+        stored_settings = read_legacy_object_list(worldview.special_settings)
+        assert stored_settings.valid
+        assert stored_settings.items[0]["description"] == "夜间不得飞行"
 
 
 @pytest.mark.usefixtures("clean_db")
