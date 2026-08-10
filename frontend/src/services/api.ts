@@ -66,6 +66,17 @@ import type {
   LoreReviewScanResponse,
   LoreTypesResponse,
 } from "@/types/lore";
+import type {
+  NovelPlan,
+  PlanningChapterCreateInput,
+  PlanningChapterUpdateInput,
+  PlanningMutationReceipt,
+  PlanningNodeStateInput,
+  PlanningOperationReceipt,
+  PlanningPartCreateInput,
+  PlanningPartUpdateInput,
+  PlanningReorderInput,
+} from "@/types/planning";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 
@@ -73,6 +84,8 @@ export class ApiError extends Error {
   readonly status: number;
   readonly detail: string;
   readonly code?: string;
+  readonly recommendedAction?: string;
+  readonly context: Record<string, unknown>;
   readonly maintenanceState?: string;
   readonly retryable: boolean;
   readonly retryAfterSeconds?: number;
@@ -87,6 +100,8 @@ export class ApiError extends Error {
     this.status = status;
     this.detail = data.detail;
     this.code = data.code;
+    this.recommendedAction = data.recommended_action;
+    this.context = data.context ?? {};
     this.maintenanceState = data.maintenance_state;
     this.retryable = data.retryable === true;
     this.retryAfterSeconds = data.retry_after_seconds;
@@ -131,6 +146,9 @@ async function responseApiError(response: Response): Promise<ApiError> {
         ? response.statusText
         : `HTTP ${response.status}`),
     code: optionalString(payload.code) || optionalString(nestedDetail.code),
+    recommended_action:
+      optionalString(payload.recommended_action) ||
+      optionalString(nestedDetail.recommended_action),
     maintenance_state: optionalString(payload.maintenance_state),
     retryable: payload.retryable === true || nestedDetail.retryable === true,
     retry_after_seconds:
@@ -145,6 +163,7 @@ async function responseApiError(response: Response): Promise<ApiError> {
       payload.reload_required === true || nestedDetail.reload_required === true,
     outcome_unknown:
       payload.outcome_unknown === true || nestedDetail.outcome_unknown === true,
+    context: nestedDetail,
   });
 }
 
@@ -574,6 +593,71 @@ export const api = {
   ) =>
     fetchJSON<LoreCandidateActionResponse>(
       `/projects/${projectId}/lore/extractions/${batchId}/candidates/${candidateId}/reject`,
+      { method: "POST", body: JSON.stringify(data) }
+    ),
+
+  // Relational chapter planning
+  getPlanning: (projectId: string, signal?: AbortSignal) =>
+    fetchJSON<NovelPlan>(`/projects/${encodeURIComponent(projectId)}/planning`, { signal }),
+  initializePlanning: (projectId: string) =>
+    fetchJSON<NovelPlan>(`/projects/${encodeURIComponent(projectId)}/planning`, {
+      method: "POST",
+    }),
+  getPlanningOperation: (
+    projectId: string,
+    operationKey: string,
+    signal?: AbortSignal
+  ) => fetchJSON<PlanningOperationReceipt>(
+    `/projects/${encodeURIComponent(projectId)}/planning/operations/by-key/${encodeURIComponent(operationKey)}`,
+    { signal }
+  ),
+  createPlanningPart: (projectId: string, data: PlanningPartCreateInput) =>
+    fetchJSON<PlanningMutationReceipt>(
+      `/projects/${encodeURIComponent(projectId)}/planning/parts`,
+      { method: "POST", body: JSON.stringify(data) }
+    ),
+  updatePlanningPart: (projectId: string, partId: string, data: PlanningPartUpdateInput) =>
+    fetchJSON<PlanningMutationReceipt>(
+      `/projects/${encodeURIComponent(projectId)}/planning/parts/${encodeURIComponent(partId)}`,
+      { method: "PATCH", body: JSON.stringify(data) }
+    ),
+  changePlanningPartState: (
+    projectId: string,
+    partId: string,
+    action: "archive" | "restore",
+    data: PlanningNodeStateInput
+  ) => fetchJSON<PlanningMutationReceipt>(
+    `/projects/${encodeURIComponent(projectId)}/planning/parts/${encodeURIComponent(partId)}/${action}`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
+  createPlanningChapter: (
+    projectId: string,
+    partId: string,
+    data: PlanningChapterCreateInput
+  ) => fetchJSON<PlanningMutationReceipt>(
+    `/projects/${encodeURIComponent(projectId)}/planning/parts/${encodeURIComponent(partId)}/chapters`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
+  updatePlanningChapter: (
+    projectId: string,
+    chapterId: string,
+    data: PlanningChapterUpdateInput
+  ) => fetchJSON<PlanningMutationReceipt>(
+    `/projects/${encodeURIComponent(projectId)}/planning/chapters/${encodeURIComponent(chapterId)}`,
+    { method: "PATCH", body: JSON.stringify(data) }
+  ),
+  changePlanningChapterState: (
+    projectId: string,
+    chapterId: string,
+    action: "archive" | "restore",
+    data: PlanningNodeStateInput
+  ) => fetchJSON<PlanningMutationReceipt>(
+    `/projects/${encodeURIComponent(projectId)}/planning/chapters/${encodeURIComponent(chapterId)}/${action}`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
+  reorderPlanningStructure: (projectId: string, data: PlanningReorderInput) =>
+    fetchJSON<PlanningMutationReceipt>(
+      `/projects/${encodeURIComponent(projectId)}/planning/structure/reorder`,
       { method: "POST", body: JSON.stringify(data) }
     ),
 

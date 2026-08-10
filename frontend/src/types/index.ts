@@ -152,6 +152,7 @@ export interface ProgressData {
 export interface ApiErrorData {
   detail: string;
   code?: string;
+  recommended_action?: string;
   maintenance_state?: string;
   retryable?: boolean;
   retry_after_seconds?: number;
@@ -159,6 +160,7 @@ export interface ApiErrorData {
   suggestion_id?: string;
   reload_required?: boolean;
   outcome_unknown?: boolean;
+  context?: Record<string, unknown>;
 }
 
 export interface StreamMessage {

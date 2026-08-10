@@ -289,6 +289,26 @@ describe("API - maintenance error contract", () => {
     });
   });
 
+  it("preserves planning recovery fields from nested errors", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        detail: {
+          code: "PLANNING_STRUCTURE_VERSION_CONFLICT",
+          message: "结构已更新。",
+          retryable: false,
+          recommended_action: "refresh_planning",
+          current_structure_version: 8,
+          issues: [{ code: "missing_chapter", node_id: "chapter-1" }],
+        },
+      }), { status: 409, headers: { "Content-Type": "application/json" } })
+    );
+    await expect(api.getPlanning("project-1")).rejects.toMatchObject({
+      code: "PLANNING_STRUCTURE_VERSION_CONFLICT",
+      recommendedAction: "refresh_planning",
+      context: expect.objectContaining({ current_structure_version: 8 }),
+    });
+  });
+
   it.each([
     ["chapter", () => api.streamChapter("project-1", 1)],
     ["batch", () => api.streamBatchGenerate("project-1")],
@@ -336,6 +356,46 @@ describe("API - maintenance error contract", () => {
 
     const generator = api.streamChapter("project-1", 1);
     await expect(generator.next()).rejects.toSatisfy(isProjectWriteFrozenError);
+  });
+});
+
+describe("API - relational planning", () => {
+  beforeEach(() => {
+    setAuthToken("valid-token");
+    vi.restoreAllMocks();
+  });
+
+  it("encodes path values and submits the complete reorder command", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ receipt_kind: "structure" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const body = {
+      operation_key: "planning:reorder:12345678",
+      expected_structure_version: 4,
+      parts: [{ part_id: "part-1", chapter_ids: ["chapter-1"] }],
+    };
+    await api.reorderPlanningStructure("project/one", body);
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/projects/project%2Fone/planning/structure/reorder",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(body) })
+    );
+  });
+
+  it("uses the original operation key for read-only result recovery", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ receipt_kind: "structure" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    await api.getPlanningOperation("project-1", "planning:part create:12345678");
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/projects/project-1/planning/operations/by-key/planning%3Apart%20create%3A12345678",
+      expect.any(Object)
+    );
   });
 });
 

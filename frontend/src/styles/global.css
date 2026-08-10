@@ -993,6 +993,12 @@ input, select, textarea { font-family: inherit; }
   margin-top: 0.875rem;
 }
 
+.project-planning-link {
+  display: inline-flex;
+  margin-top: 0.875rem;
+  margin-left: 0.625rem;
+}
+
 .project-planning-notice {
   margin-bottom: 1rem;
 }
@@ -1005,6 +1011,347 @@ input, select, textarea { font-family: inherit; }
 .project-planning-notice p {
   margin-bottom: 0.875rem;
   color: var(--text-2);
+}
+
+.project-planning-notice .btn {
+  min-height: 44px;
+}
+
+.project-planning-notice .btn:focus-visible {
+  outline: 2px solid var(--gold-dark);
+  outline-offset: 2px;
+}
+
+/* ═══ 章节规划工作区（DEV-017A4a） ═══ */
+.planning-page {
+  min-width: 0;
+}
+
+.planning-page .btn,
+.planning-page .btn-back,
+.project-lore-link,
+.project-planning-link {
+  min-height: 44px;
+}
+
+.planning-page .btn:focus-visible,
+.planning-page .btn-back:focus-visible,
+.project-lore-link:focus-visible,
+.project-planning-link:focus-visible {
+  outline: 2px solid var(--gold-dark);
+  outline-offset: 2px;
+}
+
+.planning-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.planning-live:empty {
+  display: none;
+}
+
+.planning-live,
+.planning-notice {
+  margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--gold-border);
+  border-radius: var(--r-md);
+  background: var(--gold-light);
+  color: var(--text-2);
+}
+
+.planning-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.planning-notice.is-error {
+  border-color: var(--danger-border, #e6b5b5);
+  background: var(--danger-light, #fff0f0);
+}
+
+.planning-notice__hint {
+  display: block;
+  margin-top: 0.25rem;
+}
+
+.planning-notice__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.planning-workspace {
+  display: grid;
+  grid-template-columns: minmax(288px, 320px) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.planning-workspace__tree,
+.planning-workspace__detail {
+  min-width: 0;
+  padding: 1rem;
+}
+
+.planning-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.planning-section-heading h2,
+.planning-workspace__detail h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.planning-tree ol,
+.planning-tree ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.planning-tree__part {
+  margin-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+}
+
+.planning-tree__part-row,
+.planning-tree__chapter {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.planning-tree__chapters {
+  margin-left: 1rem !important;
+  border-left: 1px solid var(--border);
+  padding-left: 0.5rem !important;
+}
+
+.planning-node {
+  min-width: 0;
+  min-height: 44px;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text-1);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.planning-node span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planning-node small {
+  color: var(--text-3);
+}
+
+.planning-node:hover,
+.planning-node.is-selected {
+  border-color: var(--gold-border);
+  background: var(--gold-light);
+}
+
+.planning-node:focus-visible,
+.planning-tree__moves button:focus-visible {
+  outline: 2px solid var(--gold-dark);
+  outline-offset: 2px;
+}
+
+.planning-tree__moves {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 0.25rem;
+}
+
+.planning-tree__moves button {
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--white);
+  cursor: pointer;
+}
+
+.planning-tree__moves button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.planning-tree__empty,
+.planning-scope-meta {
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.planning-blocker {
+  margin: 0 0 0.75rem;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.planning-tree__archived {
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+
+.planning-tree__archived summary {
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.planning-inline-form,
+.planning-editor,
+.planning-move {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.planning-inline-form label,
+.planning-editor label,
+.planning-move label {
+  display: grid;
+  gap: 0.375rem;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.planning-inline-form input,
+.planning-editor input,
+.planning-editor textarea,
+.planning-move select {
+  width: 100%;
+  min-height: 44px;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--white);
+  color: var(--text-1);
+  font: inherit;
+}
+
+.planning-editor textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.planning-inline-form > div {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.planning-create-chapter,
+.planning-move,
+.planning-danger-zone {
+  margin-top: 1.25rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+
+.planning-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.planning-summary > div {
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-soft);
+}
+
+.planning-summary strong,
+.planning-summary span {
+  display: block;
+}
+
+.planning-summary strong {
+  font-size: 24px;
+}
+
+.planning-mobile-back {
+  display: none;
+  margin-bottom: 1rem;
+}
+
+@media (max-width: 640px) {
+  .project-planning-link {
+    margin-left: 0;
+  }
+
+  .planning-header,
+  .planning-notice {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .planning-header .btn,
+  .planning-notice .btn {
+    width: 100%;
+  }
+
+  .planning-workspace {
+    display: block;
+  }
+
+  .planning-workspace__detail {
+    display: none;
+  }
+
+  .planning-workspace.show-detail .planning-workspace__tree {
+    display: none;
+  }
+
+  .planning-workspace.show-detail .planning-workspace__detail,
+  .planning-mobile-back {
+    display: block;
+  }
+
+  .planning-page input,
+  .planning-page textarea,
+  .planning-page select {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 390px) {
+  .planning-workspace__tree,
+  .planning-workspace__detail {
+    padding: 0.75rem;
+  }
+
+  .planning-section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .planning-tree__chapters {
+    margin-left: 0.5rem !important;
+  }
 }
 
 .lore-page {
