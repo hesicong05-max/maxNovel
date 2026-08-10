@@ -89,6 +89,7 @@ from app.models.lore import (
     SettingType,
 )
 from app.models.project import Project, Worldview, _utcnow
+from app.models.planning import PlanningLoreAssignment
 from app.schemas.lore import (
     LegacyLoreResolutionInput,
     LegacyLoreResolutionResponse,
@@ -496,6 +497,7 @@ async def _list_relational_elements(
 
     source_labels: dict[str, str] = {}
     relation_counts: Counter[str] = Counter()
+    binding_counts: Counter[str] = Counter()
     if element_ids:
         source_rows = await db.execute(
             select(
@@ -530,6 +532,19 @@ async def _list_relational_elements(
                 relation_counts[source_id] += 1
             if target_id in element_ids:
                 relation_counts[target_id] += 1
+        binding_rows = await db.execute(
+            select(
+                PlanningLoreAssignment.element_id,
+                func.count(PlanningLoreAssignment.id),
+            )
+            .where(
+                PlanningLoreAssignment.project_id == project_id,
+                PlanningLoreAssignment.element_id.in_(element_ids),
+                PlanningLoreAssignment.status == "active",
+            )
+            .group_by(PlanningLoreAssignment.element_id)
+        )
+        binding_counts.update(dict(binding_rows.all()))
 
     items = [
         LoreElementListItem(
@@ -550,7 +565,7 @@ async def _list_relational_elements(
             lock_version=element.lock_version,
             updated_at=element.updated_at,
             relation_count=relation_counts[element.id],
-            binding_count=0,
+            binding_count=binding_counts[element.id],
         )
         for element, setting_type in page
     ]
@@ -1511,6 +1526,13 @@ async def _build_element_response(
             ),
         )
     )
+    binding_count_result = await db.scalar(
+        select(func.count()).select_from(PlanningLoreAssignment).where(
+            PlanningLoreAssignment.project_id == element.project_id,
+            PlanningLoreAssignment.element_id == element.id,
+            PlanningLoreAssignment.status == "active",
+        )
+    )
 
     return LoreElementResponse(
         id=element.id,
@@ -1553,7 +1575,7 @@ async def _build_element_response(
             for src in sources
         ],
         relation_count=relation_count_result or 0,
-        binding_count=0,
+        binding_count=binding_count_result or 0,
         created_at=element.created_at,
         updated_at=element.updated_at,
     )

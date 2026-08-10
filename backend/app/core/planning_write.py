@@ -24,7 +24,10 @@ from app.models.planning import (
     PlanningPart,
 )
 from app.models.project import Chapter, Outline, Project, StoryMemory
-from app.schemas.planning import PlanningMutationReceipt
+from app.schemas.planning import (
+    PlanningAssignmentMutationReceipt,
+    PlanningMutationReceipt,
+)
 
 
 _FINGERPRINT_VERSION = "planning-structure-v1"
@@ -80,7 +83,7 @@ def _memory_has_content(memory: StoryMemory | None) -> bool:
     return False
 
 
-def _fingerprint(
+def operation_fingerprint(
     project_id: str,
     operation_type: str,
     target_id: str | None,
@@ -131,9 +134,12 @@ def replay_operation(
             recommended_action="retry_with_new_operation_key",
         )
     try:
-        receipt = PlanningMutationReceipt.model_validate(
-            operation.result_snapshot
+        receipt_model = (
+            PlanningAssignmentMutationReceipt
+            if operation.operation_type.startswith("assignment_")
+            else PlanningMutationReceipt
         )
+        receipt = receipt_model.model_validate(operation.result_snapshot)
     except ValidationError as exc:
         raise PlanningWriteError(
             "PLANNING_OPERATION_CORRUPT",
@@ -191,7 +197,7 @@ async def _assert_compatible_project(
         )
 
 
-async def _lock_context(
+async def lock_planning_context(
     db: AsyncSession,
     project_id: str,
     user_id: str,
@@ -250,7 +256,7 @@ async def execute_operation(
     fingerprint_payload: dict[str, Any],
     mutate: Mutation,
 ) -> dict[str, Any]:
-    request_fingerprint = _fingerprint(
+    request_fingerprint = operation_fingerprint(
         project_id, operation_type, target_id, fingerprint_payload
     )
     existing = await find_operation(db, project_id, user_id, operation_key)
@@ -259,7 +265,7 @@ async def execute_operation(
 
     try:
         ensure_project_writes_available()
-        _, plan = await _lock_context(db, project_id, user_id)
+        _, plan = await lock_planning_context(db, project_id, user_id)
         existing = await find_operation(db, project_id, user_id, operation_key)
         if existing is not None:
             replayed = replay_operation(existing, request_fingerprint)
