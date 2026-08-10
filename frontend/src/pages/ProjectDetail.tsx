@@ -119,6 +119,9 @@ export default function ProjectDetail() {
         <Link className="btn btn-secondary project-lore-link" to={`/project/${project.id}/lore`}>
           打开设定仓库
         </Link>
+        <Link className="btn btn-secondary project-planning-link" to={`/project/${project.id}/plan/chapters`}>
+          打开章节规划
+        </Link>
       </div>
 
       {/* Workflow steps */}
@@ -140,10 +143,10 @@ export default function ProjectDetail() {
 
       {!project.has_outline && (
         <div className="card project-planning-notice" role="status">
-          <h2>先完善设定仓库</h2>
-          <p>篇章与章节规划将在第二阶段开放；现阶段请先完善世界观和独立设定模块。</p>
-          <Link className="btn btn-primary" to={`/project/${project.id}/lore`}>
-            打开设定仓库
+          <h2>建立篇章与章节结构</h2>
+          <p>设定仓库准备完成后，可以自行创建篇章、章节并安全调整顺序；系统不会生成或覆盖旧大纲。</p>
+          <Link className="btn btn-primary" to={`/project/${project.id}/plan/chapters`}>
+            打开章节规划
           </Link>
         </div>
       )}

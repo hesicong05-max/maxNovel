@@ -6,6 +6,7 @@ import ProjectList from "@/pages/ProjectList";
 import NewProject from "@/pages/NewProject";
 import ProjectDetail from "@/pages/ProjectDetail";
 import LoreRepositoryPage from "@/pages/LoreRepositoryPage";
+import ChapterPlanningPage from "@/pages/ChapterPlanningPage";
 import Settings from "@/pages/Settings";
 import Community from "@/pages/Community";
 import CommunityNovelDetail from "@/pages/CommunityNovelDetail";
@@ -96,6 +97,7 @@ function AppRoutes() {
                   <Route path="/new" element={<NewProject />} />
                   <Route path="/project/:id" element={<ProjectDetail />} />
                   <Route path="/project/:id/lore" element={<LoreRepositoryPage />} />
+                  <Route path="/project/:id/plan/chapters" element={<ChapterPlanningPage />} />
                   <Route
                     path="/settings"
                     element={

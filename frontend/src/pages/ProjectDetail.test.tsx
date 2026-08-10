@@ -59,6 +59,7 @@ function renderPage(project: Project, path = `/project/${project.id}`) {
       <Routes>
         <Route path="/project/:id" element={<ProjectDetail />} />
         <Route path="/project/:id/lore" element={<div>设定仓库页面</div>} />
+        <Route path="/project/:id/plan/chapters" element={<div>章节规划页面</div>} />
       </Routes>
     </MemoryRouter>
   );
@@ -73,11 +74,15 @@ describe("ProjectDetail outline retirement", () => {
   it("routes a project without legacy outline to worldview and lore repository", async () => {
     renderPage(baseProject);
 
-    expect(await screen.findByRole("heading", { name: "先完善设定仓库" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "建立篇章与章节结构" })).toBeInTheDocument();
     expect(screen.getByLabelText("世界观编辑器")).toBeInTheDocument();
     expect(screen.queryByLabelText("章节写作器")).not.toBeInTheDocument();
     expect(screen.queryByText("大纲")).not.toBeInTheDocument();
-    expect(screen.getByText(/章节规划将在第二阶段开放/)).toBeInTheDocument();
+    expect(screen.getByText(/可以自行创建篇章、章节并安全调整顺序/)).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "打开章节规划" })[0]).toHaveAttribute(
+      "href",
+      "/project/project-1/plan/chapters"
+    );
 
     await userEvent.click(screen.getByText("测试打开设定仓库"));
     expect(await screen.findByText("设定仓库页面")).toBeInTheDocument();
