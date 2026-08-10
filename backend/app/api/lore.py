@@ -37,6 +37,13 @@ from app.core.lore_migration_commit import (
     commit_lore_migration,
     find_migration_operation,
 )
+from app.core.lore_migration_resolution import (
+    LegacyLoreResolutionError,
+    decide_legacy_lore_resolution,
+    list_legacy_lore_resolutions,
+    revoke_legacy_lore_resolution,
+)
+from app.core.maintenance import require_project_writes_available
 from app.core.lore_merge_commit import (
     build_merge_operation_response,
     commit_lore_merge,
@@ -76,12 +83,17 @@ from app.models.lore import (
     LoreReviewSuggestionCreateOperation,
     LoreReviewSuggestionEvent,
     LegacyElementMap,
+    LegacyLoreResolution,
     ProjectLoreMigration,
     SettingElement,
     SettingType,
 )
 from app.models.project import Project, Worldview, _utcnow
 from app.schemas.lore import (
+    LegacyLoreResolutionInput,
+    LegacyLoreResolutionResponse,
+    LegacyLoreResolutionRevokeInput,
+    LegacyLoreResolutionsResponse,
     LoreElementCreate,
     LoreElementCreateResponse,
     LoreElementDetail,
@@ -236,6 +248,26 @@ def _filter_signature(
     return hashlib.sha256(payload).hexdigest()[:16]
 
 
+def _migration_resolution_snapshot(rows: list[LegacyLoreResolution]) -> str:
+    payload = [
+        [
+            row.id,
+            row.source_checksum,
+            row.item_fingerprint,
+            row.group_fingerprint,
+            row.reason_code,
+            row.decision_code,
+            row.decision_payload,
+            row.status,
+            row.lock_version,
+        ]
+        for row in rows
+    ]
+    return hashlib.sha256(json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()).hexdigest()
+
+
 async def _load_projection(
     project_id: str,
     db: AsyncSession,
@@ -276,6 +308,12 @@ async def _build_read_only_migration_preview(
                 ProjectLoreMigration.project_id == project_id
             )
         ) or 0)
+        resolutions = list((await snapshot_db.scalars(
+            select(LegacyLoreResolution)
+            .where(LegacyLoreResolution.project_id == project_id)
+            .order_by(LegacyLoreResolution.created_at, LegacyLoreResolution.id)
+        )).all())
+        resolution_snapshot = _migration_resolution_snapshot(resolutions)
         preview = build_migration_preview(
             project_id,
             project.lore_storage_mode or "legacy",
@@ -284,6 +322,7 @@ async def _build_read_only_migration_preview(
             existing_legacy_map_count=existing_legacy_map_count,
             existing_migration_count=existing_migration_count,
             commit_enabled=settings.LEGACY_JSON_WRITES_FROZEN,
+            resolutions=resolutions,
         )
 
     async with database_module.async_session() as verify_db:
@@ -291,7 +330,15 @@ async def _build_read_only_migration_preview(
             select(Worldview).where(Worldview.project_id == project_id)
         )
         latest_checksum = migration_preview_source_checksum(latest_worldview)
-    if latest_checksum != preview["source_checksum"]:
+        latest_resolutions = list((await verify_db.scalars(
+            select(LegacyLoreResolution)
+            .where(LegacyLoreResolution.project_id == project_id)
+            .order_by(LegacyLoreResolution.created_at, LegacyLoreResolution.id)
+        )).all())
+    if (
+        latest_checksum != preview["source_checksum"]
+        or _migration_resolution_snapshot(latest_resolutions) != resolution_snapshot
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -685,6 +732,65 @@ async def get_lore_migration_preview(
 ):
     """Return a versioned dry-run report; never create or update Lore rows."""
     return await _build_read_only_migration_preview(project_id, current_user)
+
+
+@router.get(
+    "/migration-resolutions",
+    response_model=LegacyLoreResolutionsResponse,
+)
+async def get_lore_migration_resolutions(
+    project_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    try:
+        items = await list_legacy_lore_resolutions(
+            db, project_id, current_user.id
+        )
+    except LegacyLoreResolutionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return LegacyLoreResolutionsResponse(items=items)
+
+
+@router.post(
+    "/migration-resolutions",
+    response_model=LegacyLoreResolutionResponse,
+    dependencies=[Depends(require_project_writes_available)],
+)
+async def decide_lore_migration_resolution(
+    project_id: str,
+    body: LegacyLoreResolutionInput,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    try:
+        return await decide_legacy_lore_resolution(
+            db, project_id, current_user.id, body
+        )
+    except LegacyLoreResolutionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post(
+    "/migration-resolutions/{resolution_id}/revoke",
+    response_model=LegacyLoreResolutionResponse,
+    dependencies=[Depends(require_project_writes_available)],
+)
+async def revoke_lore_migration_resolution(
+    project_id: str,
+    resolution_id: Annotated[
+        str, Path(min_length=32, max_length=32, pattern=r"^[a-f0-9]{32}$")
+    ],
+    body: LegacyLoreResolutionRevokeInput,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    try:
+        return await revoke_legacy_lore_resolution(
+            db, project_id, current_user.id, resolution_id, body
+        )
+    except LegacyLoreResolutionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 
 @router.post(

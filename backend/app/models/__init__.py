@@ -20,6 +20,8 @@ from app.models.lore import (  # noqa: F401
     ElementStateEvent,
     ElementVersion,
     LegacyElementMap,
+    LegacyLoreResolution,
+    LegacyLoreResolutionEvent,
     LoreElementCreateOperation,
     LoreMergeOperation,
     LoreMergeRelationAction,

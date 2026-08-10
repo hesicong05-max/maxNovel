@@ -5,6 +5,7 @@ import type {
   LoreMigrationPreviewResponse,
 } from "@/types/lore";
 import LoreMigrationUpgrade from "./LoreMigrationUpgrade";
+import MigrationDecisionPanel from "./MigrationDecisionPanel";
 
 type Filter = "all" | LoreMigrationPreviewClassification;
 
@@ -28,12 +29,27 @@ const CATEGORY: Record<string, string> = {
 };
 
 const TYPE: Record<string, string> = {
+  world: "世界观",
   character: "角色",
   location: "地点",
+  scene: "场景",
   faction: "阵营",
+  item: "物品",
   ability_system: "能力体系",
   historical_event: "历史事件",
   conflict: "冲突",
+  event: "事件",
+  foreshadow: "伏笔",
+  rule: "规则与限制",
+  race: "种族",
+  social_institution: "社会制度",
+  other: "其他",
+};
+
+const SOURCE: Record<string, string> = {
+  manual: "手动创建",
+  imported: "文档导入",
+  hybrid: "文档导入与手动补充",
 };
 
 const REASON: Record<string, string> = {
@@ -114,7 +130,7 @@ export default function LoreMigrationPreview({
   }, [projectId, reloadToken]);
 
   const visibleItems = useMemo(() => (
-    report?.items.filter((item) => filter === "all" || item.classification === filter) ?? []
+    report?.items.filter((item) => filter === "all" || (item.effective_classification ?? item.classification) === filter) ?? []
   ), [report, filter]);
 
   const filters: Array<[Filter, string, number]> = report ? [
@@ -182,23 +198,35 @@ export default function LoreMigrationPreview({
           ) : visibleItems.length === 0 ? (
             <div className="lore-empty">当前筛选下没有旧资料。</div>
           ) : visibleItems.map((item) => (
-            <details className={`lore-migration-preview__item is-${item.classification}`} key={item.planned_element_id}>
+            <details className={`lore-migration-preview__item is-${item.effective_classification ?? item.classification}`} key={item.planned_element_id}>
               <summary>
                 <span><strong>{item.name || "未命名资料"}</strong><small>旧世界观 › {CATEGORY[item.legacy_category] ?? item.legacy_category} › 第 {item.legacy_index + 1} 项</small></span>
-                <span className="lore-badge lore-badge--muted">{STATUS[item.classification]}</span>
+                <span className="lore-badge lore-badge--muted">{STATUS[item.effective_classification ?? item.classification]}</span>
               </summary>
               <div className="lore-migration-preview__detail">
                 <dl>
-                  <div><dt>建议模块类型</dt><dd>{item.proposed_type_key ? TYPE[item.proposed_type_key] ?? item.proposed_type_key : "需要作者确认"}</dd></div>
-                  <div><dt>资料来源</dt><dd>{item.source_label ?? "待确认"}</dd></div>
+                  <div><dt>迁移后模块类型</dt><dd>{(() => {
+                    const typeKey = item.effective_proposed_type_key ?? item.proposed_type_key;
+                    if (!typeKey) return "需要作者确认";
+                    return TYPE[typeKey] ?? "未识别类型，请重新预检";
+                  })()}</dd></div>
+                  <div><dt>资料来源</dt><dd>{(() => {
+                    const sourceKind = item.effective_source_kind ?? item.source_kind;
+                    if (!sourceKind) return "待确认";
+                    const label = SOURCE[sourceKind];
+                    if (!label) return "未识别来源，请重新预检";
+                    return item.effective_source_kind && item.effective_source_kind !== item.source_kind
+                      ? `${label}（作者已确认）`
+                      : label;
+                  })()}</dd></div>
                   <div><dt>原文定位</dt><dd>{item.exact_excerpt_available ? "已建立精确段落定位" : "未建立原文段落定位"}</dd></div>
                 </dl>
-                {item.reason_codes.length > 0 && <div className="lore-migration-preview__reasons"><strong>需要处理</strong><ul>{item.reason_codes.map((reason) => <li key={reason}>{REASON[reason] ?? reason}</li>)}</ul></div>}
+                {(item.effective_reason_codes ?? item.reason_codes).length > 0 && <div className="lore-migration-preview__reasons"><strong>仍需处理</strong><ul>{(item.effective_reason_codes ?? item.reason_codes).map((reason) => <li key={reason}>{REASON[reason] ?? reason}</li>)}</ul></div>}
                 <details><summary>查看原始结构化内容</summary><pre>{JSON.stringify(item.original_value, null, 2)}</pre></details>
-                <details><summary>系统计划如何整理（仅预览）</summary><pre>{JSON.stringify(item.mapped_fields, null, 2)}</pre></details>
+                <details><summary>系统计划如何整理（仅预览）</summary><pre>{JSON.stringify(item.effective_mapped_fields ?? item.mapped_fields, null, 2)}</pre></details>
                 {item.reason_codes.some((reason) => CONTENT_EDITABLE_REASONS.has(reason)) && (
                   <button
-                    className="btn btn-primary"
+                    className="btn btn-secondary"
                     type="button"
                     onClick={() => onEditItem(
                       item.legacy_category,
@@ -210,6 +238,13 @@ export default function LoreMigrationPreview({
                     去修改这项原资料
                   </button>
                 )}
+                <MigrationDecisionPanel
+                  projectId={projectId}
+                  userId={userId}
+                  report={report}
+                  item={item}
+                  onChanged={() => setReloadToken((value) => value + 1)}
+                />
               </div>
             </details>
           ))}

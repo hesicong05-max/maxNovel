@@ -405,6 +405,118 @@ class ProjectLoreMigrationOperation(Base):
     completed_at = Column(DateTime, nullable=True)
 
 
+class LegacyLoreResolution(Base):
+    """Current author decision for one immutable legacy-preview issue."""
+
+    __tablename__ = "legacy_lore_resolutions"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "id", name="uq_legacy_lore_resolution_project_id_id"
+        ),
+        UniqueConstraint(
+            "project_id",
+            "preview_schema_version",
+            "mapping_version",
+            "source_checksum",
+            "item_fingerprint",
+            "reason_code",
+            name="uq_legacy_lore_resolution_issue",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'revoked')",
+            name="ck_legacy_lore_resolution_status",
+        ),
+        Index(
+            "ix_legacy_lore_resolutions_project_updated",
+            "project_id",
+            "updated_at",
+            "id",
+        ),
+    )
+
+    id = Column(String(32), primary_key=True, default=gen_id)
+    project_id = Column(
+        String(32), ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    source_worldview_id = Column(
+        String(32), ForeignKey("worldviews.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    preview_schema_version = Column(Integer, nullable=False)
+    mapping_version = Column(Integer, nullable=False)
+    source_checksum = Column(String(64), nullable=False)
+    semantic_result_checksum = Column(String(64), nullable=False)
+    item_fingerprint = Column(String(64), nullable=False)
+    group_fingerprint = Column(String(64), nullable=True)
+    legacy_category = Column(String(50), nullable=False)
+    legacy_index = Column(Integer, nullable=False)
+    reason_code = Column(String(80), nullable=False)
+    decision_code = Column(String(80), nullable=False)
+    decision_payload = Column(JSON, nullable=False, default=dict)
+    status = Column(String(20), nullable=False, default="active")
+    lock_version = Column(Integer, nullable=False, default=1)
+    created_by = Column(
+        String(32), ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    updated_by = Column(
+        String(32), ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+
+class LegacyLoreResolutionEvent(Base):
+    """Append-only audit event and idempotency receipt for a resolution write."""
+
+    __tablename__ = "legacy_lore_resolution_events"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "resolution_id"],
+            ["legacy_lore_resolutions.project_id", "legacy_lore_resolutions.id"],
+            name="fk_legacy_lore_resolution_event_resolution",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "project_id", "performed_by", "operation_key",
+            name="uq_legacy_lore_resolution_event_operation",
+        ),
+        CheckConstraint(
+            "action IN ('decide', 'replace', 'revoke')",
+            name="ck_legacy_lore_resolution_event_action",
+        ),
+        Index(
+            "ix_legacy_lore_resolution_events_resolution_created",
+            "resolution_id",
+            "created_at",
+            "id",
+        ),
+    )
+
+    id = Column(String(32), primary_key=True, default=gen_id)
+    project_id = Column(
+        String(32), ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    resolution_id = Column(String(32), nullable=False, index=True)
+    performed_by = Column(
+        String(32), ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False, index=True,
+    )
+    operation_key = Column(String(128), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    action = Column(String(20), nullable=False)
+    previous_status = Column(String(20), nullable=True)
+    new_status = Column(String(20), nullable=False)
+    previous_decision = Column(JSON, nullable=False, default=dict)
+    new_decision = Column(JSON, nullable=False, default=dict)
+    previous_lock_version = Column(Integer, nullable=False)
+    new_lock_version = Column(Integer, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+
 class LegacyElementMap(Base):
     __tablename__ = "legacy_element_maps"
     __table_args__ = (

@@ -858,6 +858,51 @@ describe("API - Lore migration operations", () => {
       outcomeUnknown: true,
     });
   });
+
+  it("creates, lists, and revokes auditable migration resolutions", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    ));
+    const input = {
+      operation_key: "migration-resolution:key-0001",
+      preview_schema_version: 1,
+      mapping_version: 1,
+      expected_source_checksum: "a".repeat(64),
+      expected_semantic_result_checksum: "b".repeat(64),
+      item_fingerprint: "c".repeat(64),
+      group_fingerprint: null,
+      legacy_category: "special_settings",
+      legacy_index: 0,
+      reason_code: "type_confirmation_required",
+      decision_code: "confirm_type",
+      decision_payload: { type_key: "rule" },
+      expected_resolution_version: null,
+    };
+
+    await api.getLoreMigrationResolutions("project-1");
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "/api/projects/project-1/lore/migration-resolutions",
+      expect.any(Object)
+    );
+    await api.decideLoreMigrationResolution("project-1", input);
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "/api/projects/project-1/lore/migration-resolutions",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(input) })
+    );
+    const revoke = {
+      operation_key: "migration-resolution:revoke-0001",
+      expected_source_checksum: "a".repeat(64),
+      expected_resolution_version: 1,
+    };
+    await api.revokeLoreMigrationResolution("project-1", "d".repeat(32), revoke);
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      `/api/projects/project-1/lore/migration-resolutions/${"d".repeat(32)}/revoke`,
+      expect.objectContaining({ method: "POST", body: JSON.stringify(revoke) })
+    );
+  });
 });
 
 describe("API - Worldview optimistic save", () => {

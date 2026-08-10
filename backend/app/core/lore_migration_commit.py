@@ -40,6 +40,7 @@ from app.models.lore import (
     ElementStateEvent,
     ElementVersion,
     LegacyElementMap,
+    LegacyLoreResolution,
     ProjectLoreMigration,
     ProjectLoreMigrationOperation,
     SettingElement,
@@ -144,6 +145,34 @@ def _field_schema(type_key: str) -> list[dict[str, Any]]:
     return [dict(field) for field in TYPE_FIELD_SCHEMAS[type_key]]
 
 
+def _item_type_key(item: Mapping[str, Any]) -> str:
+    return str(item.get("effective_proposed_type_key") or item.get("proposed_type_key"))
+
+
+def _item_source_kind(item: Mapping[str, Any]) -> str:
+    return str(item.get("effective_source_kind") or item.get("source_kind") or "manual")
+
+
+def _item_locator(item: Mapping[str, Any], preview: Mapping[str, Any]) -> dict[str, Any]:
+    author_confirmed_unlocated = any(
+        state.get("reason_code") == "raw_text_excerpt_unverified"
+        and state.get("applies") is True
+        for state in item.get("resolution_states", [])
+    )
+    locator = {
+        "legacy_category": item["legacy_category"],
+        "legacy_index": item["legacy_index"],
+        "source_checksum": preview["source_checksum"],
+    }
+    resolution_ids = list(item.get("applied_resolution_ids", []))
+    if resolution_ids:
+        locator["resolution_ids"] = resolution_ids
+    if author_confirmed_unlocated:
+        locator["exact_excerpt_available"] = False
+        locator["author_confirmed_unlocated"] = True
+    return locator
+
+
 def _field_states(type_key: str, payload: Mapping[str, Any]) -> dict[str, str]:
     definitions = {field["key"]: field for field in TYPE_FIELD_SCHEMAS[type_key]}
     if set(payload) - set(definitions):
@@ -179,13 +208,13 @@ def _manifest(
     operation_key: str,
     preview: Mapping[str, Any],
 ) -> dict[str, Any]:
-    type_keys = sorted({str(item["proposed_type_key"]) for item in preview["items"]})
+    type_keys = sorted({_item_type_key(item) for item in preview["items"]})
     items: list[dict[str, Any]] = []
     for item in preview["items"]:
         element_id = str(item["planned_element_id"])
         items.append({
             "element_id": element_id,
-            "type_key": str(item["proposed_type_key"]),
+            "type_key": _item_type_key(item),
             "legacy_category": str(item["legacy_category"]),
             "legacy_index": int(item["legacy_index"]),
             "legacy_id": item.get("legacy_id"),
@@ -205,11 +234,24 @@ def _manifest(
     }
 
 
-def _preview_for_operation(
+async def _preview_for_operation(
+    session: AsyncSession,
     project_id: str,
     worldview: Worldview,
+    *,
+    lock_resolutions: bool = False,
 ) -> dict[str, Any]:
-    return build_migration_preview(project_id, "legacy", worldview)
+    statement = (
+        select(LegacyLoreResolution)
+        .where(LegacyLoreResolution.project_id == project_id)
+        .order_by(LegacyLoreResolution.created_at, LegacyLoreResolution.id)
+    )
+    if lock_resolutions:
+        statement = statement.with_for_update()
+    resolutions = list((await session.scalars(statement)).all())
+    return build_migration_preview(
+        project_id, "legacy", worldview, resolutions=resolutions
+    )
 
 
 def _validate_frozen_preview(
@@ -378,8 +420,8 @@ async def _materialize(
     prepared: list[dict[str, Any]] = []
     for item in preview["items"]:
         ids = manifest_by_element[item["planned_element_id"]]
-        type_key = str(item["proposed_type_key"])
-        payload = dict(item["mapped_fields"])
+        type_key = _item_type_key(item)
+        payload = dict(item.get("effective_mapped_fields", item["mapped_fields"]))
         states = _field_states(type_key, payload)
         session.add(SettingElement(
             id=item["planned_element_id"],
@@ -415,13 +457,9 @@ async def _materialize(
             id=row["ids"]["source_id"],
             project_id=project.id,
             element_id=item["planned_element_id"],
-            source_kind=item["source_kind"],
+            source_kind=_item_source_kind(item),
             source_ref=f"worldviews:{worldview.id}",
-            locator={
-                "legacy_category": item["legacy_category"],
-                "legacy_index": item["legacy_index"],
-                "source_checksum": preview["source_checksum"],
-            },
+            locator=_item_locator(item, preview),
             excerpt=row["excerpt"],
             excerpt_hash=hashlib.sha256(row["excerpt"].encode()).hexdigest(),
             confirmation_status="provided",
@@ -557,7 +595,7 @@ async def _authoritative_snapshot(
 
     for item in preview["items"]:
         element_id = item["planned_element_id"]
-        type_key = str(item["proposed_type_key"])
+        type_key = _item_type_key(item)
         setting_type = type_by_key.get(type_key)
         ids = manifest_by_element[element_id]
         revision = revision_by_id.get(revision_id_by_key[type_key])
@@ -566,7 +604,7 @@ async def _authoritative_snapshot(
         version = version_by_element.get(element_id)
         mapping = map_by_position.get((item["legacy_category"], item["legacy_index"]))
         event = event_by_element.get(element_id)
-        payload = dict(item["mapped_fields"])
+        payload = dict(item.get("effective_mapped_fields", item["mapped_fields"]))
         states = _field_states(type_key, payload)
         excerpt = _canonical_json(item["original_value"])
         if (
@@ -593,16 +631,12 @@ async def _authoritative_snapshot(
             or source is None
             or source.id != ids["source_id"]
             or source.source_ref != f"worldviews:{worldview.id}"
-            or source.source_kind != item["source_kind"]
+            or source.source_kind != _item_source_kind(item)
             or source.excerpt != excerpt
             or source.excerpt_hash != hashlib.sha256(excerpt.encode()).hexdigest()
             or source.confirmation_status != "provided"
             or source.is_primary is not True
-            or source.locator != {
-                "legacy_category": item["legacy_category"],
-                "legacy_index": item["legacy_index"],
-                "source_checksum": preview["source_checksum"],
-            }
+            or source.locator != _item_locator(item, preview)
             or version is None
             or version.id != ids["version_id"]
             or version.version_no != 1
@@ -707,7 +741,9 @@ async def _compensate_exact_materialization(
                 != operation.source_checksum
             ):
                 return None
-            preview = _preview_for_operation(project_id, worldview)
+            preview = await _preview_for_operation(
+                session, project_id, worldview, lock_resolutions=True
+            )
             body = LoreMigrationCommitInput(
                 operation_key=operation.operation_key,
                 preview_schema_version=operation.preview_schema_version,
@@ -820,6 +856,12 @@ async def _prepare_or_resume(
             elements, map_count, migration_count, type_count = (
                 await _existing_business_state(session, project_id)
             )
+            resolutions = list((await session.scalars(
+                select(LegacyLoreResolution)
+                .where(LegacyLoreResolution.project_id == project_id)
+                .order_by(LegacyLoreResolution.created_at, LegacyLoreResolution.id)
+                .with_for_update()
+            )).all())
             preview = build_migration_preview(
                 project_id,
                 "legacy",
@@ -827,6 +869,7 @@ async def _prepare_or_resume(
                 existing_elements=elements,
                 existing_legacy_map_count=map_count,
                 existing_migration_count=migration_count,
+                resolutions=resolutions,
             )
             if type_count:
                 raise _error(
@@ -851,7 +894,7 @@ async def _prepare_or_resume(
                 counts={
                     "contract_version": MIGRATION_COMMIT_CONTRACT_VERSION,
                     "legacy_total": len(preview["items"]),
-                    "types": len({item["proposed_type_key"] for item in preview["items"]}),
+                    "types": len({_item_type_key(item) for item in preview["items"]}),
                     "elements": len(preview["items"]),
                     "sources": len(preview["items"]),
                     "legacy_rows_deleted": 0,
@@ -954,7 +997,9 @@ async def _verify_and_finalize(
                 status_code=500,
                 outcome_unknown=True,
             )
-        preview = _preview_for_operation(project_id, worldview)
+        preview = await _preview_for_operation(
+            verify_session, project_id, worldview
+        )
         _validate_frozen_preview(project_id, body, preview)
         snapshot = await _authoritative_snapshot(
             verify_session, project, worldview, operation, preview
@@ -1018,7 +1063,9 @@ async def _verify_and_finalize(
                     status_code=500,
                     outcome_unknown=True,
                 )
-            preview = _preview_for_operation(project_id, worldview)
+            preview = await _preview_for_operation(
+                final_session, project_id, worldview, lock_resolutions=True
+            )
             _validate_frozen_preview(project_id, body, preview)
             snapshot = await _authoritative_snapshot(
                 final_session, project, worldview, operation, preview

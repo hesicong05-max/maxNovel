@@ -40,6 +40,20 @@ class LoreMigrationPreviewCounts(BaseModel):
     blocked: int
 
 
+class LegacyLoreResolutionSummary(BaseModel):
+    id: str
+    legacy_category: str
+    legacy_index: int
+    reason_code: str
+    decision_code: str
+    decision_payload: dict[str, Any] = Field(default_factory=dict)
+    status: Literal["active", "revoked", "expired"]
+    lock_version: int
+    created_at: datetime
+    updated_at: datetime
+    applies: bool = False
+
+
 class LoreMigrationPreviewItem(BaseModel):
     legacy_category: str
     legacy_index: int
@@ -61,6 +75,18 @@ class LoreMigrationPreviewItem(BaseModel):
     original_value: Any
     mapped_fields: dict[str, Any] = Field(default_factory=dict)
     unmapped_fields: list[str] = Field(default_factory=list)
+    original_group_fingerprint: str | None = None
+    group_fingerprint: str | None = None
+    effective_classification: Literal[
+        "mappable", "review_required", "possible_conflict", "blocked"
+    ]
+    effective_proposed_type_key: str | None = None
+    effective_source_kind: str | None = None
+    effective_mapped_fields: dict[str, Any] = Field(default_factory=dict)
+    effective_unmapped_fields: list[str] = Field(default_factory=list)
+    effective_reason_codes: list[str] = Field(default_factory=list)
+    applied_resolution_ids: list[str] = Field(default_factory=list)
+    resolution_states: list[LegacyLoreResolutionSummary] = Field(default_factory=list)
 
 
 class LoreMigrationPreviewIssue(BaseModel):
@@ -91,6 +117,54 @@ class LoreMigrationPreviewResponse(BaseModel):
     by_target_type: dict[str, int] = Field(default_factory=dict)
     items: list[LoreMigrationPreviewItem] = Field(default_factory=list)
     issues: list[LoreMigrationPreviewIssue] = Field(default_factory=list)
+
+
+class LegacyLoreResolutionInput(BaseModel):
+    operation_key: str = Field(
+        ..., min_length=16, max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    preview_schema_version: int = Field(..., ge=1)
+    mapping_version: int = Field(..., ge=1)
+    expected_source_checksum: str = Field(
+        ..., min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$"
+    )
+    expected_semantic_result_checksum: str = Field(
+        ..., min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$"
+    )
+    item_fingerprint: str = Field(
+        ..., min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$"
+    )
+    group_fingerprint: str | None = Field(
+        None, min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$"
+    )
+    legacy_category: str = Field(..., min_length=1, max_length=50)
+    legacy_index: int = Field(..., ge=0)
+    reason_code: str = Field(..., min_length=1, max_length=80)
+    decision_code: str = Field(..., min_length=1, max_length=80)
+    decision_payload: dict[str, Any] = Field(default_factory=dict)
+    expected_resolution_version: int | None = Field(None, ge=1)
+
+
+class LegacyLoreResolutionRevokeInput(BaseModel):
+    operation_key: str = Field(
+        ..., min_length=16, max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    expected_source_checksum: str = Field(
+        ..., min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$"
+    )
+    expected_resolution_version: int = Field(..., ge=1)
+
+
+class LegacyLoreResolutionResponse(BaseModel):
+    resolution: LegacyLoreResolutionSummary
+    operation_key: str
+    replayed: bool = False
+
+
+class LegacyLoreResolutionsResponse(BaseModel):
+    items: list[LegacyLoreResolutionSummary] = Field(default_factory=list)
 
 
 class LoreMigrationCommitInput(BaseModel):

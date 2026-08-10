@@ -4,7 +4,7 @@ export const DEFAULT_DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DRAFT_KEY_PREFIX = "novel:draft:v1";
 const SHA256_FINGERPRINT = /^[a-f0-9]{64}$/;
 
-export type DraftKind = "worldview" | "chapter" | "lore-create" | "lore-relation" | "lore-suggestion-review" | "lore-manual-review" | "lore-merge" | "lore-extraction" | "lore-migration";
+export type DraftKind = "worldview" | "chapter" | "lore-create" | "lore-relation" | "lore-suggestion-review" | "lore-manual-review" | "lore-merge" | "lore-extraction" | "lore-migration" | "lore-migration-resolution";
 
 export interface DraftScope {
   userId: string;
@@ -61,7 +61,8 @@ function isDraftScope(value: unknown): value is DraftScope {
       scope.kind === "lore-manual-review" ||
       scope.kind === "lore-merge" ||
       scope.kind === "lore-extraction" ||
-      scope.kind === "lore-migration") &&
+      scope.kind === "lore-migration" ||
+      scope.kind === "lore-migration-resolution") &&
     typeof scope.objectId === "string" &&
     isNonEmpty(scope.objectId)
   );

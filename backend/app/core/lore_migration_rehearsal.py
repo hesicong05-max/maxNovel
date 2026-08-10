@@ -526,7 +526,7 @@ def _assert_authoritative_snapshot(
         version = versions.get(element_id)
         map_row = maps.get((item["legacy_category"], item["legacy_index"]))
         event = events.get(element_id)
-        expected_payload = item["mapped_fields"]
+        expected_payload = item.get("effective_mapped_fields", item["mapped_fields"])
         expected_states = _field_states(type_key, expected_payload)
         expected_ids = expected_rows[element_id]
         if (
@@ -698,7 +698,7 @@ async def commit_rehearsal(
                 ids = row_manifest[item["planned_element_id"]]
                 type_key = item["proposed_type_key"]
                 type_id = types[type_key].id
-                payload = dict(item["mapped_fields"])
+                payload = dict(item.get("effective_mapped_fields", item["mapped_fields"]))
                 field_states = _field_states(type_key, payload)
                 element = SettingElement(
                     id=item["planned_element_id"],

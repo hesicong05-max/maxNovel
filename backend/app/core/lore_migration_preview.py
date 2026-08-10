@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any, Iterable
 
 from app.core.lore_migration import (
+    BUILTIN_TYPE_KEYS,
     PARSED_CATEGORY_MAP,
     TYPE_FIELD_SCHEMAS,
     deterministic_element_id,
@@ -45,6 +46,24 @@ _STATUS_ORDER = {
     "possible_conflict": 2,
     "blocked": 3,
 }
+RESOLVABLE_REASON_CODES = frozenset({
+    "type_confirmation_required",
+    "source_missing",
+    "raw_text_excerpt_unverified",
+    "unmapped_fields",
+    "duplicate_name_same_type",
+    "duplicate_name_cross_type",
+})
+_HARD_BLOCK_REASONS = frozenset({
+    "non_object_entry",
+    "missing_name",
+    "source_unknown",
+    "duplicate_legacy_id",
+    "existing_element_name_collision",
+})
+_DUPLICATE_REASONS = frozenset({
+    "duplicate_name_same_type", "duplicate_name_cross_type"
+})
 
 
 def _legacy_value(value: Any) -> Any:
@@ -96,6 +115,20 @@ def migration_preview_item_fingerprint(
     ).encode()).hexdigest()
 
 
+def migration_preview_group_fingerprint(
+    items: Iterable[dict[str, Any]],
+    *,
+    type_field: str = "proposed_type_key",
+) -> str:
+    payload = sorted(
+        (str(item["item_fingerprint"]), str(item.get(type_field) or ""))
+        for item in items
+    )
+    return hashlib.sha256(json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":")
+    ).encode()).hexdigest()
+
+
 def _issue(
     reason_code: str,
     severity: str,
@@ -138,6 +171,31 @@ def _parsed_by_category(worldview: Any) -> dict[str, list[dict[str, Any]]]:
     return result
 
 
+def project_legacy_item_fields(
+    legacy_category: str,
+    original_value: Any,
+    target_type_key: str | None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Project one legacy object into one selected type without mutating input."""
+    raw = original_value if isinstance(original_value, dict) else {}
+    schema_keys = {
+        field["key"] for field in TYPE_FIELD_SCHEMAS.get(target_type_key or "", [])
+    }
+    consumed_fields = {"name", "event"}
+    mapped_fields: dict[str, Any] = {}
+    aliases = _FIELD_ALIASES.get(legacy_category, {})
+    for key in sorted(raw):
+        target_key = aliases.get(key, key)
+        if target_key in schema_keys:
+            mapped_fields[target_key] = raw[key]
+            consumed_fields.add(key)
+    unmapped_fields = sorted(
+        key for key in set(raw) - consumed_fields
+        if raw[key] not in (None, "", [], {})
+    )
+    return mapped_fields, unmapped_fields
+
+
 def build_migration_preview(
     project_id: str,
     storage_mode: str,
@@ -147,6 +205,7 @@ def build_migration_preview(
     existing_legacy_map_count: int = 0,
     existing_migration_count: int = 0,
     commit_enabled: bool = False,
+    resolutions: Iterable[Any] = (),
 ) -> dict[str, Any]:
     """Return a deterministic plan without constructing or mutating ORM rows."""
     source_checksum = migration_preview_source_checksum(worldview)
@@ -239,6 +298,16 @@ def build_migration_preview(
                     "original_value": raw,
                     "mapped_fields": {},
                     "unmapped_fields": [],
+                    "original_group_fingerprint": None,
+                    "group_fingerprint": None,
+                    "effective_classification": "mappable",
+                    "effective_proposed_type_key": target_type,
+                    "effective_source_kind": source or None,
+                    "effective_mapped_fields": {},
+                    "effective_unmapped_fields": [],
+                    "effective_reason_codes": [],
+                    "applied_resolution_ids": [],
+                    "resolution_states": [],
                 }
                 if not isinstance(raw, dict):
                     _promote(item, "blocked", "non_object_entry")
@@ -257,23 +326,13 @@ def build_migration_preview(
                 if source in {"imported", "hybrid"} and getattr(worldview, "raw_text", None):
                     _promote(item, "review_required", "raw_text_excerpt_unverified")
 
-                schema_keys = {
-                    field["key"] for field in TYPE_FIELD_SCHEMAS.get(target_type or "", [])
-                }
-                name_keys = {"name", "event"}
-                mapped_fields: dict[str, Any] = {}
-                consumed_fields = set(name_keys)
-                aliases = _FIELD_ALIASES.get(category, {})
-                for key in sorted(raw_dict):
-                    target_key = aliases.get(key, key)
-                    if target_key in schema_keys:
-                        mapped_fields[target_key] = raw_dict[key]
-                        consumed_fields.add(key)
-                item["mapped_fields"] = mapped_fields
-                item["unmapped_fields"] = sorted(
-                    key for key in set(raw_dict) - consumed_fields
-                    if raw_dict[key] not in (None, "", [], {})
+                mapped_fields, unmapped_fields = project_legacy_item_fields(
+                    category, raw, target_type
                 )
+                item["mapped_fields"] = mapped_fields
+                item["unmapped_fields"] = unmapped_fields
+                item["effective_mapped_fields"] = dict(mapped_fields)
+                item["effective_unmapped_fields"] = list(unmapped_fields)
                 if item["unmapped_fields"]:
                     _promote(item, "review_required", "unmapped_fields")
                 if target_type and (target_type, normalize_lore_name(name)) in existing_names:
@@ -287,14 +346,207 @@ def build_migration_preview(
     for group in grouped_names.values():
         if len(group) < 2:
             continue
+        group_fingerprint = migration_preview_group_fingerprint(group)
         target_types = {item["proposed_type_key"] for item in group}
         reason = "duplicate_name_same_type" if len(target_types) == 1 else "duplicate_name_cross_type"
         for item in group:
+            item["original_group_fingerprint"] = group_fingerprint
+            item["group_fingerprint"] = group_fingerprint
             _promote(item, "possible_conflict", reason)
 
+    resolution_rows = list(resolutions)
+    effective_reasons: dict[str, list[str]] = {}
+
+    # Type and source decisions must apply before field projection and grouping.
     for item in items:
-        for reason in item["reason_codes"]:
-            severity = "blocked" if item["classification"] == "blocked" else "review"
+        for row in resolution_rows:
+            reason = str(getattr(row, "reason_code", ""))
+            item_match = (
+                str(getattr(row, "legacy_category", "")) == item["legacy_category"]
+                and int(getattr(row, "legacy_index", -1)) == item["legacy_index"]
+            )
+            if not item_match:
+                continue
+            base_exact = (
+                int(getattr(row, "preview_schema_version", 0)) == PREVIEW_SCHEMA_VERSION
+                and int(getattr(row, "mapping_version", 0)) == MAPPING_VERSION
+                and str(getattr(row, "source_checksum", "")) == source_checksum
+                and str(getattr(row, "item_fingerprint", ""))
+                == item["item_fingerprint"]
+            )
+            row_status = str(getattr(row, "status", ""))
+            state = {
+                "id": str(getattr(row, "id")),
+                "legacy_category": item["legacy_category"],
+                "legacy_index": item["legacy_index"],
+                "reason_code": str(getattr(row, "reason_code")),
+                "decision_code": str(getattr(row, "decision_code")),
+                "decision_payload": dict(getattr(row, "decision_payload", None) or {}),
+                "status": "expired" if not base_exact else row_status,
+                "lock_version": int(getattr(row, "lock_version", 1)),
+                "created_at": getattr(row, "created_at").isoformat(),
+                "updated_at": getattr(row, "updated_at").isoformat(),
+                "applies": False,
+            }
+            item["resolution_states"].append(state)
+            if not base_exact or row_status != "active":
+                continue
+            decision = str(getattr(row, "decision_code"))
+            payload = dict(getattr(row, "decision_payload", None) or {})
+            if reason == "type_confirmation_required":
+                type_key = str(payload.get("type_key") or "")
+                valid = (
+                    reason in item["reason_codes"]
+                    and decision == "confirm_type"
+                    and type_key in BUILTIN_TYPE_KEYS
+                )
+                if valid:
+                    item["effective_proposed_type_key"] = type_key
+            elif reason == "source_missing":
+                source_kind = str(payload.get("source_kind") or "")
+                valid = (
+                    reason in item["reason_codes"]
+                    and decision == "confirm_source"
+                    and source_kind in _SOURCE_LABELS
+                )
+                if valid:
+                    item["effective_source_kind"] = source_kind
+            else:
+                continue
+            if valid:
+                state["applies"] = True
+                item["applied_resolution_ids"].append(str(getattr(row, "id")))
+            else:
+                state["status"] = "expired"
+
+        mapped_fields, unmapped_fields = project_legacy_item_fields(
+            item["legacy_category"],
+            item["original_value"],
+            item["effective_proposed_type_key"],
+        )
+        item["effective_mapped_fields"] = mapped_fields
+        item["effective_unmapped_fields"] = unmapped_fields
+        reasons = [
+            reason for reason in item["reason_codes"]
+            if reason not in _DUPLICATE_REASONS
+            and reason not in {"unmapped_fields", "existing_element_name_collision"}
+        ]
+        preliminarily_resolved = {
+            state["reason_code"] for state in item["resolution_states"]
+            if state.get("applies")
+        }
+        reasons = [reason for reason in reasons if reason not in preliminarily_resolved]
+        if (
+            item["effective_source_kind"] in {"imported", "hybrid"}
+            and getattr(worldview, "raw_text", None)
+            and "raw_text_excerpt_unverified" not in reasons
+        ):
+            reasons.append("raw_text_excerpt_unverified")
+        if unmapped_fields:
+            reasons.append("unmapped_fields")
+        effective_type = item["effective_proposed_type_key"]
+        if (
+            effective_type
+            and (effective_type, normalize_lore_name(item["name"])) in existing_names
+        ):
+            reasons.append("existing_element_name_collision")
+        effective_reasons[item["item_fingerprint"]] = list(dict.fromkeys(reasons))
+
+    effective_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in items:
+        item["group_fingerprint"] = None
+        if item["name"]:
+            effective_groups[normalize_lore_name(item["name"])].append(item)
+    duplicate_group_members: dict[str, set[str]] = defaultdict(set)
+    for group in effective_groups.values():
+        if len(group) < 2:
+            continue
+        group_fingerprint = migration_preview_group_fingerprint(
+            group, type_field="effective_proposed_type_key"
+        )
+        target_types = {item["effective_proposed_type_key"] for item in group}
+        reason = (
+            "duplicate_name_same_type"
+            if len(target_types) == 1
+            else "duplicate_name_cross_type"
+        )
+        for item in group:
+            item["group_fingerprint"] = group_fingerprint
+            duplicate_group_members[group_fingerprint].add(item["item_fingerprint"])
+            effective_reasons[item["item_fingerprint"]].append(reason)
+
+    # Remaining decisions are evaluated against the effective projection and group.
+    for item in items:
+        reasons = list(dict.fromkeys(effective_reasons[item["item_fingerprint"]]))
+        states_by_id = {
+            state["id"]: state for state in item["resolution_states"]
+        }
+        for row in resolution_rows:
+            row_id = str(getattr(row, "id"))
+            state = states_by_id.get(row_id)
+            if state is None or state["status"] != "active" or state.get("applies"):
+                continue
+            reason = str(getattr(row, "reason_code", ""))
+            decision = str(getattr(row, "decision_code", ""))
+            payload = dict(getattr(row, "decision_payload", None) or {})
+            if reason == "raw_text_excerpt_unverified":
+                valid = reason in reasons and decision == "accept_unlocated_source" and payload == {
+                    "confirmed_by_author": True,
+                    "exact_excerpt_available": False,
+                }
+            elif reason == "unmapped_fields":
+                valid = (
+                    reason in reasons
+                    and decision == "preserve_unmapped_fields"
+                    and sorted(payload.get("field_names") or [])
+                    == item["effective_unmapped_fields"]
+                )
+            elif reason in _DUPLICATE_REASONS:
+                group_fingerprint = item.get("group_fingerprint")
+                valid = (
+                    reason in reasons
+                    and group_fingerprint is not None
+                    and decision == "confirm_distinct_same_name"
+                    and str(getattr(row, "group_fingerprint", ""))
+                    == group_fingerprint
+                    and sorted(payload.get("member_fingerprints") or [])
+                    == sorted(duplicate_group_members[group_fingerprint])
+                )
+            else:
+                valid = False
+            if valid:
+                state["applies"] = True
+                item["applied_resolution_ids"].append(row_id)
+            elif reason in RESOLVABLE_REASON_CODES:
+                state["status"] = "expired"
+
+        resolved_reasons = {
+            state["reason_code"]
+            for state in item["resolution_states"]
+            if state.get("applies")
+        }
+        unresolved = [
+            reason for reason in reasons if reason not in resolved_reasons
+        ]
+        item["effective_reason_codes"] = unresolved
+        if any(reason in _HARD_BLOCK_REASONS for reason in unresolved):
+            item["effective_classification"] = "blocked"
+        elif any(reason in _DUPLICATE_REASONS for reason in unresolved):
+            item["effective_classification"] = "possible_conflict"
+        elif unresolved:
+            item["effective_classification"] = "review_required"
+        else:
+            item["effective_classification"] = "mappable"
+
+    applied_resolution_ids = sorted({
+        resolution_id
+        for item in items
+        for resolution_id in item["applied_resolution_ids"]
+    })
+
+    for item in items:
+        for reason in item["effective_reason_codes"]:
+            severity = "blocked" if item["effective_classification"] == "blocked" else "review"
             issues.append(_issue(
                 reason,
                 severity,
@@ -306,7 +558,7 @@ def build_migration_preview(
 
     items.sort(key=lambda item: (item["legacy_category"], item["legacy_index"], item["planned_element_id"]))
     issues.sort(key=lambda item: (item["legacy_category"] or "", item["legacy_index"] if item["legacy_index"] is not None else -1, item["reason_code"]))
-    counts = Counter(item["classification"] for item in items)
+    counts = Counter(item["effective_classification"] for item in items)
     has_blocking_issue = any(issue["severity"] == "blocked" for issue in issues)
     if has_blocking_issue or counts["blocked"]:
         overall_status = "blocked"
@@ -324,6 +576,7 @@ def build_migration_preview(
         "overall_status": overall_status,
         "items": items,
         "issues": issues,
+        "applied_resolution_ids": sorted(set(applied_resolution_ids)),
     }
     semantic_result_checksum = hashlib.sha256(json.dumps(
         semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -349,5 +602,9 @@ def build_migration_preview(
             "blocked": counts["blocked"],
         },
         "by_legacy_category": dict(sorted(Counter(item["legacy_category"] for item in items).items())),
-        "by_target_type": dict(sorted(Counter(item["proposed_type_key"] for item in items if item["proposed_type_key"]).items())),
+        "by_target_type": dict(sorted(Counter(
+            item["effective_proposed_type_key"]
+            for item in items
+            if item["effective_proposed_type_key"]
+        ).items())),
     }

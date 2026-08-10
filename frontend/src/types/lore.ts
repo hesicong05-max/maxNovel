@@ -33,6 +33,62 @@ export interface LoreMigrationPreviewItem {
   original_value: unknown;
   mapped_fields: Record<string, unknown>;
   unmapped_fields: string[];
+  original_group_fingerprint?: string | null;
+  group_fingerprint?: string | null;
+  effective_classification?: LoreMigrationPreviewClassification;
+  effective_proposed_type_key?: string | null;
+  effective_source_kind?: string | null;
+  effective_mapped_fields?: Record<string, unknown>;
+  effective_unmapped_fields?: string[];
+  effective_reason_codes?: string[];
+  applied_resolution_ids?: string[];
+  resolution_states?: LegacyLoreResolution[];
+}
+
+export interface LegacyLoreResolution {
+  id: string;
+  legacy_category: string;
+  legacy_index: number;
+  reason_code: string;
+  decision_code: string;
+  decision_payload: Record<string, unknown>;
+  status: "active" | "revoked" | "expired";
+  lock_version: number;
+  created_at: string;
+  updated_at: string;
+  applies?: boolean;
+}
+
+export interface LegacyLoreResolutionInput {
+  operation_key: string;
+  preview_schema_version: number;
+  mapping_version: number;
+  expected_source_checksum: string;
+  expected_semantic_result_checksum: string;
+  item_fingerprint: string;
+  group_fingerprint: string | null;
+  legacy_category: string;
+  legacy_index: number;
+  reason_code: string;
+  decision_code: string;
+  decision_payload: Record<string, unknown>;
+  expected_resolution_version: number | null;
+}
+
+export interface LegacyLoreResolutionRevokeInput {
+  operation_key: string;
+  expected_source_checksum: string;
+  expected_resolution_version: number;
+}
+
+export interface LegacyLoreResolutionResponse {
+  resolution: LegacyLoreResolution;
+  operation_key: string;
+  replayed: boolean;
+}
+
+export interface LegacyLoreResolutionsResponse {
+  items: LegacyLoreResolution[];
 }
 
 export interface LoreMigrationPreviewIssue {

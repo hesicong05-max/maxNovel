@@ -43,6 +43,10 @@ import type {
   LoreMergeOperation,
   LoreMergeOperationsResponse,
   LoreMigrationCommitInput,
+  LegacyLoreResolutionInput,
+  LegacyLoreResolutionResponse,
+  LegacyLoreResolutionRevokeInput,
+  LegacyLoreResolutionsResponse,
   LoreMigrationOperation,
   LoreMigrationPreviewResponse,
   LoreOverview,
@@ -337,6 +341,26 @@ export const api = {
       `/projects/${projectId}/lore/migration-preview`,
       { signal }
     ),
+  getLoreMigrationResolutions: (projectId: string, signal?: AbortSignal) =>
+    fetchJSON<LegacyLoreResolutionsResponse>(
+      `/projects/${projectId}/lore/migration-resolutions`,
+      { signal }
+    ),
+  decideLoreMigrationResolution: (
+    projectId: string,
+    data: LegacyLoreResolutionInput
+  ) => fetchJSON<LegacyLoreResolutionResponse>(
+    `/projects/${projectId}/lore/migration-resolutions`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
+  revokeLoreMigrationResolution: (
+    projectId: string,
+    resolutionId: string,
+    data: LegacyLoreResolutionRevokeInput
+  ) => fetchJSON<LegacyLoreResolutionResponse>(
+    `/projects/${projectId}/lore/migration-resolutions/${encodeURIComponent(resolutionId)}/revoke`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
   commitLoreMigration: (projectId: string, data: LoreMigrationCommitInput) =>
     fetchJSON<LoreMigrationOperation>(
       `/projects/${projectId}/lore/migration-operations`,
