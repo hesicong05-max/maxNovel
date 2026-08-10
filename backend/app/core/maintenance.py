@@ -20,6 +20,7 @@ def project_write_frozen_payload() -> dict[str, Any]:
         "code": PROJECT_WRITE_FROZEN_CODE,
         "maintenance_state": PROJECT_WRITE_FROZEN_STATE,
         "retryable": True,
+        "recommended_action": "retry_later",
         "retry_after_seconds": app_settings.LEGACY_JSON_MAINTENANCE_RETRY_AFTER,
         "event_id": app_settings.LEGACY_JSON_MAINTENANCE_EVENT_ID,
     }

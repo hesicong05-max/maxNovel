@@ -71,6 +71,7 @@ async def test_get_is_read_only_until_explicit_initialization(client, auth_heade
     )
 
     _assert_error(response, 404, "PLANNING_NOT_INITIALIZED")
+    assert response.json()["detail"]["recommended_action"] == "initialize_planning"
     assert await _plan_count(project_id) == 0
 
 
@@ -140,6 +141,7 @@ async def test_legacy_lore_project_must_upgrade_before_planning(
     )
 
     _assert_error(response, 409, "PLANNING_LORE_MIGRATION_REQUIRED")
+    assert response.json()["detail"]["recommended_action"] == "open_lore_repository"
     assert await _plan_count(project_id) == 0
 
 

@@ -39,6 +39,7 @@ EXPECTED_KEYS = {
     "code",
     "maintenance_state",
     "retryable",
+    "recommended_action",
     "retry_after_seconds",
     "event_id",
 }
@@ -64,6 +65,7 @@ def _assert_frozen_response(response) -> None:
         "code": PROJECT_WRITE_FROZEN_CODE,
         "maintenance_state": "write_frozen",
         "retryable": True,
+        "recommended_action": "retry_later",
         "retry_after_seconds": 60,
         "event_id": "BUG-002B",
     }
