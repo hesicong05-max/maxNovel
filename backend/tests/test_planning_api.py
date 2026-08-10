@@ -1,11 +1,13 @@
 """DEV-017A1 safe initialization and read tests for chapter planning."""
 
 import asyncio
+from copy import deepcopy
 
 import pytest
 from sqlalchemy import func, select, update
 
 from app.config import settings as app_settings
+from app.core.legacy_json import read_legacy_json
 from app.core.maintenance import ProjectWriteFrozenError
 from app.models.planning import NovelPlan, PlanningChapter, PlanningPart
 from app.models.project import Chapter, Outline, Project, StoryMemory
@@ -147,6 +149,7 @@ async def test_effective_legacy_chapter_data_is_never_auto_migrated(
     client, auth_headers, legacy_kind
 ):
     project_id = await _create_project(client, auth_headers)
+    memory_before = None
     async with TestSessionLocal() as session:
         if legacy_kind == "outline":
             session.add(
@@ -167,13 +170,15 @@ async def test_effective_legacy_chapter_data_is_never_auto_migrated(
                 )
             )
         else:
-            session.add(
-                StoryMemory(
-                    project_id=project_id,
-                    chapter_summaries=[{"chapter_num": 1, "summary": "原有摘要"}],
-                )
+            memory = StoryMemory(
+                project_id=project_id,
+                chapter_summaries=[{"chapter_num": 1, "summary": "原有摘要"}],
             )
+            session.add(memory)
         await session.commit()
+        if legacy_kind == "story_memory":
+            await session.refresh(memory)
+            memory_before = deepcopy(memory.chapter_summaries)
 
     response = await client.post(
         f"/api/projects/{project_id}/planning", headers=auth_headers
@@ -205,7 +210,10 @@ async def test_effective_legacy_chapter_data_is_never_auto_migrated(
             stored = await session.scalar(
                 select(StoryMemory).where(StoryMemory.project_id == project_id)
             )
-            assert stored.chapter_summaries == [
+            assert stored.chapter_summaries == memory_before
+            decoded = read_legacy_json(stored.chapter_summaries)
+            assert decoded.valid is True
+            assert decoded.value == [
                 {"chapter_num": 1, "summary": "原有摘要"}
             ]
 
