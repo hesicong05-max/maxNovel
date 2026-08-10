@@ -71,7 +71,7 @@ _chapters_mod.async_session = TestSessionLocal
 async def setup_database():
     """Create tables once for the entire test session."""
     # Import all models to ensure they are registered
-    from app.models import community, lore, project, user  # noqa: F401
+    from app.models import community, lore, planning, project, user  # noqa: F401
 
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

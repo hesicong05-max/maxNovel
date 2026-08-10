@@ -122,6 +122,8 @@ jobs:
           tests/test_lore_migration_rehearsal_postgres.py
           tests/test_json_preflight_postgres.py
           tests/test_legacy_json_maintenance.py
+          tests/test_planning_api.py
+          tests/test_planning_models.py
           -v --tb=short
 
   docker-build:

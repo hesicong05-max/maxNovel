@@ -41,3 +41,11 @@ from app.models.extraction import (  # noqa: F401
     LoreExtractionBatch,
     LoreExtractionCandidate,
 )
+from app.models.planning import (  # noqa: F401
+    NovelPlan,
+    PlanningChapter,
+    PlanningLoreAssignment,
+    PlanningLoreAssignmentEvent,
+    PlanningMutationOperation,
+    PlanningPart,
+)
