@@ -6,8 +6,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-class PlanningMutationCommand(BaseModel):
+class PlanningOperationCommand(BaseModel):
     operation_key: str = Field(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class PlanningMutationCommand(PlanningOperationCommand):
     expected_structure_version: int = Field(ge=1)
 
 
@@ -97,6 +100,7 @@ class PlanningStructureReorder(PlanningMutationCommand):
 
 
 class PlanningMutationReceipt(BaseModel):
+    receipt_kind: Literal["structure"] = "structure"
     receipt_id: str
     operation_key: str
     operation_type: str
@@ -110,6 +114,166 @@ class PlanningMutationReceipt(BaseModel):
     placement: dict[str, Any] | None = None
     structure: dict[str, Any] | None = None
     created_at: datetime
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PlanningAssignmentCreate(PlanningOperationCommand):
+    expected_assignment_version: int = Field(ge=1)
+    element_id: str = Field(min_length=32, max_length=32)
+    expected_element_content_version: int = Field(ge=1)
+    scope_type: Literal["novel", "part", "chapter"]
+    scope_target_id: str = Field(min_length=32, max_length=32)
+
+
+class PlanningAssignmentCommand(PlanningOperationCommand):
+    expected_assignment_version: int = Field(ge=1)
+    expected_lock_version: int = Field(ge=1)
+    scope_type: Literal["novel", "part", "chapter"]
+    scope_target_id: str = Field(min_length=32, max_length=32)
+
+
+class PlanningAssignmentTypeSnapshot(BaseModel):
+    id: str
+    key: str
+    display_name: str
+    status: Literal["active", "archived"]
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PlanningAssignedElementSnapshot(BaseModel):
+    id: str
+    name: str
+    summary: str
+    type: PlanningAssignmentTypeSnapshot
+    confirmation_status: Literal["candidate", "confirmed", "rejected"]
+    lifecycle_status: Literal["active", "archived", "merged"]
+    enabled: bool
+    merged_into_element_id: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PlanningAssignmentScopeSnapshot(BaseModel):
+    scope_type: Literal["novel", "part", "chapter"]
+    scope_target_id: str
+    title: str
+    status: Literal["active", "archived"]
+    part_id: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PlanningAssignmentSnapshot(BaseModel):
+    id: str
+    element_id: str
+    scope: PlanningAssignmentScopeSnapshot
+    status: Literal["active", "removed"]
+    lock_version: int = Field(ge=1)
+    assigned_at_content_version: int = Field(ge=1)
+    current_content_version: int = Field(ge=1)
+    content_changed_since_assignment: bool
+    element: PlanningAssignedElementSnapshot
+    generation_eligible: bool
+    ineligible_reasons: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PlanningAssignmentSource(BaseModel):
+    assignment_id: str
+    scope: PlanningAssignmentScopeSnapshot
+    lock_version: int = Field(ge=1)
+    assigned_at_content_version: int = Field(ge=1)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PlanningEffectiveElementResponse(BaseModel):
+    element_id: str
+    current_content_version: int = Field(ge=1)
+    content_changed_since_any_assignment: bool
+    element: PlanningAssignedElementSnapshot
+    direct_assignments: list[PlanningAssignmentSource] = Field(default_factory=list)
+    inherited_from: list[PlanningAssignmentSource] = Field(default_factory=list)
+    all_sources: list[PlanningAssignmentSource] = Field(default_factory=list)
+    generation_eligible: bool
+    ineligible_reasons: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PlanningAssignmentCounts(BaseModel):
+    direct: int = Field(ge=0)
+    direct_active: int = Field(ge=0)
+    direct_removed: int = Field(ge=0)
+    effective: int = Field(ge=0)
+    generation_eligible: int = Field(ge=0)
+    ineligible: int = Field(ge=0)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PlanningAssignmentMutationReceipt(BaseModel):
+    receipt_kind: Literal["assignment"] = "assignment"
+    receipt_id: str
+    operation_key: str
+    operation_type: Literal[
+        "assignment_create", "assignment_remove", "assignment_restore"
+    ]
+    replayed: bool
+    changed: bool
+    project_id: str
+    plan_id: str
+    previous_assignment_version: int
+    new_assignment_version: int
+    assignment: PlanningAssignmentSnapshot
+    event_id: str
+    created_at: datetime
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PlanningAssignmentScopeResponse(BaseModel):
+    scope: PlanningAssignmentScopeSnapshot
+    assignment_version: int
+    direct_assignments: list[PlanningAssignmentSnapshot] = Field(default_factory=list)
+    effective_elements: list[PlanningEffectiveElementResponse] = Field(default_factory=list)
+    counts: PlanningAssignmentCounts
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PlanningAssignmentEventResponse(BaseModel):
+    id: str
+    action: Literal["assign", "remove", "restore"]
+    previous_status: Literal["active", "removed"] | None = None
+    new_status: Literal["active", "removed"]
+    previous_lock_version: int = Field(ge=0)
+    new_lock_version: int = Field(ge=1)
+    element_content_version: int = Field(ge=1)
+    performed_by: str
+    created_at: datetime
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PlanningAssignmentHistoryItem(BaseModel):
+    id: str
+    scope: PlanningAssignmentScopeSnapshot
+    status: Literal["active", "removed"]
+    lock_version: int = Field(ge=1)
+    events: list[PlanningAssignmentEventResponse] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PlanningAssignmentHistoryResponse(BaseModel):
+    element_id: str
+    assignments: list[PlanningAssignmentHistoryItem] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="forbid")
 
