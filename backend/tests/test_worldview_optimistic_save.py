@@ -4,8 +4,25 @@ import json
 import pytest
 from sqlalchemy import select
 
-from app.core.legacy_json import read_legacy_json
+from app.core.legacy_json import read_legacy_json, read_legacy_object_list
 from app.models.project import Worldview
+from tests.conftest import TEST_DATABASE_BACKEND
+
+
+def _historical_json_assignment(value, *, observed_layers: int):
+    """Build an ORM assignment that yields the requested historical depth.
+
+    PostgreSQL migrations created these columns as Text while the ORM declares
+    JSON, so the JSON bind processor contributes one persisted encoding layer.
+    SQLite test tables use the ORM JSON type and decode that bind layer again.
+    """
+    assignment_layers = observed_layers
+    if TEST_DATABASE_BACKEND == "postgresql":
+        assignment_layers -= 1
+    encoded = value
+    for _ in range(assignment_layers):
+        encoded = json.dumps(encoded, ensure_ascii=False)
+    return encoded
 
 
 def _payload(name: str, expected_source_checksum: str | None = None) -> dict:
@@ -250,13 +267,15 @@ async def test_summary_and_progress_decode_double_encoded_elements_without_rewri
         worldview = await session.scalar(
             select(Worldview).where(Worldview.project_id == project_id)
         )
-        parsed = read_legacy_json(worldview.parsed_elements)
+        parsed = read_legacy_object_list(worldview.parsed_elements)
         assert parsed.valid
-        stored_value = json.dumps(
-            json.dumps(parsed.value, ensure_ascii=False), ensure_ascii=False
+        worldview.parsed_elements = _historical_json_assignment(
+            parsed.items, observed_layers=2
         )
-        worldview.parsed_elements = stored_value
         await session.commit()
+        await session.refresh(worldview)
+        stored_value = worldview.parsed_elements
+        assert read_legacy_object_list(stored_value).valid
 
     summary = await client.get(
         f"/api/worldview/{project_id}/summary", headers=auth_headers
@@ -294,16 +313,15 @@ async def test_summary_and_progress_fail_closed_for_over_encoded_elements(
         worldview = await session.scalar(
             select(Worldview).where(Worldview.project_id == project_id)
         )
-        parsed = read_legacy_json(worldview.parsed_elements)
+        parsed = read_legacy_object_list(worldview.parsed_elements)
         assert parsed.valid
-        stored_value = json.dumps(
-            json.dumps(
-                json.dumps(parsed.value, ensure_ascii=False), ensure_ascii=False
-            ),
-            ensure_ascii=False,
+        worldview.parsed_elements = _historical_json_assignment(
+            parsed.items, observed_layers=3
         )
-        worldview.parsed_elements = stored_value
         await session.commit()
+        await session.refresh(worldview)
+        stored_value = worldview.parsed_elements
+        assert not read_legacy_object_list(stored_value).valid
 
     summary = await client.get(
         f"/api/worldview/{project_id}/summary", headers=auth_headers

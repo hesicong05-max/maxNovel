@@ -16,6 +16,18 @@ from app.models.lore import (
     SettingElement,
 )
 from app.models.project import Project, Worldview
+from tests.conftest import TEST_DATABASE_BACKEND
+
+
+def _historical_json_assignment(value, *, observed_layers: int):
+    """Account for the production Text/ORM JSON mismatch in test fixtures."""
+    assignment_layers = observed_layers
+    if TEST_DATABASE_BACKEND == "postgresql":
+        assignment_layers -= 1
+    encoded = value
+    for _ in range(assignment_layers):
+        encoded = json.dumps(encoded, ensure_ascii=False)
+    return encoded
 
 
 async def _project(client, headers) -> str:
@@ -216,11 +228,25 @@ async def test_double_encoded_worldview_exits_legacy_mode_exactly_once_and_is_pr
         ):
             decoded = read_legacy_object_list(getattr(worldview, field))
             assert decoded.valid
-            stored_values[field] = json.dumps(
-                json.dumps(decoded.items, ensure_ascii=False), ensure_ascii=False
+            setattr(
+                worldview,
+                field,
+                _historical_json_assignment(decoded.items, observed_layers=2),
             )
-            setattr(worldview, field, stored_values[field])
         await session.commit()
+        await session.refresh(worldview)
+        for field in (
+            "characters",
+            "geography",
+            "factions",
+            "power_system",
+            "history",
+            "conflicts",
+            "special_settings",
+            "parsed_elements",
+        ):
+            stored_values[field] = getattr(worldview, field)
+            assert read_legacy_object_list(stored_values[field]).valid
 
     preview = await _preview(client, auth_headers, project_id)
     special = next(
