@@ -1,4 +1,4 @@
-const STORAGE_PREFIX = "novel_pending_planning_operation_v1";
+import { pendingProjectOperationKey } from "@/services/pendingProjectOperations";
 
 export type PlanningOperationAction =
   | "part_create"
@@ -29,12 +29,9 @@ export interface PendingPlanningOperation<T extends object = Record<string, unkn
 export type PendingPlanningOperationLoad =
   | { status: "missing" }
   | { status: "available"; operation: PendingPlanningOperation }
+  | { status: "foreign"; workspace: "foreshadow" }
   | { status: "corrupt" }
   | { status: "unavailable" };
-
-function storageKey(userId: string, projectId: string): string {
-  return `${STORAGE_PREFIX}:${encodeURIComponent(userId)}:${encodeURIComponent(projectId)}`;
-}
 
 export function createPlanningOperationKey(action: string): string {
   if (!globalThis.crypto?.randomUUID) {
@@ -174,7 +171,7 @@ export function savePendingPlanningOperation<T extends object>(
 ): boolean {
   try {
     sessionStorage.setItem(
-      storageKey(operation.user_id, operation.project_id),
+      pendingProjectOperationKey(operation.user_id, operation.project_id),
       JSON.stringify(operation)
     );
     return true;
@@ -189,13 +186,17 @@ export function loadPendingPlanningOperation(
 ): PendingPlanningOperationLoad {
   let raw: string | null;
   try {
-    raw = sessionStorage.getItem(storageKey(userId, projectId));
+    raw = sessionStorage.getItem(pendingProjectOperationKey(userId, projectId));
   } catch {
     return { status: "unavailable" };
   }
   if (!raw) return { status: "missing" };
   try {
-    const value = JSON.parse(raw) as Partial<PendingPlanningOperation>;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (parsed.schema_version === 2 && parsed.workspace === "foreshadow") {
+      return { status: "foreign", workspace: "foreshadow" };
+    }
+    const value = parsed as Partial<PendingPlanningOperation>;
     if (
       !hasExactKeys(value as Record<string, unknown>, ["schema_version", "user_id", "project_id", "operation_key", "action", "target_id", "payload", "created_at"]) ||
       value.schema_version !== 1 ||
@@ -219,7 +220,7 @@ export function loadPendingPlanningOperation(
 
 export function clearPendingPlanningOperation(userId: string, projectId: string): boolean {
   try {
-    sessionStorage.removeItem(storageKey(userId, projectId));
+    sessionStorage.removeItem(pendingProjectOperationKey(userId, projectId));
     return true;
   } catch {
     return false;
