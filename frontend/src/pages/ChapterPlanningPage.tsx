@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import PlanningStructurePanel, { type PlanningSelection } from "@/components/PlanningStructurePanel";
 import PlanningLoreAssignments from "@/components/PlanningLoreAssignments";
 import PlanningGenerationPreflight, { type GenerationRecoveryState } from "@/components/PlanningGenerationPreflight";
+import ForeshadowPlanningSummary from "@/components/ForeshadowPlanningSummary";
 import { useAuth } from "@/components/AuthContext";
 import { ApiError, api } from "@/services/api";
 import { generationRunContractError } from "@/services/generationRuns";
@@ -124,6 +125,7 @@ export default function ChapterPlanningPage() {
   const [assignmentRefreshRequired, setAssignmentRefreshRequired] = useState(false);
   const [assignmentSearchRefreshToken, setAssignmentSearchRefreshToken] = useState(0);
   const [pendingStorageIssue, setPendingStorageIssue] = useState<"corrupt" | "unavailable" | null>(null);
+  const [foreignForeshadowPending, setForeignForeshadowPending] = useState(false);
   const [serverSyncToken, setServerSyncToken] = useState(0);
   const [focusTarget, setFocusTarget] = useState<string | null>(null);
   const [assignmentFocusTarget, setAssignmentFocusTarget] = useState<{ elementId: string; scopeIdentity: string } | null>(null);
@@ -172,7 +174,7 @@ export default function ChapterPlanningPage() {
     && located.part?.status === "active";
   const globalGenerationFeedbackVisible = !!generationError && !generationFeedbackInlineVisible;
   const planningWriteDisabled = busy || generationBusy || !!pending || maintenance || conflict || assignmentConflict
-    || refreshRequired || assignmentRefreshRequired || !!pendingStorageIssue;
+    || refreshRequired || assignmentRefreshRequired || !!pendingStorageIssue || foreignForeshadowPending;
   const assignmentWriteDisabled = planningWriteDisabled || assignmentLoading || !!assignmentError;
   const generationStale = useMemo(() => {
     if (!generationRun || !plan || selection.kind !== "chapter" || !located.chapter || !assignmentResponse) return false;
@@ -291,6 +293,7 @@ export default function ChapterPlanningPage() {
     setAssignmentRefreshRequired(false);
     setAssignmentSearchRefreshToken(0);
     setPendingStorageIssue(null);
+    setForeignForeshadowPending(false);
     assignmentGeneration.current += 1;
     setRefreshRequired(false);
     setBusy(false);
@@ -540,6 +543,11 @@ export default function ChapterPlanningPage() {
     if (!id || !user || loadState !== "ready") return;
     const loaded = loadPendingPlanningOperation(user.id, id);
     if (loaded.status === "missing") { setPending(null); setPendingStorageIssue(null); return; }
+    if (loaded.status === "foreign") {
+      setPending(null);
+      setForeignForeshadowPending(true);
+      return;
+    }
     if (loaded.status === "corrupt" || loaded.status === "unavailable") {
       setPending(null);
       setPendingStorageIssue(loaded.status);
@@ -1279,8 +1287,10 @@ export default function ChapterPlanningPage() {
       <button className="btn-back" onClick={() => confirmEditorUnload(undefined, true) && navigate(`/project/${id}`)}>← 返回项目</button>
       <header className="page-header planning-header">
         <div><h1>章节规划</h1><p>在生成正文前组织篇章、章节和使用范围。</p></div>
-        <Link className="btn btn-secondary" to={`/project/${id}/lore`} onClick={(event) => { if (!confirmEditorUnload(undefined, true)) event.preventDefault(); }}>打开设定仓库</Link>
+        <span className="planning-header-actions"><Link className="btn btn-secondary" to={`/project/${id}/plan/foreshadows`} onClick={(event) => { if (!confirmEditorUnload(undefined, true)) event.preventDefault(); }}>管理伏笔</Link><Link className="btn btn-secondary" to={`/project/${id}/lore`} onClick={(event) => { if (!confirmEditorUnload(undefined, true)) event.preventDefault(); }}>打开设定仓库</Link></span>
       </header>
+
+      <ForeshadowPlanningSummary projectId={id} />
 
       <div className="planning-live" aria-live="polite">{notice}</div>
       {error && <div className="planning-notice is-error" role="alert" tabIndex={-1} ref={conflictRef}><span>{error}{errorHint && <small className="planning-notice__hint">{errorHint}</small>}</span>{conflict ? <span className="planning-notice__actions"><button className="btn btn-secondary" onClick={() => { setServerSyncToken((value) => value + 1); setConflict(false); setError(""); setNotice("已载入服务器最新字段。"); }}>载入服务器最新值</button><button className="btn btn-secondary" onClick={() => { setConflict(false); setError(""); setNotice("旧草稿已保留；请与服务器最新值核对后再保存。"); }}>保留草稿并继续核对</button></span> : pendingStorageIssue === "corrupt" ? <button className="btn btn-secondary" onClick={clearCorruptRecoveryRecord}>确认清除损坏恢复记录</button> : (refreshRequired || assignmentRefreshRequired) ? <button className="btn btn-secondary" onClick={() => void reloadPlanningAndCurrentAssignments()}>重新读取规划与设定</button> : <button className="btn btn-secondary" onClick={() => loadPlan(false)}>刷新规划</button>}</div>}
@@ -1291,6 +1301,7 @@ export default function ChapterPlanningPage() {
       )}
       {assignmentConflict && <div ref={assignmentConflictRef} className="planning-notice is-error" role="alert" tabIndex={-1}><span>{assignmentError || "分配状态已更新，请核对服务器最新结果。"}</span><button className="btn btn-secondary" onClick={() => { setAssignmentConflict(false); setAssignmentError(""); setNotice("已核对服务器最新分配，可以继续操作。"); }}>已核对最新分配</button></div>}
       {maintenance && <div className="planning-notice" role="status">项目资料正在维护；已保留当前只读内容并暂停写入。</div>}
+      {foreignForeshadowPending && <div className="planning-notice" role="alert"><span>伏笔管理中还有结果未确认的写入；章节规划写入已暂停。</span><Link className="btn btn-secondary" to={`/project/${id}/plan/foreshadows`}>前往伏笔管理核对</Link></div>}
       {pending && pending.action !== "generation_prepare" && (
         <div className="planning-notice" role="alert">
           <span>检测到结果尚未确认的操作，已暂停新的写入。</span>

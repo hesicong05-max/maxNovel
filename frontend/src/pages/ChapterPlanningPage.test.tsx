@@ -158,6 +158,26 @@ describe("ChapterPlanningPage", () => {
     await waitFor(() => expect(createPlanningPart).toHaveBeenCalledWith("project-1", payload));
   });
 
+  it("freezes chapter planning when the foreshadow workspace owns the shared pending slot", async () => {
+    sessionStorage.setItem("novel_pending_planning_operation_v1:user-1:project-1", JSON.stringify({
+      schema_version: 2,
+      workspace: "foreshadow",
+      user_id: "user-1",
+      project_id: "project-1",
+      operation_key: "foreshadow_archive:pending123",
+      operation_type: "foreshadow_archive",
+      lifecycle_id: "l".repeat(32),
+      resource_id: null,
+      payload: { operation_key: "foreshadow_archive:pending123", expected_lifecycle_version: 1 },
+      created_at: "2026-08-11T08:00:00Z",
+    }));
+    renderPage();
+    expect(await screen.findByText(/伏笔管理中还有结果未确认的写入/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "添加设定" })).toBeDisabled();
+    expect(screen.getByRole("link", { name: "前往伏笔管理核对" })).toHaveAttribute("href", "/project/project-1/plan/foreshadows");
+  });
+
   it("keeps historical planning projects on the safe compatibility exit", async () => {
     renderPage({ getPlanning: vi.fn().mockRejectedValue(new ApiError(409, {
       detail: "检测到历史章节资料。",

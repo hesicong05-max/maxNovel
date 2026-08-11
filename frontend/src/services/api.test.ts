@@ -1077,3 +1077,50 @@ describe("API - Worldview optimistic save", () => {
     );
   });
 });
+
+describe("API - durable foreshadow lifecycle", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("uses all twelve encoded routes and exact write bodies", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } })
+    ));
+    const project = "project/one";
+    const lifecycle = "life/cycle";
+    const resource = "resource/item";
+    const operationKey = "foreshadow:key/one";
+    const lifecycleInput = { operation_key: operationKey, expected_lifecycle_version: 2 };
+    const restoreInput = { ...lifecycleInput, expected_structure_version: 3, expected_element_lock_version: 4 };
+    const planInput = { ...lifecycleInput, expected_structure_version: 3, action_kind: "resolve" as const, target_type: "chapter" as const, target_id: "c".repeat(32), expected_target_lock_version: 4, condition_text: "真相揭示", note: "" };
+    const planStateInput = { ...lifecycleInput, expected_structure_version: 3, expected_item_lock_version: 1 };
+    const factInput = { ...lifecycleInput, expected_structure_version: 3, fact_kind: "planted" as const, chapter_id: "c".repeat(32), expected_chapter_lock_version: 4, note: "" };
+    const retractInput = { ...lifecycleInput, expected_fact_lock_version: 1, reason: "记录错误" };
+
+    await api.listForeshadows(project, { status: "active", state: "unplanted", after: "a".repeat(32), limit: 25 });
+    expect(fetchSpy).toHaveBeenLastCalledWith("/api/projects/project%2Fone/planning/foreshadows?status=active&state=unplanted&after=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&limit=25", expect.any(Object));
+    await api.getForeshadow(project, lifecycle);
+    expect(fetchSpy).toHaveBeenLastCalledWith("/api/projects/project%2Fone/planning/foreshadows/life%2Fcycle", expect.any(Object));
+    await api.getForeshadowHistory(project, lifecycle);
+    expect(fetchSpy).toHaveBeenLastCalledWith("/api/projects/project%2Fone/planning/foreshadows/life%2Fcycle/history", expect.any(Object));
+    await api.getForeshadowOperationByKey(project, operationKey);
+    expect(fetchSpy).toHaveBeenLastCalledWith("/api/projects/project%2Fone/planning/foreshadows/operations/by-key/foreshadow%3Akey%2Fone", expect.any(Object));
+
+    const bind = { operation_key: operationKey, element_id: "e".repeat(32), expected_structure_version: 3, expected_element_lock_version: 4 };
+    await api.bindForeshadow(project, bind);
+    expect(fetchSpy).toHaveBeenLastCalledWith("/api/projects/project%2Fone/planning/foreshadows", expect.objectContaining({ method: "POST", body: JSON.stringify(bind) }));
+    await api.changeForeshadowState(project, lifecycle, "archive", lifecycleInput);
+    expect(fetchSpy).toHaveBeenLastCalledWith("/api/projects/project%2Fone/planning/foreshadows/life%2Fcycle/archive", expect.objectContaining({ body: JSON.stringify(lifecycleInput) }));
+    await api.changeForeshadowState(project, lifecycle, "restore", restoreInput);
+    expect(fetchSpy).toHaveBeenLastCalledWith("/api/projects/project%2Fone/planning/foreshadows/life%2Fcycle/restore", expect.objectContaining({ body: JSON.stringify(restoreInput) }));
+    await api.createForeshadowPlan(project, lifecycle, planInput);
+    expect(fetchSpy).toHaveBeenLastCalledWith("/api/projects/project%2Fone/planning/foreshadows/life%2Fcycle/plans", expect.objectContaining({ body: JSON.stringify(planInput) }));
+    await api.changeForeshadowPlanState(project, lifecycle, resource, "cancel", planStateInput);
+    expect(fetchSpy).toHaveBeenLastCalledWith("/api/projects/project%2Fone/planning/foreshadows/life%2Fcycle/plans/resource%2Fitem/cancel", expect.objectContaining({ body: JSON.stringify(planStateInput) }));
+    await api.changeForeshadowPlanState(project, lifecycle, resource, "restore", planStateInput);
+    expect(fetchSpy).toHaveBeenLastCalledWith("/api/projects/project%2Fone/planning/foreshadows/life%2Fcycle/plans/resource%2Fitem/restore", expect.objectContaining({ body: JSON.stringify(planStateInput) }));
+    await api.recordForeshadowFact(project, lifecycle, factInput);
+    expect(fetchSpy).toHaveBeenLastCalledWith("/api/projects/project%2Fone/planning/foreshadows/life%2Fcycle/facts", expect.objectContaining({ body: JSON.stringify(factInput) }));
+    await api.retractForeshadowFact(project, lifecycle, resource, retractInput);
+    expect(fetchSpy).toHaveBeenLastCalledWith("/api/projects/project%2Fone/planning/foreshadows/life%2Fcycle/facts/resource%2Fitem/retract", expect.objectContaining({ body: JSON.stringify(retractInput) }));
+  });
+});

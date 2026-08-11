@@ -71,6 +71,20 @@ import type {
   GenerationRunResponse,
 } from "@/types/generation";
 import type {
+  ForeshadowBindInput,
+  ForeshadowFactCreateInput,
+  ForeshadowFactRetractInput,
+  ForeshadowHistoryResponse,
+  ForeshadowLifecycle,
+  ForeshadowLifecycleInput,
+  ForeshadowListFilters,
+  ForeshadowListResponse,
+  ForeshadowMutationReceipt,
+  ForeshadowPlanCreateInput,
+  ForeshadowPlanStateInput,
+  ForeshadowRestoreInput,
+} from "@/types/foreshadow";
+import type {
   NovelPlan,
   PlanningAssignmentCreateInput,
   PlanningAssignmentHistoryResponse,
@@ -729,6 +743,74 @@ export const api = {
       element_id: elementId,
     }),
     { signal }
+  ),
+
+  // Durable foreshadow planning and author-confirmed facts
+  listForeshadows: (
+    projectId: string,
+    filters: ForeshadowListFilters = {},
+    signal?: AbortSignal
+  ) => fetchJSON<ForeshadowListResponse>(
+    withQuery(`/projects/${encodeURIComponent(projectId)}/planning/foreshadows`, filters),
+    { signal }
+  ),
+  getForeshadow: (projectId: string, lifecycleId: string, signal?: AbortSignal) =>
+    fetchJSON<ForeshadowLifecycle>(
+      `/projects/${encodeURIComponent(projectId)}/planning/foreshadows/${encodeURIComponent(lifecycleId)}`,
+      { signal }
+    ),
+  getForeshadowHistory: (projectId: string, lifecycleId: string, signal?: AbortSignal) =>
+    fetchJSON<ForeshadowHistoryResponse>(
+      `/projects/${encodeURIComponent(projectId)}/planning/foreshadows/${encodeURIComponent(lifecycleId)}/history`,
+      { signal }
+    ),
+  getForeshadowOperationByKey: (projectId: string, operationKey: string, signal?: AbortSignal) =>
+    fetchJSON<ForeshadowMutationReceipt>(
+      `/projects/${encodeURIComponent(projectId)}/planning/foreshadows/operations/by-key/${encodeURIComponent(operationKey)}`,
+      { signal }
+    ),
+  bindForeshadow: (projectId: string, data: ForeshadowBindInput) =>
+    fetchJSON<ForeshadowMutationReceipt>(
+      `/projects/${encodeURIComponent(projectId)}/planning/foreshadows`,
+      { method: "POST", body: JSON.stringify(data) }
+    ),
+  changeForeshadowState: (
+    projectId: string,
+    lifecycleId: string,
+    action: "archive" | "restore",
+    data: ForeshadowLifecycleInput | ForeshadowRestoreInput
+  ) => fetchJSON<ForeshadowMutationReceipt>(
+    `/projects/${encodeURIComponent(projectId)}/planning/foreshadows/${encodeURIComponent(lifecycleId)}/${action}`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
+  createForeshadowPlan: (projectId: string, lifecycleId: string, data: ForeshadowPlanCreateInput) =>
+    fetchJSON<ForeshadowMutationReceipt>(
+      `/projects/${encodeURIComponent(projectId)}/planning/foreshadows/${encodeURIComponent(lifecycleId)}/plans`,
+      { method: "POST", body: JSON.stringify(data) }
+    ),
+  changeForeshadowPlanState: (
+    projectId: string,
+    lifecycleId: string,
+    itemId: string,
+    action: "cancel" | "restore",
+    data: ForeshadowPlanStateInput
+  ) => fetchJSON<ForeshadowMutationReceipt>(
+    `/projects/${encodeURIComponent(projectId)}/planning/foreshadows/${encodeURIComponent(lifecycleId)}/plans/${encodeURIComponent(itemId)}/${action}`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
+  recordForeshadowFact: (projectId: string, lifecycleId: string, data: ForeshadowFactCreateInput) =>
+    fetchJSON<ForeshadowMutationReceipt>(
+      `/projects/${encodeURIComponent(projectId)}/planning/foreshadows/${encodeURIComponent(lifecycleId)}/facts`,
+      { method: "POST", body: JSON.stringify(data) }
+    ),
+  retractForeshadowFact: (
+    projectId: string,
+    lifecycleId: string,
+    factId: string,
+    data: ForeshadowFactRetractInput
+  ) => fetchJSON<ForeshadowMutationReceipt>(
+    `/projects/${encodeURIComponent(projectId)}/planning/foreshadows/${encodeURIComponent(lifecycleId)}/facts/${encodeURIComponent(factId)}/retract`,
+    { method: "POST", body: JSON.stringify(data) }
   ),
 
   // Chapters

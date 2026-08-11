@@ -7,6 +7,7 @@ import NewProject from "@/pages/NewProject";
 import ProjectDetail from "@/pages/ProjectDetail";
 import LoreRepositoryPage from "@/pages/LoreRepositoryPage";
 import ChapterPlanningPage from "@/pages/ChapterPlanningPage";
+import ForeshadowPlanningPage from "@/pages/ForeshadowPlanningPage";
 import Settings from "@/pages/Settings";
 import Community from "@/pages/Community";
 import CommunityNovelDetail from "@/pages/CommunityNovelDetail";
@@ -98,6 +99,7 @@ function AppRoutes() {
                   <Route path="/project/:id" element={<ProjectDetail />} />
                   <Route path="/project/:id/lore" element={<LoreRepositoryPage />} />
                   <Route path="/project/:id/plan/chapters" element={<ChapterPlanningPage />} />
+                  <Route path="/project/:id/plan/foreshadows" element={<ForeshadowPlanningPage />} />
                   <Route
                     path="/settings"
                     element={
