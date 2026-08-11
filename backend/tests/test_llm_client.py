@@ -9,11 +9,13 @@ import pytest
 from app.core.llm_client import (
     LLMClient,
     LLMResponseTruncatedError,
+    LLMSingleCallError,
     _mock_chapter,
-    _mock_outline,
     _mock_response,
     _mock_worldview_extraction,
 )
+from app.models.project import NovelGenre
+from app.prompts.templates import build_chapter_prompt
 
 # ─── Mock response tests ────────────────────────────────────
 
@@ -28,16 +30,6 @@ class TestMockResponse:
         assert "```json" in result
         assert "characters" in result
         assert "geography" in result
-
-    def test_outline_mock(self):
-        messages = [
-            {"role": "system", "content": "请生成故事大纲 outline"},
-            {"role": "user", "content": "主角是林远"},
-        ]
-        result = _mock_response(messages)
-        assert "```json" in result
-        assert "story_arc" in result
-        assert "chapters" in result
 
     def test_chapter_mock(self):
         # Test with worldview elements in the prompt
@@ -58,6 +50,26 @@ class TestMockResponse:
         assert "林远" in result
         assert len(result) > 100
         assert "开发模式" in result
+
+    def test_real_chapter_prompt_with_story_arc_routes_to_chapter_mock(self):
+        messages = build_chapter_prompt(
+            genre=NovelGenre.XUANHUAN,
+            chapter_num=1,
+            chapter_title="觉醒",
+            chapter_summary="主角发现自身力量",
+            key_events=["发现力量"],
+            elements_to_reveal=[],
+            style_intensity="standard",
+            context={},
+            chapter_word_count=2000,
+            total_chapters=5,
+            story_arc="历史故事大纲方向",
+        )
+
+        result = _mock_response(messages)
+
+        assert "开发模式" in result
+        assert '"story_arc"' not in result
 
     def test_chapter_mock_no_elements(self):
         # Test with no worldview elements (fallback)
@@ -81,24 +93,6 @@ class TestMockResponse:
         assert "geography" in data
         assert "factions" in data
         assert "power_system" in data
-
-    def test_mock_outline_returns_valid_json(self):
-        result = _mock_outline("请为全部5章生成大纲", "任意文本")
-        data = json.loads(result.replace("```json\n", "").replace("\n```", ""))
-        assert "story_arc" in data
-        assert len(data["chapters"]) == 5
-
-    def test_mock_outline_dynamic_chapter_count(self):
-        """_mock_outline should generate the number of chapters specified in the system prompt."""
-        result = _mock_outline("请为全部10章生成大纲", "用户消息")
-        data = json.loads(result.replace("```json\n", "").replace("\n```", ""))
-        assert len(data["chapters"]) == 10
-
-    def test_mock_outline_defaults_to_5_without_match(self):
-        """_mock_outline should default to 5 chapters when system prompt has no chapter count."""
-        result = _mock_outline("没有章节数信息的提示", "用户消息")
-        data = json.loads(result.replace("```json\n", "").replace("\n```", ""))
-        assert len(data["chapters"]) == 5
 
     def test_mock_chapter_has_content(self):
         result = _mock_chapter("任意文本")
@@ -412,6 +406,71 @@ class TestLLMClientChat:
             client._client = mock_http_client
             result = await client.chat([{"role": "user", "content": "Hi"}])
             assert result == "Connected"
+
+
+class TestLLMClientChatOnce:
+    @pytest.mark.asyncio
+    async def test_chat_once_never_uses_mock_without_key(self):
+        client = LLMClient()
+        with patch("app.core.llm_client.load_settings") as mock_load:
+            mock_load.return_value = {
+                "api_key": "",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
+            with pytest.raises(LLMSingleCallError) as caught:
+                await client.chat_once([{"role": "user", "content": "Hi"}])
+            assert caught.value.code == "LLM_NOT_CONFIGURED"
+
+    @pytest.mark.asyncio
+    async def test_chat_once_timeout_has_unknown_outcome_and_one_attempt(self):
+        client = LLMClient()
+        with patch("app.core.llm_client.load_settings") as mock_load:
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
+            mock_http_client = AsyncMock()
+            mock_http_client.post = AsyncMock(
+                side_effect=httpx.TimeoutException("timeout")
+            )
+            mock_http_client.is_closed = False
+            client._client = mock_http_client
+
+            with pytest.raises(LLMSingleCallError) as caught:
+                await client.chat_once([{"role": "user", "content": "Hi"}])
+            assert caught.value.code == "LLM_OUTCOME_UNKNOWN"
+            assert caught.value.outcome_unknown is True
+            assert mock_http_client.post.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_chat_once_does_not_retry_retryable_http_status(self):
+        client = LLMClient()
+        with patch("app.core.llm_client.load_settings") as mock_load:
+            mock_load.return_value = {
+                "api_key": "sk-test",
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "temperature": 0.8,
+                "max_tokens": 4096,
+            }
+            response = MagicMock()
+            response.status_code = 503
+            mock_http_client = AsyncMock()
+            mock_http_client.post = AsyncMock(return_value=response)
+            mock_http_client.is_closed = False
+            client._client = mock_http_client
+
+            with pytest.raises(LLMSingleCallError) as caught:
+                await client.chat_once([{"role": "user", "content": "Hi"}])
+            assert caught.value.code == "LLM_REQUEST_REJECTED"
+            assert caught.value.retryable is True
+            assert mock_http_client.post.call_count == 1
 
 
 # ─── Chat stream tests ──────────────────────────────────────

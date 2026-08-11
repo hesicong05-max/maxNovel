@@ -5,6 +5,9 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
+from app.config import settings as app_settings
+from app.core.maintenance import project_write_frozen_payload
+
 router = APIRouter(prefix="/api/version", tags=["version"])
 
 
@@ -23,4 +26,15 @@ async def get_version() -> dict[str, str]:
     return {
         "version": "0.1.0",
         "commit": _read_commit(),
+    }
+
+
+@router.get("/maintenance")
+async def get_maintenance_status() -> dict[str, object]:
+    """Expose only the public state needed to keep editors fail-safe."""
+    if not app_settings.LEGACY_JSON_WRITES_FROZEN:
+        return {"active": False}
+    return {
+        "active": True,
+        **project_write_frozen_payload(),
     }

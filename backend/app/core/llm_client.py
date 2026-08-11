@@ -25,6 +25,24 @@ class LLMResponseTruncatedError(RuntimeError):
     """Raised when the provider stops because the output token limit was reached."""
 
 
+class LLMSingleCallError(RuntimeError):
+    """Safe failure metadata for an at-most-once LLM request."""
+
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool = False,
+        outcome_unknown: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.safe_message = message
+        self.retryable = retryable
+        self.outcome_unknown = outcome_unknown
+
+
 class LLMClient:
     """Async client for OpenAI-compatible chat completions API."""
 
@@ -67,6 +85,80 @@ class LLMClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+
+    async def chat_once(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Call the provider exactly once, with no mock response or retry.
+
+        Extraction jobs use this method because retrying an uncertain request can
+        duplicate provider work or charges. Error metadata never contains the
+        provider response body or user content.
+        """
+
+        self._reload()
+        if not self.api_key:
+            raise LLMSingleCallError(
+                "LLM_NOT_CONFIGURED",
+                "LLM 尚未配置，未发起提取调用",
+            )
+
+        client = await self._get_client()
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature if temperature is not None else self.temperature,
+            "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
+        }
+        try:
+            response = await client.post(
+                f"{self.base_url}/chat/completions",
+                headers=self._headers(),
+                json=payload,
+            )
+        except httpx.TimeoutException as exc:
+            raise LLMSingleCallError(
+                "LLM_OUTCOME_UNKNOWN",
+                "LLM 请求超时，结果状态无法确认",
+                outcome_unknown=True,
+            ) from exc
+        except httpx.TransportError as exc:
+            raise LLMSingleCallError(
+                "LLM_OUTCOME_UNKNOWN",
+                "LLM 连接中断，结果状态无法确认",
+                outcome_unknown=True,
+            ) from exc
+
+        if response.status_code != 200:
+            raise LLMSingleCallError(
+                "LLM_REQUEST_REJECTED",
+                f"LLM 请求未成功（HTTP {response.status_code}）",
+                retryable=response.status_code in _RETRY_STATUS_CODES,
+            )
+
+        try:
+            data = response.json()
+            choice = data["choices"][0]
+            content = choice["message"]["content"]
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise LLMSingleCallError(
+                "LLM_RESPONSE_INVALID",
+                "LLM 返回了无法读取的响应",
+            ) from exc
+        if choice.get("finish_reason") == "length":
+            raise LLMSingleCallError(
+                "LLM_RESPONSE_TRUNCATED",
+                "LLM 输出不完整，未保存任何候选",
+            )
+        if not isinstance(content, str):
+            raise LLMSingleCallError(
+                "LLM_RESPONSE_INVALID",
+                "LLM 返回了无法读取的响应",
+            )
+        return content
 
     async def chat(
         self,
@@ -343,8 +435,6 @@ def _mock_response(messages: list[dict[str, str]]) -> str:
 
     if "世界观" in system_msg and "提取" in system_msg:
         return _mock_worldview_extraction(user_msg)
-    if "大纲" in system_msg or "outline" in system_msg.lower():
-        return _mock_outline(system_msg, user_msg)
     if "章节" in system_msg or "chapter" in system_msg.lower():
         return _mock_chapter(user_msg)
     return f"[开发模式] 未配置 LLM API Key，这是模拟响应。\n\n系统提示: {system_msg[:100]}...\n\n用户请求: {user_msg[:100]}..."
@@ -386,168 +476,6 @@ def _mock_worldview_extraction(user_msg: str) -> str:
   ]
 }
 ```"""
-
-
-def _mock_outline(system_msg: str, user_msg: str) -> str:
-    """Mock outline response — generates chapters and reveal_plan matching the project's total_chapters."""
-    import json as _json
-    import re as _re
-
-    # Parse total_chapters from the system prompt: "请为全部{N}章生成大纲"
-    match = _re.search(r"全部(\d+)章", system_msg)
-    total = int(match.group(1)) if match else 5
-
-    # Extract element names from the user prompt's worldview data
-    # Look for patterns like "  - name（priority）: description" in the prompt
-    element_names = []
-    for line in user_msg.split("\n"):
-        stripped = line.strip()
-        if stripped.startswith("- "):
-            # Extract name: everything after "- " up to first ( or （ or :
-            name_part = stripped[2:]
-            for delim in ["(", "（", "：", ":"]:
-                pos = name_part.find(delim)
-                if pos > 0:
-                    name_part = name_part[:pos]
-                    break
-            name = name_part.strip()
-            if name and len(name) < 20 and name not in element_names:
-                element_names.append(name)
-
-    mock_titles = [
-        "觉醒",
-        "初入江湖",
-        "暗流涌动",
-        "风起云涌",
-        "暗棋",
-        "破茧",
-        "风云际会",
-        "暗夜追踪",
-        "龙争虎斗",
-        "破局",
-        "逆流而上",
-        "风暴前夕",
-        "惊雷",
-        "棋局",
-        "暗战",
-        "破阵",
-        "逆袭",
-        "巅峰对决",
-        "真相",
-        "抉择",
-        "归来",
-        "新的征程",
-        "暗影之下",
-        "破晓",
-        "对决",
-        "命运",
-        "终章序曲",
-        "最后的选择",
-        "决战",
-        "终章",
-    ]
-
-    phases = [
-        "起势",
-        "暗涌",
-        "暗涌",
-        "起势",
-        "暗涌",
-        "转折",
-        "爆发",
-        "爆发",
-        "转折",
-        "爆发",
-        "深入",
-        "深入",
-        "爆发",
-        "转折",
-        "深入",
-        "爆发",
-        "深入",
-        "爆发",
-        "深入",
-        "转折",
-        "终局",
-        "终局",
-        "终局",
-        "终局",
-        "终局",
-        "终局",
-        "终局",
-        "终局",
-        "终局",
-        "终局",
-    ]
-
-    chapters = []
-    reveal_plan = []
-    for i in range(1, total + 1):
-        title = mock_titles[i - 1] if i <= len(mock_titles) else f"第{i}章"
-        phase = phases[i - 1] if i <= len(phases) else "推进"
-
-        # Assign elements to chapters (spread across the story)
-        reveal_elems = []
-        if element_names:
-            # Reveal 1-2 elements per chapter, cycling through
-            idx = (i - 1) % max(len(element_names), 1)
-            reveal_elems = [element_names[idx]]
-            if i > 1 and len(element_names) > 1:
-                idx2 = (i - 1 + 1) % len(element_names)
-                if idx2 != idx:
-                    reveal_elems.append(element_names[idx2])
-
-        chapters.append(
-            {
-                "chapter_num": i,
-                "title": title,
-                "summary": f"第{i}章内容概述，主角继续冒险，逐步揭示世界观设定。",
-                "key_events": [f"关键事件{i}-1", f"关键事件{i}-2"],
-                "reveal_elements": reveal_elems,
-            }
-        )
-
-        reveal_plan.append(
-            {
-                "chapter": i,
-                "phase": phase,
-                "elements": reveal_elems,
-                "summary": f"{phase}阶段，推进主线剧情",
-            }
-        )
-
-    # Build a comprehensive story_arc based on extracted worldview elements
-    char_names = [n for n in element_names if n][:3]
-    char_str = "、".join(char_names) if char_names else "主角"
-    story_arc = (
-        f"【核心主题】一个关于成长、抉择与命运的故事。{char_str}在世界观的设定下，"
-        f"逐步发现自身与世界的深层联系，面对不断升级的矛盾和挑战，最终走向关键的终极抉择。\n"
-        f"【主线脉络】故事以{char_str}的成长为线索，从平凡的起点出发，逐步卷入世界观中的核心矛盾。"
-        f"随着力量的提升和视野的开阔，主角逐步揭开隐藏在世界表象之下的真相，"
-        f"在各方势力的博弈中寻找自己的立场。\n"
-        f"【关键矛盾】世界观中的核心矛盾推动主线发展，主角在势力冲突、理念对立和个人情感之间不断抉择。"
-        f"随着故事推进，矛盾从个人层面逐步升级到世界观层面的终极冲突。\n"
-        f"【角色弧线】{char_str}从普通少年成长为能够影响世界格局的关键人物，"
-        f"在经历中不断修正自己的信念和目标。配角的加入丰富了故事维度，各自承担不同的叙事功能。\n"
-        f"【世界观驱动】世界观中的力量体系决定成长节奏，地理设定影响剧情走向，"
-        f"历史事件埋下伏笔并在后期回收，特殊设定为故事增添独特魅力。\n"
-        f"【情感基调】整体氛围从平淡渐入高潮，前期侧重探索和成长，中段矛盾升级带来紧张感，"
-        f"后期进入决战与抉择的高潮，最终以收束和余韵收尾。"
-    )
-
-    return (
-        "```json\n"
-        + _json.dumps(
-            {
-                "story_arc": story_arc,
-                "reveal_plan": reveal_plan,
-                "chapters": chapters,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n```"
-    )
 
 
 def _mock_chapter(user_msg: str) -> str:

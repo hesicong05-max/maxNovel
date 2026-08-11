@@ -12,7 +12,7 @@ from app.api.chapters import (
     _stream_single_chapter,
 )
 from app.core.llm_client import llm_client
-from app.models.project import ProjectStatus, StoryMemory
+from app.models.project import Chapter, Outline, Project, ProjectStatus, StoryMemory, Worldview
 from tests.conftest import TestSessionLocal
 
 
@@ -92,11 +92,26 @@ async def _create_ready_project(client, headers, total_chapters: int = 1) -> str
     )
     assert worldview_resp.status_code == 200
 
-    outline_resp = await client.post(
-        f"/api/outline/{project_id}/generate",
-        headers=headers,
-    )
-    assert outline_resp.status_code == 200
+    # DEV-003D1: construct a historical Outline directly. Public outline
+    # generation is retired, while Chapter must keep reading existing rows.
+    async with TestSessionLocal() as db:
+        result = await db.execute(select(Project).where(Project.id == project_id))
+        project = result.scalar_one()
+        project.status = ProjectStatus.OUTLINE_CONFIRMED
+        db.add(Outline(
+            project_id=project_id,
+            story_arc="旧项目兼容规划",
+            chapters=[{
+                "chapter_num": chapter_num,
+                "title": f"第{chapter_num}章",
+                "summary": "兼容测试章节",
+                "key_events": [],
+                "reveal_elements": [],
+            } for chapter_num in range(1, total_chapters + 1)],
+            reveal_plan=[],
+        ))
+        db.add(StoryMemory(project_id=project_id))
+        await db.commit()
     return project_id
 
 
@@ -156,6 +171,87 @@ async def test_empty_generation_is_not_saved_as_complete(client, auth_headers):
         headers=auth_headers,
     )
     assert chapter_resp.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("clean_db")
+async def test_generation_fails_closed_when_worldview_elements_are_over_encoded(
+    client, auth_headers
+):
+    project_id = await _create_ready_project(client, auth_headers)
+    async with TestSessionLocal() as db:
+        worldview = await db.scalar(
+            select(Worldview).where(Worldview.project_id == project_id)
+        )
+        worldview.parsed_elements = json.dumps(
+            json.dumps(
+                json.dumps([{"name": "不应进入提示词"}], ensure_ascii=False),
+                ensure_ascii=False,
+            ),
+            ensure_ascii=False,
+        )
+        await db.commit()
+
+    with patch.object(llm_client, "chat_stream") as chat_stream:
+        response = await client.post(
+            f"/api/chapters/{project_id}/1/generate",
+            headers=auth_headers,
+        )
+
+    assert response.status_code == 200
+    assert "LEGACY_WORLDVIEW_ELEMENTS_INVALID" in response.text
+    assert "不应进入提示词" not in response.text
+    chat_stream.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("clean_db")
+async def test_batch_generation_validates_worldview_before_status_or_content_writes(
+    client, auth_headers
+):
+    project_id = await _create_ready_project(client, auth_headers, total_chapters=2)
+    async with TestSessionLocal() as db:
+        worldview = await db.scalar(
+            select(Worldview).where(Worldview.project_id == project_id)
+        )
+        worldview.parsed_elements = json.dumps(
+            json.dumps(
+                json.dumps([{"name": "不应进入提示词"}], ensure_ascii=False),
+                ensure_ascii=False,
+            ),
+            ensure_ascii=False,
+        )
+        await db.commit()
+
+    with patch.object(llm_client, "chat_stream") as chat_stream:
+        response = await client.post(
+            f"/api/chapters/{project_id}/generate-all",
+            headers=auth_headers,
+        )
+
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+
+    assert len(events) == 1
+    assert events[0]["type"] == "error"
+    assert events[0]["code"] == "LEGACY_WORLDVIEW_ELEMENTS_INVALID"
+    assert "不应进入提示词" not in str(events)
+    chat_stream.assert_not_called()
+    async with TestSessionLocal() as db:
+        project = await db.scalar(select(Project).where(Project.id == project_id))
+        chapters = list((await db.scalars(
+            select(Chapter).where(Chapter.project_id == project_id)
+        )).all())
+        memory = await db.scalar(
+            select(StoryMemory).where(StoryMemory.project_id == project_id)
+        )
+        assert project.status == ProjectStatus.OUTLINE_CONFIRMED
+        assert chapters == []
+        assert memory.chapter_summaries in (None, [])
+        assert memory.timeline in (None, [])
 
 
 @pytest.mark.asyncio

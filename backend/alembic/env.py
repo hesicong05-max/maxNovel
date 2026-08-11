@@ -23,7 +23,7 @@ from app.config import settings
 from app.database import Base
 
 # Import all models so Alembic can detect them
-from app.models import community, lore, project, user  # noqa: F401
+from app.models import community, generation, lore, planning, project, user  # noqa: F401
 
 # ─── Alembic config ────────────────────────────────────────
 config = context.config

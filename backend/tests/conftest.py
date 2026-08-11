@@ -58,14 +58,10 @@ async def override_get_db():
 
 app.dependency_overrides[get_db] = override_get_db
 
-# Also override async_session for SSE endpoints that create sessions directly
-# (e.g. outline generate-stream, chapter generate-all)
+# Also override async_session for chapter SSE endpoints that create sessions directly.
 # Use `as` aliases to avoid rebinding the `app` FastAPI instance.
 import app.database as _db_mod  # noqa: E402
 _db_mod.async_session = TestSessionLocal
-
-import app.api.outline as _outline_mod  # noqa: E402
-_outline_mod.async_session = TestSessionLocal
 
 import app.api.chapters as _chapters_mod  # noqa: E402
 _chapters_mod.async_session = TestSessionLocal
@@ -75,7 +71,14 @@ _chapters_mod.async_session = TestSessionLocal
 async def setup_database():
     """Create tables once for the entire test session."""
     # Import all models to ensure they are registered
-    from app.models import community, lore, project, user  # noqa: F401
+    from app.models import (  # noqa: F401
+        community,
+        generation,
+        lore,
+        planning,
+        project,
+        user,
+    )
 
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -91,6 +94,13 @@ async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+
+
+@pytest.fixture
+async def db_session():
+    """Provide a test-database session for focused store and stream checks."""
+    async with TestSessionLocal() as session:
+        yield session
 
 
 @pytest.fixture

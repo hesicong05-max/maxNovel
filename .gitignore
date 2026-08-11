@@ -73,3 +73,4 @@ server_cleanup.py
 backend/uploads/
 frontend/coverage/
 backend/load_tests/__pycache__/
+backend/.venv312/

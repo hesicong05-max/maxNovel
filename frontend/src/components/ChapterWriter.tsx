@@ -330,7 +330,7 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
 
   return (
     <div>
-      <button className="btn-back" onClick={onBack}>← 返回大纲</button>
+      <button className="btn-back" onClick={onBack}>← 返回世界观与设定</button>
 
       {/* === Word Count Settings Panel === */}
       <div className="card" style={{ marginBottom: "0.875rem" }}>

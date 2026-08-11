@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from app.core.legacy_json import read_legacy_json, read_legacy_object_list
+
 
 LEGACY_CATEGORY_MAP = {
     "characters": ("character", "角色"),
@@ -42,39 +44,103 @@ TYPE_DISPLAY_NAMES = {
     "event": "事件",
     "foreshadow": "伏笔",
     "rule": "规则与限制",
+    "ability_system": "能力体系",
+    "race": "种族",
+    "historical_event": "历史事件",
+    "social_institution": "社会制度",
+    "other": "其他",
 }
 
+BUILTIN_TYPE_KEYS = frozenset(TYPE_DISPLAY_NAMES.keys())
+
 TYPE_FIELD_SCHEMAS: dict[str, list[dict[str, Any]]] = {
+    "world": [
+        {"key": "description", "label": "描述", "control": "textarea", "value_type": "text", "help": "世界观的核心描述", "order": 10, "required": False},
+        {"key": "rules", "label": "规则", "control": "textarea", "value_type": "text", "help": "世界运行的规则", "order": 20, "required": False},
+        {"key": "history", "label": "历史", "control": "textarea", "value_type": "text", "help": "世界的历史背景", "order": 30, "required": False},
+    ],
     "character": [
-        {"key": "personality", "label": "性格", "control": "textarea", "order": 10},
-        {"key": "background", "label": "背景", "control": "textarea", "order": 20},
-        {"key": "motivation", "label": "目标与动机", "control": "textarea", "order": 30},
-        {"key": "ability", "label": "能力", "control": "textarea", "order": 40},
+        {"key": "identity", "label": "身份", "control": "text", "value_type": "string", "help": "角色的身份标识", "order": 5, "required": False},
+        {"key": "appearance", "label": "外貌", "control": "textarea", "value_type": "text", "help": "角色的外貌描述", "order": 10, "required": False},
+        {"key": "personality", "label": "性格", "control": "textarea", "value_type": "text", "help": "角色的性格特点", "order": 20, "required": False},
+        {"key": "background", "label": "背景", "control": "textarea", "value_type": "text", "help": "角色的背景故事", "order": 30, "required": False},
+        {"key": "abilities", "label": "能力", "control": "textarea", "value_type": "text", "help": "角色的能力和特长", "order": 40, "required": False},
+        {"key": "limitations", "label": "限制", "control": "textarea", "value_type": "text", "help": "角色的弱点和限制", "order": 50, "required": False},
+        {"key": "goals", "label": "目标", "control": "textarea", "value_type": "text", "help": "角色的目标", "order": 60, "required": False},
+        {"key": "motivations", "label": "动机", "control": "textarea", "value_type": "text", "help": "角色的内在动机", "order": 70, "required": False},
+        {"key": "possible_plots", "label": "可能剧情", "control": "textarea", "value_type": "text", "help": "角色可能参与的剧情线索", "order": 80, "required": False},
     ],
     "location": [
-        {"key": "description", "label": "描述", "control": "textarea", "order": 10},
-        {"key": "significance", "label": "重要性", "control": "textarea", "order": 20},
+        {"key": "description", "label": "描述", "control": "textarea", "value_type": "text", "help": "地点的具体描述", "order": 10, "required": False},
+        {"key": "significance", "label": "重要性", "control": "textarea", "value_type": "text", "help": "地点在故事中的重要性", "order": 20, "required": False},
+        {"key": "geography", "label": "地理特征", "control": "textarea", "value_type": "text", "help": "地点的地理特征和环境", "order": 30, "required": False},
+    ],
+    "scene": [
+        {"key": "time", "label": "故事时间", "control": "text", "value_type": "string", "help": "场景发生的故事时间", "order": 10, "required": False},
+        {"key": "purpose", "label": "目的", "control": "textarea", "value_type": "text", "help": "场景在叙事中的目的", "order": 40, "required": False},
+        {"key": "description", "label": "描述", "control": "textarea", "value_type": "text", "help": "场景的具体描述", "order": 50, "required": False},
     ],
     "faction": [
-        {"key": "stance", "label": "立场", "control": "textarea", "order": 10},
-        {"key": "power_level", "label": "实力", "control": "text", "order": 20},
+        {"key": "stance", "label": "立场", "control": "textarea", "value_type": "text", "help": "阵营的立场和理念", "order": 10, "required": False},
+        {"key": "power_level", "label": "实力", "control": "text", "value_type": "string", "help": "阵营的实力等级", "order": 20, "required": False},
+        {"key": "goal", "label": "目标", "control": "textarea", "value_type": "text", "help": "阵营的目标", "order": 30, "required": False},
+        {"key": "structure", "label": "组织结构", "control": "textarea", "value_type": "text", "help": "阵营的组织结构", "order": 40, "required": False},
     ],
-    "rule": [
-        {"key": "levels", "label": "层级", "control": "textarea", "order": 10},
-        {"key": "rules", "label": "规则", "control": "textarea", "order": 20},
-        {"key": "limitations", "label": "限制", "control": "textarea", "order": 30},
-        {"key": "description", "label": "描述", "control": "textarea", "order": 40},
-    ],
-    "event": [
-        {"key": "time", "label": "故事时间", "control": "text", "order": 10},
-        {"key": "description", "label": "描述", "control": "textarea", "order": 20},
-        {"key": "impact", "label": "影响", "control": "textarea", "order": 30},
+    "item": [
+        {"key": "description", "label": "描述", "control": "textarea", "value_type": "text", "help": "物品的具体描述", "order": 10, "required": False},
+        {"key": "origin", "label": "来源", "control": "textarea", "value_type": "text", "help": "物品的来源与创造", "order": 20, "required": False},
+        {"key": "power", "label": "能力/效果", "control": "textarea", "value_type": "text", "help": "物品的能力或特殊效果", "order": 30, "required": False},
+        {"key": "limitations", "label": "限制", "control": "textarea", "value_type": "text", "help": "物品的使用限制", "order": 40, "required": False},
     ],
     "conflict": [
-        {"key": "type", "label": "类型", "control": "text", "order": 10},
-        {"key": "parties", "label": "参与方", "control": "textarea", "order": 20},
-        {"key": "stakes", "label": "赌注", "control": "textarea", "order": 30},
-        {"key": "resolution_hint", "label": "解决线索", "control": "textarea", "order": 40},
+        {"key": "type", "label": "类型", "control": "text", "value_type": "string", "help": "冲突的类型", "order": 10, "required": False},
+        {"key": "parties", "label": "参与方", "control": "textarea", "value_type": "text", "help": "冲突的参与方", "order": 20, "required": False},
+        {"key": "stakes", "label": "赌注", "control": "textarea", "value_type": "text", "help": "冲突的赌注", "order": 30, "required": False},
+        {"key": "resolution_hint", "label": "解决线索", "control": "textarea", "value_type": "text", "help": "解决冲突的线索", "order": 40, "required": False},
+        {"key": "status", "label": "当前状态", "control": "text", "value_type": "string", "help": "冲突的当前状态", "order": 50, "required": False},
+    ],
+    "event": [
+        {"key": "time", "label": "故事时间", "control": "text", "value_type": "string", "help": "事件发生的故事时间", "order": 10, "required": False},
+        {"key": "description", "label": "描述", "control": "textarea", "value_type": "text", "help": "事件的核心描述", "order": 20, "required": False},
+        {"key": "impact", "label": "影响", "control": "textarea", "value_type": "text", "help": "事件对故事的影响", "order": 30, "required": False},
+    ],
+    "foreshadow": [
+        {"key": "description", "label": "描述", "control": "textarea", "value_type": "text", "help": "伏笔的具体描述", "order": 10, "required": False},
+        {"key": "hint", "label": "线索提示", "control": "textarea", "value_type": "text", "help": "埋入章节中的线索提示", "order": 50, "required": False},
+    ],
+    "rule": [
+        {"key": "levels", "label": "层级", "control": "textarea", "value_type": "text", "help": "规则体系的层级", "order": 10, "required": False},
+        {"key": "rules", "label": "规则", "control": "textarea", "value_type": "text", "help": "具体的规则内容", "order": 20, "required": False},
+        {"key": "limitations", "label": "限制", "control": "textarea", "value_type": "text", "help": "规则的限制条件", "order": 30, "required": False},
+        {"key": "description", "label": "描述", "control": "textarea", "value_type": "text", "help": "规则的详细描述", "order": 40, "required": False},
+        {"key": "scope", "label": "适用范围", "control": "textarea", "value_type": "text", "help": "规则适用的范围", "order": 50, "required": False},
+    ],
+    "ability_system": [
+        {"key": "description", "label": "描述", "control": "textarea", "value_type": "text", "help": "能力体系的核心描述", "order": 10, "required": False},
+        {"key": "levels", "label": "等级划分", "control": "textarea", "value_type": "text", "help": "能力等级划分", "order": 20, "required": False},
+        {"key": "rules", "label": "规则", "control": "textarea", "value_type": "text", "help": "能力体系的规则", "order": 30, "required": False},
+        {"key": "limitations", "label": "限制", "control": "textarea", "value_type": "text", "help": "能力体系的限制", "order": 40, "required": False},
+    ],
+    "race": [
+        {"key": "description", "label": "描述", "control": "textarea", "value_type": "text", "help": "种族的核心描述", "order": 10, "required": False},
+        {"key": "traits", "label": "特征", "control": "textarea", "value_type": "text", "help": "种族的生理和文化特征", "order": 20, "required": False},
+        {"key": "habitat", "label": "栖息地", "control": "textarea", "value_type": "text", "help": "种族的栖息地", "order": 30, "required": False},
+    ],
+    "historical_event": [
+        {"key": "time", "label": "时间", "control": "text", "value_type": "string", "help": "历史事件发生的时间", "order": 10, "required": False},
+        {"key": "description", "label": "描述", "control": "textarea", "value_type": "text", "help": "历史事件的核心描述", "order": 20, "required": False},
+        {"key": "impact", "label": "影响", "control": "textarea", "value_type": "text", "help": "历史事件对世界的影响", "order": 30, "required": False},
+        {"key": "key_figures", "label": "关键人物", "control": "textarea", "value_type": "text", "help": "历史事件中的关键人物", "order": 40, "required": False},
+    ],
+    "social_institution": [
+        {"key": "description", "label": "描述", "control": "textarea", "value_type": "text", "help": "社会制度的核心描述", "order": 10, "required": False},
+        {"key": "structure", "label": "组织结构", "control": "textarea", "value_type": "text", "help": "社会制度的组织结构", "order": 20, "required": False},
+        {"key": "function", "label": "职能", "control": "textarea", "value_type": "text", "help": "社会制度的职能", "order": 30, "required": False},
+        {"key": "scope", "label": "适用范围", "control": "textarea", "value_type": "text", "help": "社会制度的适用范围", "order": 40, "required": False},
+    ],
+    "other": [
+        {"key": "description", "label": "描述", "control": "textarea", "value_type": "text", "help": "自定义设定的描述", "order": 10, "required": False},
+        {"key": "details", "label": "详细信息", "control": "textarea", "value_type": "text", "help": "其他补充信息", "order": 20, "required": False},
     ],
 }
 
@@ -118,14 +184,10 @@ def _legacy_collection_value(value: Any) -> Any:
     """Normalize a legacy collection stored as JSON or historical Text."""
     if value is None:
         return []
-    if isinstance(value, str):
-        try:
-            decoded = json.loads(value)
-        except (TypeError, json.JSONDecodeError):
-            return value
-        if isinstance(decoded, list):
-            return _json_value(decoded)
-    return _json_value(value)
+    result = read_legacy_json(value)
+    if not result.valid:
+        return {"__legacy_json_error__": result.error_category}
+    return _json_value(result.value)
 
 
 def legacy_worldview_checksum(worldview: Any | None) -> str:
@@ -258,14 +320,15 @@ def project_legacy_worldview(
     if worldview is None:
         return LoreProjection([], checksum, [])
 
-    parsed = _legacy_collection_value(
+    parsed_result = read_legacy_object_list(
         getattr(worldview, "parsed_elements", None)
     )
     parsed_by_category: dict[str, list[dict[str, Any]]] = {}
-    if isinstance(parsed, list):
-        for raw in parsed:
-            if not isinstance(raw, dict):
-                continue
+    warnings: list[str] = []
+    if not parsed_result.valid:
+        warnings.append("parsed_elements:invalid_collection")
+    else:
+        for raw in parsed_result.items:
             parsed_by_category.setdefault(str(raw.get("category", "")), []).append(raw)
 
     source_kind, source_label = _source_info(
@@ -273,7 +336,6 @@ def project_legacy_worldview(
     )
     created_at = getattr(worldview, "created_at", None) or datetime(1970, 1, 1)
     elements: list[ProjectedLoreElement] = []
-    warnings: list[str] = []
 
     for legacy_category, (type_key, type_display_name) in LEGACY_CATEGORY_MAP.items():
         values = _legacy_collection_value(

@@ -94,6 +94,13 @@ export interface WorldviewData {
   source?: WorldviewSource;
 }
 
+export interface WorldviewResponse extends WorldviewData {
+  id: string;
+  parsed_elements: WorldviewElement[];
+  source: WorldviewSource;
+  source_checksum: string;
+}
+
 export type WorldviewSource = "manual" | "imported" | "hybrid";
 
 export interface WorldviewImportResult extends WorldviewData {
@@ -108,31 +115,6 @@ export interface WorldviewElement {
   priority: "core" | "important" | "secondary" | "background";
   revealed: boolean;
   reveal_chapter: number | null;
-}
-
-export interface OutlineChapter {
-  chapter_num: number;
-  title: string;
-  summary: string;
-  key_events: string[];
-  reveal_elements: string[];
-}
-
-export interface RevealPlanEntry {
-  chapter: number;
-  phase: string;
-  elements: string[];
-  summary: string;
-}
-
-export interface OutlineData {
-  id: string;
-  project_id: string;
-  story_arc: string;
-  chapters: OutlineChapter[];
-  reveal_plan: RevealPlanEntry[];
-  created_at?: string;
-  updated_at?: string;
 }
 
 export interface ChapterData {
@@ -167,6 +149,20 @@ export interface ProgressData {
   character_states: Record<string, unknown>;
 }
 
+export interface ApiErrorData {
+  detail: string;
+  code?: string;
+  recommended_action?: string;
+  maintenance_state?: string;
+  retryable?: boolean;
+  retry_after_seconds?: number;
+  event_id?: string;
+  suggestion_id?: string;
+  reload_required?: boolean;
+  outcome_unknown?: boolean;
+  context?: Record<string, unknown>;
+}
+
 export interface StreamMessage {
   type: "metadata" | "content" | "complete" | "error";
   text?: string;
@@ -178,19 +174,7 @@ export interface StreamMessage {
   word_count?: number;
   target_word_count?: number;
   summary?: string;
-  error?: string;
-}
-
-// === Outline Streaming ===
-
-export interface OutlineStreamMessage {
-  type: "start" | "progress" | "complete" | "error";
-  message?: string;
-  total_chapters?: number;
-  chunks?: number;
-  chars?: number;
-  outline?: OutlineData;
-  warning?: string;
+  error?: string | ApiErrorData;
 }
 
 // === Word Count Configuration ===
@@ -228,7 +212,7 @@ export interface BatchStreamMessage {
   target_word_count?: number;
   word_count?: number;
   summary?: string;
-  error?: string;
+  error?: string | ApiErrorData;
   current?: number;
   total?: number;
   total_chapters?: number;

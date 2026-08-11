@@ -12,7 +12,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings as app_settings
 from app.core.auth import User, get_current_user, get_project_for_owner
 from app.core.llm_client import LLMResponseTruncatedError, llm_client
-from app.core.memory_store import memory_store
+from app.core.legacy_json import LegacyObjectListResult, read_legacy_object_list
+from app.core.maintenance import (
+    PROJECT_WRITE_FROZEN_CODE,
+    ProjectWriteFrozenError,
+    ensure_project_writes_available,
+    project_write_frozen_sse_event,
+    require_project_writes_available,
+)
+from app.core.memory_store import InvalidLegacyStoryMemoryError, memory_store
 from app.core.pacing_planner import pacing_planner
 from app.core.rate_limiter import limiter
 from app.core.worldview_parser import worldview_parser
@@ -39,6 +47,37 @@ logger = logging.getLogger(__name__)
 # Word count validation constants
 MIN_WORD_COUNT = 500
 MAX_WORD_COUNT = 10000
+
+_LEGACY_OUTLINE_CHAPTERS_INVALID = "LEGACY_OUTLINE_CHAPTERS_INVALID"
+_LEGACY_WORLDVIEW_ELEMENTS_INVALID = "LEGACY_WORLDVIEW_ELEMENTS_INVALID"
+
+
+def _read_outline_object_list(
+    outline: Outline | None,
+    field_name: str,
+) -> LegacyObjectListResult:
+    if outline is None:
+        return LegacyObjectListResult(items=[])
+    result = read_legacy_object_list(getattr(outline, field_name, None))
+    if not result.valid:
+        logger.warning(
+            "Invalid legacy outline list project=%s field=%s category=%s",
+            outline.project_id,
+            field_name,
+            result.error_category,
+        )
+    return result
+
+
+def _read_worldview_elements(worldview: Worldview) -> LegacyObjectListResult:
+    result = read_legacy_object_list(worldview.parsed_elements)
+    if not result.valid:
+        logger.warning(
+            "Invalid legacy worldview elements project=%s category=%s",
+            worldview.project_id,
+            result.error_category,
+        )
+    return result
 
 # Prevent overlapping single/batch writers from corrupting the same project's
 # chapter and memory state within one application process. Database uniqueness
@@ -105,7 +144,7 @@ async def get_word_counts(
     )
     outline = ol_result.scalar_one_or_none()
 
-    outline_chapters = (outline.chapters if outline else []) or []
+    outline_chapters = _read_outline_object_list(outline, "chapters").items
     total_word_count = None
 
     # Check if total_word_count is stored in outline metadata
@@ -153,6 +192,7 @@ async def update_word_counts(
     data: WordCountConfigRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    _write_gate: Annotated[None, Depends(require_project_writes_available)],
 ):
     """Save word count configuration."""
     project = await get_project_for_owner(project_id, current_user, db)
@@ -201,10 +241,24 @@ async def update_word_counts(
     )
     outline = ol_result.scalar_one_or_none()
     if not outline:
-        raise HTTPException(status_code=400, detail="大纲不存在，请先生成大纲")
+        raise HTTPException(
+            status_code=400,
+            detail="当前项目没有可用的历史章节规划；新章节规划将在第二阶段开放",
+        )
+
+    ensure_project_writes_available()
 
     # Update chapter entries with target_word_count
-    chapters_data = list(outline.chapters or [])
+    chapters_result = _read_outline_object_list(outline, "chapters")
+    if not chapters_result.valid:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": _LEGACY_OUTLINE_CHAPTERS_INVALID,
+                "message": "历史章节安排暂时无法读取，原数据仍保留；当前无法生成新章节",
+            },
+        )
+    chapters_data = chapters_result.items
     for ch in chapters_data:
         ch_num = ch.get("chapter_num")
         if ch_num and ch_num in overrides:
@@ -222,6 +276,7 @@ async def update_word_counts(
     )
 
     outline.chapters = chapters_data
+    ensure_project_writes_available()
     await db.commit()
 
     # Return updated config
@@ -287,7 +342,17 @@ async def get_progress(
             character_states={},
         )
 
-    elements = worldview_parser.normalize_elements(worldview.parsed_elements)
+    elements_result = _read_worldview_elements(worldview)
+    if not elements_result.valid:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": _LEGACY_WORLDVIEW_ELEMENTS_INVALID,
+                "message": "旧世界观元素无法安全读取，进度统计未生成。",
+                "retryable": False,
+            },
+        )
+    elements = worldview_parser.normalize_elements(elements_result.items)
 
     # Query memory directly
     mem_result = await db.execute(
@@ -316,8 +381,9 @@ async def get_progress(
     )
     outline = ol_result.scalar_one_or_none()
     phase = ""
-    if outline and outline.reveal_plan:
-        for entry in outline.reveal_plan:
+    reveal_plan = _read_outline_object_list(outline, "reveal_plan").items
+    if reveal_plan:
+        for entry in reveal_plan:
             if isinstance(entry, dict) and entry.get("chapter") == (
                 current_chapter or 1
             ):
@@ -385,6 +451,7 @@ async def update_chapter(
     data: ChapterUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    _write_gate: Annotated[None, Depends(require_project_writes_available)],
 ):
     """Edit a generated chapter."""
     project = await get_project_for_owner(project_id, current_user, db)
@@ -398,6 +465,8 @@ async def update_chapter(
     chapter = result.scalar_one_or_none()
     if not chapter:
         raise HTTPException(status_code=404, detail="章节不存在")
+
+    ensure_project_writes_available()
 
     if data.title is not None:
         chapter.title = data.title
@@ -415,6 +484,7 @@ async def update_chapter(
     chapter.status = "edited"
     await _refresh_project_completion_status(db, project)
 
+    ensure_project_writes_available()
     await db.commit()
     await db.refresh(chapter)
 
@@ -441,6 +511,7 @@ async def generate_chapter(
     chapter_num: int,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    _write_gate: Annotated[None, Depends(require_project_writes_available)],
 ):
     """Generate a single chapter with streaming output."""
     # Verify ownership before streaming starts
@@ -466,6 +537,7 @@ async def generate_all_chapters(
     project_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    _write_gate: Annotated[None, Depends(require_project_writes_available)],
     skip_existing: bool = True,
 ):
     """Batch generate all chapters with streaming progress via SSE."""
@@ -485,6 +557,12 @@ async def _stream_single_chapter(project_id: str, chapter_num: int, user_id: str
 
     Re-verifies project ownership in the new session to prevent TOCTOU.
     """
+    try:
+        ensure_project_writes_available()
+    except ProjectWriteFrozenError:
+        yield _sse(project_write_frozen_sse_event())
+        return
+
     if project_id in _active_generation_projects:
         yield _sse(
             {"type": "error", "error": "该项目已有生成任务正在运行，请等待完成后重试"}
@@ -519,6 +597,12 @@ async def _stream_batch_generate(
 
     Re-verifies project ownership in the new session to prevent TOCTOU.
     """
+    try:
+        ensure_project_writes_available()
+    except ProjectWriteFrozenError:
+        yield _sse(project_write_frozen_sse_event())
+        return
+
     if project_id in _active_generation_projects:
         yield _sse(
             {"type": "error", "error": "该项目已有生成任务正在运行，请等待完成后重试"}
@@ -544,7 +628,42 @@ async def _stream_batch_generate(
             )
             outline = ol_result.scalar_one_or_none()
             if not outline:
-                yield _sse({"type": "error", "error": "大纲不存在，请先生成并确认大纲"})
+                yield _sse(
+                    {
+                        "type": "error",
+                        "error": "未检测到可用的历史章节安排，原数据未被修改；当前无法生成新章节",
+                    }
+                )
+                return
+
+            chapters_result = _read_outline_object_list(outline, "chapters")
+            reveal_plan_result = _read_outline_object_list(outline, "reveal_plan")
+            if not chapters_result.valid or not reveal_plan_result.valid:
+                yield _sse(
+                    {
+                        "type": "error",
+                        "error": "历史章节安排暂时无法读取，原数据仍保留；本次批量生成未开始",
+                        "code": _LEGACY_OUTLINE_CHAPTERS_INVALID,
+                    }
+                )
+                return
+
+            wv_result = await db.execute(
+                select(Worldview).where(Worldview.project_id == project_id)
+            )
+            worldview = wv_result.scalar_one_or_none()
+            if not worldview:
+                yield _sse({"type": "error", "error": "世界观不存在"})
+                return
+            elements_result = _read_worldview_elements(worldview)
+            if not elements_result.valid:
+                yield _sse(
+                    {
+                        "type": "error",
+                        "error": "旧世界观元素无法安全读取，原数据仍保留；本次批量生成未开始",
+                        "code": _LEGACY_WORLDVIEW_ELEMENTS_INVALID,
+                    }
+                )
                 return
 
             # Load existing chapters to know which to skip
@@ -584,6 +703,12 @@ async def _stream_batch_generate(
 
             # Do not downgrade a completed project merely because a regeneration
             # attempt starts; successful saves recompute the final status.
+            try:
+                ensure_project_writes_available()
+            except ProjectWriteFrozenError:
+                await db.rollback()
+                yield _sse(project_write_frozen_sse_event())
+                return
             if project.status != ProjectStatus.COMPLETED:
                 project.status = ProjectStatus.WRITING
             await db.commit()
@@ -609,13 +734,22 @@ async def _stream_batch_generate(
                     db, project_id, chapter_num, batch_mode=True
                 ):
                     # Parse the event to track success
+                    maintenance_frozen = False
                     try:
                         event_data = json.loads(event.replace("data: ", "").strip())
                         if event_data.get("type") == "complete":
                             chapter_success = True
+                        error = event_data.get("error")
+                        maintenance_frozen = (
+                            isinstance(error, dict)
+                            and error.get("code") == PROJECT_WRITE_FROZEN_CODE
+                        )
                     except (json.JSONDecodeError, ValueError):
                         pass
                     yield event
+                    if maintenance_frozen:
+                        await db.rollback()
+                        return
 
                 if chapter_success:
                     generated_count += 1
@@ -656,6 +790,13 @@ async def _generate_chapter_core(
     Core chapter generation logic. Yields SSE events.
     Used by both single-chapter and batch generation.
     """
+    try:
+        ensure_project_writes_available()
+    except ProjectWriteFrozenError:
+        await db.rollback()
+        yield _sse(project_write_frozen_sse_event())
+        return
+
     # Load project
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
@@ -679,7 +820,12 @@ async def _generate_chapter_core(
     )
     outline = ol_result.scalar_one_or_none()
     if not outline:
-        yield _sse({"type": "error", "error": "大纲不存在，请先生成并确认大纲"})
+        yield _sse(
+            {
+                "type": "error",
+                "error": "未检测到可用的历史章节安排，原数据未被修改；当前无法生成新章节",
+            }
+        )
         return
 
     # Load worldview
@@ -691,10 +837,25 @@ async def _generate_chapter_core(
         yield _sse({"type": "error", "error": "世界观不存在"})
         return
 
+    chapters_result = _read_outline_object_list(outline, "chapters")
+    if not chapters_result.valid:
+        yield _sse(
+            {
+                "type": "error",
+                "error": "历史章节安排暂时无法读取，原数据仍保留；当前无法生成新章节",
+                "code": _LEGACY_OUTLINE_CHAPTERS_INVALID,
+            }
+        )
+        return
+    outline_chapters = chapters_result.items
+    outline_reveal_plan = _read_outline_object_list(
+        outline, "reveal_plan"
+    ).items
+
     # Find the chapter entry in outline
     chapter_entry = None
     total_word_count_target = None
-    for ch in outline.chapters or []:
+    for ch in outline_chapters:
         if ch.get("chapter_num") == -1:
             total_word_count_target = ch.get("total_word_count")
         elif ch.get("chapter_num") == chapter_num:
@@ -722,7 +883,17 @@ async def _generate_chapter_core(
     # Elements in both chapter_entry.reveal_elements and reveal_plan.elements are
     # element NAMES (the LLM is instructed to output names, not IDs).
     # Match by name first, then fall back to ID for backward compatibility.
-    all_elements = worldview_parser.normalize_elements(worldview.parsed_elements)
+    elements_result = _read_worldview_elements(worldview)
+    if not elements_result.valid:
+        yield _sse(
+            {
+                "type": "error",
+                "error": "旧世界观元素无法安全读取，原数据仍保留；当前无法生成新章节",
+                "code": _LEGACY_WORLDVIEW_ELEMENTS_INVALID,
+            }
+        )
+        return
+    all_elements = worldview_parser.normalize_elements(elements_result.items)
     elements_to_reveal: list[dict[str, Any]] = []
     added_ids: set[str] = set()
 
@@ -735,7 +906,7 @@ async def _generate_chapter_core(
 
     # Round 2: also check outline.reveal_plan for this chapter
     # (reveal_plan.elements contains names, same as chapter.reveal_elements)
-    for entry in outline.reveal_plan or []:
+    for entry in outline_reveal_plan:
         if not isinstance(entry, dict):
             continue
         if entry.get("chapter") != chapter_num:
@@ -755,12 +926,35 @@ async def _generate_chapter_core(
                     break
 
     # Get story context from memory
-    memory = await memory_store.get_or_create(db, project_id)
-    context = await memory_store.get_context_for_chapter(memory, chapter_num)
+    try:
+        ensure_project_writes_available()
+        memory = await memory_store.get_or_create(db, project_id)
+    except ProjectWriteFrozenError:
+        await db.rollback()
+        yield _sse(project_write_frozen_sse_event())
+        return
+    try:
+        context = await memory_store.get_context_for_chapter(memory, chapter_num)
+    except InvalidLegacyStoryMemoryError:
+        await db.rollback()
+        yield _sse(
+            {
+                "type": "error",
+                "error": "故事记忆配置无法读取，请检查数据后重试",
+                "code": "LEGACY_STORY_MEMORY_INVALID",
+            }
+        )
+        return
 
     # Persist newly-created memory before the long-running stream. Keep a
     # completed project completed while a regeneration attempt is in flight;
     # a failed retry must not downgrade already-valid data.
+    try:
+        ensure_project_writes_available()
+    except ProjectWriteFrozenError:
+        await db.rollback()
+        yield _sse(project_write_frozen_sse_event())
+        return
     if project.status != ProjectStatus.COMPLETED:
         project.status = ProjectStatus.WRITING
     await db.commit()
@@ -768,7 +962,7 @@ async def _generate_chapter_core(
     # Determine phase from outline's LLM-generated reveal_plan
     phase = ""
     phase_guidance = ""
-    for entry in outline.reveal_plan or []:
+    for entry in outline_reveal_plan:
         if isinstance(entry, dict) and entry.get("chapter") == chapter_num:
             phase = entry.get("phase", "")
             phase_guidance = entry.get("summary", "")
@@ -888,6 +1082,12 @@ async def _generate_chapter_core(
         )
 
     # Save chapter to database
+    try:
+        ensure_project_writes_available()
+    except ProjectWriteFrozenError:
+        await db.rollback()
+        yield _sse(project_write_frozen_sse_event())
+        return
     result = await db.execute(
         select(Chapter).where(
             Chapter.project_id == project_id,
@@ -916,15 +1116,27 @@ async def _generate_chapter_core(
         db.add(chapter)
 
     # Update memory
-    await memory_store.mark_revealed(
-        db, memory, [e["id"] for e in elements_to_reveal], chapter_num
-    )
-    await memory_store.add_chapter_summary(db, memory, chapter_num, summary)
-    await memory_store.add_timeline_event(db, memory, chapter_num, "章节生成", summary)
+    try:
+        await memory_store.mark_revealed(
+            db, memory, [e["id"] for e in elements_to_reveal], chapter_num
+        )
+        await memory_store.add_chapter_summary(db, memory, chapter_num, summary)
+        await memory_store.add_timeline_event(
+            db, memory, chapter_num, "章节生成", summary
+        )
+    except ProjectWriteFrozenError:
+        await db.rollback()
+        yield _sse(project_write_frozen_sse_event())
+        return
     await _refresh_project_completion_status(db, project)
 
     try:
+        ensure_project_writes_available()
         await db.commit()
+    except ProjectWriteFrozenError:
+        await db.rollback()
+        yield _sse(project_write_frozen_sse_event())
+        return
     except Exception as e:
         await db.rollback()
         logger.exception(

@@ -17,6 +17,9 @@ class TestSettingsDefaults:
         s = Settings(DEBUG=True)
         assert "sqlite" in s.DATABASE_URL
         assert s.JSON_PREFLIGHT_HMAC_KEY == ""
+        assert s.LEGACY_JSON_WRITES_FROZEN is False
+        assert s.LEGACY_JSON_MAINTENANCE_EVENT_ID == "BUG-002B"
+        assert s.LEGACY_JSON_MAINTENANCE_RETRY_AFTER == 60
 
     def test_default_llm_settings(self):
         s = Settings(DEBUG=True)
@@ -60,6 +63,23 @@ class TestCORSOrigins:
     def test_cors_origins_single(self):
         s = Settings(DEBUG=True, CORS_ORIGINS="http://localhost:5173")
         assert s.cors_origins_list == ["http://localhost:5173"]
+
+
+class TestMaintenanceSettings:
+    def test_rejects_unsafe_public_event_id(self):
+        with pytest.raises(ValueError, match="EVENT_ID"):
+            Settings(
+                DEBUG=True,
+                LEGACY_JSON_MAINTENANCE_EVENT_ID="../private/database",
+            )
+
+    @pytest.mark.parametrize("retry_after", [0, 29, 3601])
+    def test_rejects_retry_hint_outside_safe_bounds(self, retry_after):
+        with pytest.raises(ValueError, match="RETRY_AFTER"):
+            Settings(
+                DEBUG=True,
+                LEGACY_JSON_MAINTENANCE_RETRY_AFTER=retry_after,
+            )
 
 
 class TestSecurityValidation:

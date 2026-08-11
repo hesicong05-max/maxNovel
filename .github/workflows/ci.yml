@@ -107,9 +107,26 @@ jobs:
       - name: Run lore and read-only preflight tests on PostgreSQL
         run: >-
           python -m pytest
+          tests/test_worldview_optimistic_save.py
           tests/test_lore_api.py
           tests/test_lore_models.py
+          tests/test_lore_writes.py
+          tests/test_lore_extraction.py
+          tests/test_lore_reviews.py
+          tests/test_lore_merge_preview.py
+          tests/test_lore_merge_commit.py
+          tests/test_lore_migration_preview.py
+          tests/test_lore_migration_commit.py
+          tests/test_lore_migration_resolutions.py
+          tests/test_lore_migration_rehearsal.py
+          tests/test_lore_migration_rehearsal_postgres.py
           tests/test_json_preflight_postgres.py
+          tests/test_legacy_json_maintenance.py
+          tests/test_planning_api.py
+          tests/test_planning_models.py
+          tests/test_planning_writes.py
+          tests/test_planning_assignments.py
+          tests/test_generation_preflight.py
           -v --tb=short
 
   docker-build:

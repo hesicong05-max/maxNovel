@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.core.memory_store import MemoryStore
+from app.core.memory_store import InvalidLegacyStoryMemoryError, MemoryStore
 from app.models.project import StoryMemory
 
 
@@ -356,6 +356,33 @@ class TestChapterSummary:
 
 
 class TestGetContextForChapter:
+    @pytest.mark.asyncio
+    async def test_double_encoded_historical_memory_is_decoded(self):
+        memory = _make_memory(
+            revealed_elements='"[\\"el_1\\"]"',
+            character_states='"{\\"\u6797\u8fdc\\": {\\"location\\": \\"\u5b97\u95e8\\"}}"',
+            foreshadows='"[{\\"id\\": \\"fs_1\\", \\"status\\": \\"planted\\", \\"resolve_by\\": null}]"',
+            timeline='"[{\\"chapter\\": 1, \\"event\\": \\"\u51fa\u53d1\\"}]"',
+            chapter_summaries='"[{\\"chapter_num\\": 1, \\"summary\\": \\"\u7b2c\u4e00\u7ae0\\"}]"',
+        )
+        store = MemoryStore()
+
+        ctx = await store.get_context_for_chapter(memory, chapter_num=2)
+
+        assert ctx["revealed_elements"] == ["el_1"]
+        assert ctx["character_states"]["林远"]["location"] == "宗门"
+        assert ctx["pending_foreshadows"][0]["id"] == "fs_1"
+        assert ctx["timeline"][0]["event"] == "出发"
+        assert ctx["recent_summaries"][0]["summary"] == "第一章"
+
+    @pytest.mark.asyncio
+    async def test_malformed_historical_memory_blocks_generation_context(self):
+        memory = _make_memory(chapter_summaries="{broken")
+        store = MemoryStore()
+
+        with pytest.raises(InvalidLegacyStoryMemoryError):
+            await store.get_context_for_chapter(memory, chapter_num=2)
+
     @pytest.mark.asyncio
     async def test_empty_memory_context(self):
         memory = _make_memory()

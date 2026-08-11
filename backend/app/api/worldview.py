@@ -5,6 +5,7 @@ import logging
 import os
 import tempfile
 import zipfile
+from types import SimpleNamespace
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -13,18 +14,40 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings as app_settings
 from app.core.auth import User, get_current_user, get_project_for_owner
+from app.core.maintenance import (
+    ensure_project_writes_available,
+    require_project_writes_available,
+)
+from app.core.lore_migration_preview import migration_preview_source_checksum
+from app.core.legacy_json import read_legacy_object_list
 from app.core.project_files import save_worldview_file
 from app.core.worldview_parser import worldview_parser
 from app.database import get_db
-from app.models.project import ProjectStatus, Worldview
+from app.models.lore import ProjectLoreMigrationOperation
+from app.models.project import Project, ProjectStatus, Worldview
 from app.schemas.models import (
-    WorldviewCreate,
     WorldviewImportRequest,
     WorldviewImportResponse,
     WorldviewResponse,
+    WorldviewSaveRequest,
 )
 
 router = APIRouter(prefix="/api/worldview", tags=["worldview"])
+
+
+def _response_object_list(value, field: str) -> list[dict]:
+    """Read native or historical JSON-text collections without rewriting them."""
+    result = read_legacy_object_list(value)
+    if not result.valid:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "WORLDVIEW_LEGACY_JSON_INVALID",
+                "message": f"旧世界观字段 {field} 无法安全读取，请先修复原始数据。",
+                "retryable": False,
+            },
+        )
+    return result.items
 
 logger = logging.getLogger(__name__)
 
@@ -253,41 +276,99 @@ async def import_worldview(
 @router.post("/{project_id}", response_model=WorldviewResponse)
 async def set_worldview(
     project_id: str,
-    data: WorldviewCreate,
+    data: WorldviewSaveRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    _write_gate: Annotated[None, Depends(require_project_writes_available)],
 ):
-    project = await get_project_for_owner(project_id, current_user, db)
+    ensure_project_writes_available()
 
-    # Delete existing worldview if any (query directly to avoid lazy loading)
-    wv_result = await db.execute(
-        select(Worldview).where(Worldview.project_id == project_id)
+    # Migration and legacy saves share the same lock order.  This prevents an
+    # already-started save from replacing the retained source after a migration
+    # has materialized or switched the project to relational storage.
+    project = await db.scalar(
+        select(Project).where(Project.id == project_id).with_for_update()
     )
-    existing_wv = wv_result.scalar_one_or_none()
-    if existing_wv:
-        await db.delete(existing_wv)
-        await db.flush()
+    if project is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    if project.owner_id is None or project.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权操作此项目")
+    protected_migration = await db.scalar(
+        select(ProjectLoreMigrationOperation).where(
+            ProjectLoreMigrationOperation.project_id == project_id,
+            ProjectLoreMigrationOperation.status.in_(("validating", "ready")),
+        )
+    )
+    if project.lore_storage_mode == "migrating" or protected_migration is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "WORLDVIEW_SOURCE_READ_ONLY",
+                "message": "此项目的旧世界观已进入升级流程，仅可作为历史来源查看。",
+                "retryable": False,
+            },
+        )
 
-    # Parse worldview into elements
-    worldview_dict = data.model_dump()
+    existing_wv = await db.scalar(
+        select(Worldview)
+        .where(Worldview.project_id == project_id)
+        .with_for_update()
+    )
+
+    # Parse worldview into elements. The optimistic token is transport metadata
+    # and must never be persisted into the author's source document.
+    worldview_dict = data.model_dump(exclude={"expected_source_checksum"})
     elements = worldview_parser.parse(worldview_dict)
 
-    worldview = Worldview(
-        project_id=project_id,
-        characters=worldview_dict["characters"],
-        geography=worldview_dict["geography"],
-        factions=worldview_dict["factions"],
-        power_system=worldview_dict["power_system"],
-        history=worldview_dict["history"],
-        conflicts=worldview_dict["conflicts"],
-        special_settings=worldview_dict["special_settings"],
-        raw_text=data.raw_text,
-        source=data.source,
+    checksum_candidate = SimpleNamespace(
+        **worldview_dict,
         parsed_elements=elements,
     )
-    db.add(worldview)
+    target_source_checksum = migration_preview_source_checksum(checksum_candidate)
+
+    if existing_wv is not None:
+        current_source_checksum = migration_preview_source_checksum(existing_wv)
+        if data.expected_source_checksum != current_source_checksum:
+            # A lost response may cause the exact saved payload to be retried.
+            # Treat that as an idempotent replay, but reject every stale change.
+            if target_source_checksum == current_source_checksum:
+                save_worldview_file(project_id, existing_wv)
+                return WorldviewResponse(
+                    id=existing_wv.id,
+                    project_id=existing_wv.project_id,
+                    **worldview_dict,
+                    parsed_elements=elements,
+                    source_checksum=current_source_checksum,
+                    created_at=existing_wv.created_at,
+                )
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "WORLDVIEW_SOURCE_STALE",
+                    "message": "服务器上的世界观已发生变化，请先重新加载并核对本地草稿。",
+                    "retryable": False,
+                    "reload_required": True,
+                },
+            )
+
+    if existing_wv is None:
+        worldview = Worldview(project_id=project_id)
+        db.add(worldview)
+    else:
+        worldview = existing_wv
+    worldview.characters = worldview_dict["characters"]
+    worldview.geography = worldview_dict["geography"]
+    worldview.factions = worldview_dict["factions"]
+    worldview.power_system = worldview_dict["power_system"]
+    worldview.history = worldview_dict["history"]
+    worldview.conflicts = worldview_dict["conflicts"]
+    worldview.special_settings = worldview_dict["special_settings"]
+    worldview.raw_text = data.raw_text
+    worldview.source = data.source
+    worldview.parsed_elements = elements
 
     project.status = ProjectStatus.WORLDVIEW_SET
+    ensure_project_writes_available()
     await db.commit()
     await db.refresh(worldview)
 
@@ -307,6 +388,7 @@ async def set_worldview(
         raw_text=data.raw_text,
         source=worldview.source,
         parsed_elements=elements,
+        source_checksum=migration_preview_source_checksum(worldview),
         created_at=worldview.created_at,
     )
 
@@ -329,16 +411,17 @@ async def get_worldview(
     return WorldviewResponse(
         id=worldview.id,
         project_id=worldview.project_id,
-        characters=worldview.characters or [],
-        geography=worldview.geography or [],
-        factions=worldview.factions or [],
-        power_system=worldview.power_system or [],
-        history=worldview.history or [],
-        conflicts=worldview.conflicts or [],
-        special_settings=worldview.special_settings or [],
+        characters=_response_object_list(worldview.characters, "characters"),
+        geography=_response_object_list(worldview.geography, "geography"),
+        factions=_response_object_list(worldview.factions, "factions"),
+        power_system=_response_object_list(worldview.power_system, "power_system"),
+        history=_response_object_list(worldview.history, "history"),
+        conflicts=_response_object_list(worldview.conflicts, "conflicts"),
+        special_settings=_response_object_list(worldview.special_settings, "special_settings"),
         raw_text=worldview.raw_text,
         source=worldview.source or "manual",
-        parsed_elements=worldview.parsed_elements or [],
+        parsed_elements=_response_object_list(worldview.parsed_elements, "parsed_elements"),
+        source_checksum=migration_preview_source_checksum(worldview),
         created_at=worldview.created_at,
     )
 
@@ -359,6 +442,8 @@ async def get_worldview_summary(
         raise HTTPException(status_code=404, detail="世界观不存在")
 
     summary = worldview_parser.summary(
-        worldview_parser.normalize_elements(worldview.parsed_elements)
+        worldview_parser.normalize_elements(
+            _response_object_list(worldview.parsed_elements, "parsed_elements")
+        )
     )
     return summary

@@ -1,4 +1,5 @@
 import os
+import re
 import warnings
 from pathlib import Path
 
@@ -16,6 +17,9 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/novel_agent.db"
     JSON_PREFLIGHT_HMAC_KEY: str = ""
+    LEGACY_JSON_WRITES_FROZEN: bool = False
+    LEGACY_JSON_MAINTENANCE_EVENT_ID: str = "BUG-002B"
+    LEGACY_JSON_MAINTENANCE_RETRY_AFTER: int = 60
 
     # LLM API — default to DeepSeek (OpenAI-compatible endpoint)
     LLM_API_KEY: str = ""
@@ -58,6 +62,26 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> list[str]:
         """Parse CORS_ORIGINS string into a list."""
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+
+    @field_validator("LEGACY_JSON_MAINTENANCE_EVENT_ID")
+    @classmethod
+    def validate_maintenance_event_id(cls, value: str) -> str:
+        """Keep the public maintenance identifier short and non-sensitive."""
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value):
+            raise ValueError(
+                "LEGACY_JSON_MAINTENANCE_EVENT_ID must be 1-64 safe characters"
+            )
+        return value
+
+    @field_validator("LEGACY_JSON_MAINTENANCE_RETRY_AFTER")
+    @classmethod
+    def validate_maintenance_retry_after(cls, value: int) -> int:
+        """Bound the client retry hint without promising a completion time."""
+        if not 30 <= value <= 3600:
+            raise ValueError(
+                "LEGACY_JSON_MAINTENANCE_RETRY_AFTER must be between 30 and 3600"
+            )
+        return value
 
     def validate_security(self) -> None:
         """Validate security-critical settings at startup."""

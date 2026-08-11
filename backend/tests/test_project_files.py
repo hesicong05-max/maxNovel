@@ -1,8 +1,4 @@
-"""Tests for project file persistence module.
-
-Verifies that worldview and outline data is correctly exported as
-independent document files alongside DB storage (dual-write).
-"""
+"""Tests for worldview file persistence and recoverable project archives."""
 
 import json
 from datetime import datetime, timezone
@@ -16,10 +12,8 @@ from app.core.project_files import (
     ProjectFileArchiveError,
     archive_project_files,
     finalize_project_file_delete,
-    load_outline_file,
     load_worldview_file,
     restore_project_files,
-    save_outline_file,
     save_worldview_file,
 )
 
@@ -43,23 +37,6 @@ def mock_worldview():
     ]
     wv.created_at = datetime(2025, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
     return wv
-
-
-@pytest.fixture
-def mock_outline():
-    """A mock Outline ORM object with all required attributes."""
-    ol = MagicMock()
-    ol.story_arc = "A hero rises from obscurity to save the kingdom."
-    ol.chapters = [
-        {"chapter_num": 1, "title": "Awakening", "summary": "Hero discovers power"},
-        {"chapter_num": 2, "title": "Journey", "summary": "Hero leaves home"},
-    ]
-    ol.reveal_plan = [
-        {"chapter": 1, "phase": "起势", "elements": ["Hero"], "summary": "Intro"},
-    ]
-    ol.created_at = datetime(2025, 1, 16, 14, 0, 0, tzinfo=timezone.utc)
-    ol.updated_at = datetime(2025, 1, 16, 14, 30, 0, tzinfo=timezone.utc)
-    return ol
 
 
 class TestSaveWorldviewFile:
@@ -128,6 +105,42 @@ class TestSaveWorldviewFile:
         data = json.loads(filepath.read_text(encoding="utf-8"))
         assert data["characters"] == [{"name": "Updated Hero"}]
 
+    def test_decodes_double_encoded_collections_before_export(
+        self, mock_worldview, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
+        expected = mock_worldview.characters
+        mock_worldview.characters = json.dumps(
+            json.dumps(expected, ensure_ascii=False), ensure_ascii=False
+        )
+
+        save_worldview_file("proj_123", mock_worldview)
+
+        data = json.loads(
+            (tmp_path / "proj_123" / "worldview.json").read_text(encoding="utf-8")
+        )
+        assert data["characters"] == expected
+
+    def test_invalid_collection_does_not_overwrite_existing_export(
+        self, mock_worldview, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
+        save_worldview_file("proj_123", mock_worldview)
+        filepath = tmp_path / "proj_123" / "worldview.json"
+        original = filepath.read_bytes()
+        mock_worldview.characters = json.dumps(
+            json.dumps(
+                json.dumps([{"name": "不应导出"}], ensure_ascii=False),
+                ensure_ascii=False,
+            ),
+            ensure_ascii=False,
+        )
+
+        save_worldview_file("proj_123", mock_worldview)
+
+        assert filepath.read_bytes() == original
+        assert list(filepath.parent.glob(".worldview.*.tmp")) == []
+
     def test_handles_missing_attributes(self, tmp_path, monkeypatch):
         """Function handles objects with missing attributes gracefully."""
         monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
@@ -148,79 +161,12 @@ class TestSaveWorldviewFile:
         save_worldview_file("proj_789", mock_worldview)
 
 
-class TestSaveOutlineFile:
-    """Tests for save_outline_file function."""
-
-    def test_creates_file(self, mock_outline, tmp_path, monkeypatch):
-        """File is created with correct path."""
-        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
-        save_outline_file("proj_123", mock_outline)
-
-        filepath = tmp_path / "proj_123" / "outline.json"
-        assert filepath.exists()
-
-    def test_file_contains_story_arc(self, mock_outline, tmp_path, monkeypatch):
-        """File contains story_arc."""
-        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
-        save_outline_file("proj_123", mock_outline)
-
-        filepath = tmp_path / "proj_123" / "outline.json"
-        data = json.loads(filepath.read_text(encoding="utf-8"))
-
-        assert data["story_arc"] == "A hero rises from obscurity to save the kingdom."
-
-    def test_file_contains_chapters(self, mock_outline, tmp_path, monkeypatch):
-        """File contains chapters array."""
-        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
-        save_outline_file("proj_123", mock_outline)
-
-        filepath = tmp_path / "proj_123" / "outline.json"
-        data = json.loads(filepath.read_text(encoding="utf-8"))
-
-        assert len(data["chapters"]) == 2
-        assert data["chapters"][0]["title"] == "Awakening"
-
-    def test_file_contains_reveal_plan(self, mock_outline, tmp_path, monkeypatch):
-        """File contains reveal_plan."""
-        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
-        save_outline_file("proj_123", mock_outline)
-
-        filepath = tmp_path / "proj_123" / "outline.json"
-        data = json.loads(filepath.read_text(encoding="utf-8"))
-
-        assert len(data["reveal_plan"]) == 1
-        assert data["reveal_plan"][0]["phase"] == "起势"
-
-    def test_file_contains_metadata(self, mock_outline, tmp_path, monkeypatch):
-        """File contains doc_type, project_id, version, exported_at."""
-        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
-        save_outline_file("proj_123", mock_outline)
-
-        filepath = tmp_path / "proj_123" / "outline.json"
-        data = json.loads(filepath.read_text(encoding="utf-8"))
-
-        assert data["_doc_type"] == "outline"
-        assert data["_project_id"] == "proj_123"
-        assert data["_version"] == 1
-        assert "_exported_at" in data
-
-    def test_does_not_crash_on_error(self, mock_outline, tmp_path, monkeypatch):
-        """Function logs error but does not raise on filesystem failure."""
-        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", Path("/nonexistent/path/that/should/not/exist"))
-        save_outline_file("proj_789", mock_outline)
-
-
 class TestLoadFiles:
-    """Tests for load_worldview_file and load_outline_file."""
+    """Tests for load_worldview_file."""
 
     def test_load_worldview_returns_none_if_not_exists(self, tmp_path, monkeypatch):
         monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
         result = load_worldview_file("nonexistent_project")
-        assert result is None
-
-    def test_load_outline_returns_none_if_not_exists(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
-        result = load_outline_file("nonexistent_project")
         assert result is None
 
     def test_load_worldview_roundtrip(self, mock_worldview, tmp_path, monkeypatch):
@@ -232,34 +178,6 @@ class TestLoadFiles:
         assert loaded is not None
         assert loaded["characters"] == [{"name": "Hero", "personality": "brave"}]
         assert loaded["parsed_elements"][0]["name"] == "Hero"
-
-    def test_load_outline_roundtrip(self, mock_outline, tmp_path, monkeypatch):
-        """Save then load returns the same data."""
-        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
-        save_outline_file("proj_123", mock_outline)
-
-        loaded = load_outline_file("proj_123")
-        assert loaded is not None
-        assert loaded["story_arc"] == "A hero rises from obscurity to save the kingdom."
-        assert len(loaded["chapters"]) == 2
-
-    def test_coexistence_of_worldview_and_outline(self, mock_worldview, mock_outline, tmp_path, monkeypatch):
-        """Both files can coexist in the same project directory."""
-        monkeypatch.setattr("app.core.project_files.PROJECTS_DIR", tmp_path)
-        save_worldview_file("proj_123", mock_worldview)
-        save_outline_file("proj_123", mock_outline)
-
-        proj_dir = tmp_path / "proj_123"
-        assert (proj_dir / "worldview.json").exists()
-        assert (proj_dir / "outline.json").exists()
-
-        wv = load_worldview_file("proj_123")
-        ol = load_outline_file("proj_123")
-        assert wv is not None
-        assert ol is not None
-        assert wv["_doc_type"] == "worldview"
-        assert ol["_doc_type"] == "outline"
-
 
 class TestProjectFileArchive:
     """Tests for recoverable project file removal."""
