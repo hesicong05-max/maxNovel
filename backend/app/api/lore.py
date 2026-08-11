@@ -88,6 +88,7 @@ from app.models.lore import (
     SettingElement,
     SettingType,
 )
+from app.models.foreshadow import ForeshadowLifecycle
 from app.models.project import Project, Worldview, _utcnow
 from app.models.planning import PlanningLoreAssignment
 from app.schemas.lore import (
@@ -3335,6 +3336,25 @@ async def archive_lore_element(
 ):
     element = await _load_relational_element(project_id, element_id, db, current_user)
     check_writes_available()
+    active_foreshadow_count = await db.scalar(
+        select(func.count())
+        .select_from(ForeshadowLifecycle)
+        .where(
+            ForeshadowLifecycle.project_id == project_id,
+            ForeshadowLifecycle.element_id == element.id,
+            ForeshadowLifecycle.status == "active",
+        )
+    )
+    if active_foreshadow_count:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "LORE_ELEMENT_ACTIVE_FORESHADOW",
+                "message": "该设定仍有活动伏笔生命周期，请先归档伏笔。",
+                "active_foreshadow_count": active_foreshadow_count,
+            },
+        )
     relation_result = await db.execute(
         select(ElementRelation).where(
             ElementRelation.project_id == project_id,

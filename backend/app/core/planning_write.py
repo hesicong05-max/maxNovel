@@ -23,6 +23,11 @@ from app.models.planning import (
     PlanningMutationOperation,
     PlanningPart,
 )
+from app.models.foreshadow import (
+    ForeshadowFact,
+    ForeshadowLifecycle,
+    ForeshadowPlanItem,
+)
 from app.models.project import Chapter, Outline, Project, StoryMemory
 from app.schemas.planning import (
     PlanningAssignmentMutationReceipt,
@@ -474,6 +479,71 @@ async def reorder_active_structure(
                 chapter_id: (item["part_id"], position)
                 for position, chapter_id in enumerate(item["chapter_ids"], start=1)
             }
+        )
+
+    def desired_order(target_type: str, target_id: str) -> tuple[int, int]:
+        if target_type == "part":
+            return desired_parts[target_id], 0
+        part_id, position = desired_chapters[target_id]
+        return desired_parts[part_id], position
+
+    active_plan_items = list(
+        (
+            await db.scalars(
+                select(ForeshadowPlanItem).where(
+                    ForeshadowPlanItem.plan_id == plan.id,
+                    ForeshadowPlanItem.status == "active",
+                    ForeshadowPlanItem.lifecycle_id.in_(
+                        select(ForeshadowLifecycle.id).where(
+                            ForeshadowLifecycle.status == "active"
+                        )
+                    ),
+                )
+            )
+        ).all()
+    )
+    active_facts = list(
+        (
+            await db.scalars(
+                select(ForeshadowFact).where(
+                    ForeshadowFact.plan_id == plan.id,
+                    ForeshadowFact.status == "active",
+                    ForeshadowFact.lifecycle_id.in_(
+                        select(ForeshadowLifecycle.id).where(
+                            ForeshadowLifecycle.status == "active"
+                        )
+                    ),
+                )
+            )
+        ).all()
+    )
+    plan_pairs: dict[str, dict[str, ForeshadowPlanItem]] = {}
+    for item in active_plan_items:
+        plan_pairs.setdefault(item.lifecycle_id, {})[item.action_kind] = item
+    fact_pairs: dict[str, dict[str, ForeshadowFact]] = {}
+    for item in active_facts:
+        fact_pairs.setdefault(item.lifecycle_id, {})[item.fact_kind] = item
+    invalid_lifecycle_ids: set[str] = set()
+    for lifecycle_id, pair in plan_pairs.items():
+        plant = pair.get("plant")
+        resolve = pair.get("resolve")
+        if plant and resolve and desired_order(
+            plant.target_type, plant.target_id
+        ) >= desired_order(resolve.target_type, resolve.target_id):
+            invalid_lifecycle_ids.add(lifecycle_id)
+    for lifecycle_id, pair in fact_pairs.items():
+        planted = pair.get("planted")
+        resolved = pair.get("resolved")
+        if planted and resolved and desired_order(
+            "chapter", planted.chapter_id
+        ) >= desired_order("chapter", resolved.chapter_id):
+            invalid_lifecycle_ids.add(lifecycle_id)
+    if invalid_lifecycle_ids:
+        raise PlanningWriteError(
+            "PLANNING_FORESHADOW_ORDER_INVALID",
+            "此次重排会让伏笔回收早于或等于埋入位置，系统没有写入。",
+            recommended_action="adjust_foreshadow_or_structure",
+            extra={"lifecycle_ids": sorted(invalid_lifecycle_ids)},
         )
 
     changed_parts = [

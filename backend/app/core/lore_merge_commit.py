@@ -27,6 +27,7 @@ from app.models.lore import (
     SettingElement,
     SettingType,
 )
+from app.models.foreshadow import ForeshadowLifecycle
 from app.models.project import Project, gen_id
 from app.schemas.lore import (
     LoreMergeCommitInput,
@@ -268,6 +269,27 @@ async def commit_lore_merge(
     merged = elements.get(body.preview.merged_element_id)
     if survivor is None or merged is None:
         raise LoreWriteError("合并对象已变化，请重新预览", status_code=409)
+
+    tracked_ids = list(
+        (
+            await db.scalars(
+                select(ForeshadowLifecycle.element_id).where(
+                    ForeshadowLifecycle.project_id == project_id,
+                    ForeshadowLifecycle.element_id.in_(endpoint_ids),
+                    ForeshadowLifecycle.status == "active",
+                )
+            )
+        ).all()
+    )
+    if tracked_ids:
+        raise LoreWriteError(
+            {
+                "code": "LORE_MERGE_ACTIVE_FORESHADOW",
+                "message": "合并对象仍有活动伏笔生命周期，请先归档对应伏笔。",
+                "element_ids": sorted(tracked_ids),
+            },
+            status_code=409,
+        )
 
     setting_type = await db.scalar(
         select(SettingType)

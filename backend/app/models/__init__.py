@@ -50,3 +50,10 @@ from app.models.planning import (  # noqa: F401
     PlanningPart,
 )
 from app.models.generation import ChapterGenerationRun  # noqa: F401
+from app.models.foreshadow import (  # noqa: F401
+    ForeshadowFact,
+    ForeshadowLifecycle,
+    ForeshadowLifecycleEvent,
+    ForeshadowOperation,
+    ForeshadowPlanItem,
+)

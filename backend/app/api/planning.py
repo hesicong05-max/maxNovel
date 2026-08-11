@@ -33,6 +33,11 @@ from app.core.planning_assignment import (
     resolve_scope,
 )
 from app.database import get_db
+from app.models.foreshadow import (
+    ForeshadowFact,
+    ForeshadowLifecycle,
+    ForeshadowPlanItem,
+)
 from app.models.lore import SettingElement, SettingType
 from app.models.planning import (
     NovelPlan,
@@ -433,6 +438,28 @@ async def _change_part_archive_state(
                     recommended_action="remove_assignments_first",
                     extra={"active_assignment_count": active_assignment_count},
                 )
+            active_foreshadow_count = await db.scalar(
+                select(func.count())
+                .select_from(ForeshadowPlanItem)
+                .join(
+                    ForeshadowLifecycle,
+                    ForeshadowLifecycle.id == ForeshadowPlanItem.lifecycle_id,
+                )
+                .where(
+                    ForeshadowPlanItem.project_id == project_id,
+                    ForeshadowPlanItem.target_type == "part",
+                    ForeshadowPlanItem.target_id == part.id,
+                    ForeshadowPlanItem.status == "active",
+                    ForeshadowLifecycle.status == "active",
+                )
+            )
+            if active_foreshadow_count:
+                raise PlanningWriteError(
+                    "PLANNING_SCOPE_HAS_ACTIVE_FORESHADOWS",
+                    "该篇章仍被伏笔计划使用，请先调整或取消伏笔计划。",
+                    recommended_action="review_foreshadow_plans",
+                    extra={"active_foreshadow_count": active_foreshadow_count},
+                )
             part.status = "archived"
             part.lock_version += 1
         return {
@@ -694,6 +721,45 @@ async def _change_chapter_archive_state(
                     "该章节仍有启用中的设定分配，请先移除分配。",
                     recommended_action="remove_assignments_first",
                     extra={"active_assignment_count": active_assignment_count},
+                )
+            active_plan_count = await db.scalar(
+                select(func.count())
+                .select_from(ForeshadowPlanItem)
+                .join(
+                    ForeshadowLifecycle,
+                    ForeshadowLifecycle.id == ForeshadowPlanItem.lifecycle_id,
+                )
+                .where(
+                    ForeshadowPlanItem.project_id == project_id,
+                    ForeshadowPlanItem.target_type == "chapter",
+                    ForeshadowPlanItem.target_id == chapter.id,
+                    ForeshadowPlanItem.status == "active",
+                    ForeshadowLifecycle.status == "active",
+                )
+            )
+            active_fact_count = await db.scalar(
+                select(func.count())
+                .select_from(ForeshadowFact)
+                .join(
+                    ForeshadowLifecycle,
+                    ForeshadowLifecycle.id == ForeshadowFact.lifecycle_id,
+                )
+                .where(
+                    ForeshadowFact.project_id == project_id,
+                    ForeshadowFact.chapter_id == chapter.id,
+                    ForeshadowFact.status == "active",
+                    ForeshadowLifecycle.status == "active",
+                )
+            )
+            if active_plan_count or active_fact_count:
+                raise PlanningWriteError(
+                    "PLANNING_SCOPE_HAS_ACTIVE_FORESHADOWS",
+                    "该章节仍被伏笔计划或作者确认事实使用，不能归档。",
+                    recommended_action="review_foreshadow_plans",
+                    extra={
+                        "active_plan_count": active_plan_count or 0,
+                        "active_fact_count": active_fact_count or 0,
+                    },
                 )
             chapter.status = "archived"
             chapter.lock_version += 1
