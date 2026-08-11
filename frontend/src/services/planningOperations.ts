@@ -12,7 +12,8 @@ export type PlanningOperationAction =
   | "structure_reorder"
   | "assignment_create"
   | "assignment_remove"
-  | "assignment_restore";
+  | "assignment_restore"
+  | "generation_prepare";
 
 export interface PendingPlanningOperation<T extends object = Record<string, unknown>> {
   schema_version: 1;
@@ -58,6 +59,10 @@ function isOperationKey(value: unknown): value is string {
   return isString(value) && value.length >= 8 && value.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(value);
 }
 
+function isStableId(value: unknown): value is string {
+  return typeof value === "string" && value.length === 32;
+}
+
 function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
@@ -82,6 +87,7 @@ function isAction(value: unknown): value is PlanningOperationAction {
     "part_create", "part_update", "part_archive", "part_restore",
     "chapter_create", "chapter_update", "chapter_archive", "chapter_restore",
     "structure_reorder", "assignment_create", "assignment_remove", "assignment_restore",
+    "generation_prepare",
   ].includes(String(value));
 }
 
@@ -137,6 +143,17 @@ function validPayload(action: PlanningOperationAction, payload: Record<string, u
       && isScope(payload.scope_type)
       && isString(payload.scope_target_id);
   }
+  if (action === "generation_prepare") {
+    return hasExactKeys(payload, [
+      "operation_key",
+      "expected_structure_version",
+      "expected_assignment_version",
+      "expected_chapter_lock_version",
+    ])
+      && isPositiveInteger(payload.expected_structure_version)
+      && isPositiveInteger(payload.expected_assignment_version)
+      && isPositiveInteger(payload.expected_chapter_lock_version);
+  }
   return hasExactKeys(payload, ["operation_key", "expected_assignment_version", "expected_lock_version", "scope_type", "scope_target_id"])
     && isPositiveInteger(payload.expected_assignment_version)
     && isPositiveInteger(payload.expected_lock_version)
@@ -148,6 +165,7 @@ function validTarget(action: PlanningOperationAction, target: unknown, payload: 
   if (action === "part_create") return target === null;
   if (action === "structure_reorder") return target === null || isString(target);
   if (action === "assignment_create") return isString(target) && target === payload.element_id;
+  if (action === "generation_prepare") return isStableId(target);
   return isString(target);
 }
 

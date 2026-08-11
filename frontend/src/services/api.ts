@@ -67,6 +67,10 @@ import type {
   LoreTypesResponse,
 } from "@/types/lore";
 import type {
+  GenerationRunPrepareInput,
+  GenerationRunResponse,
+} from "@/types/generation";
+import type {
   NovelPlan,
   PlanningAssignmentCreateInput,
   PlanningAssignmentHistoryResponse,
@@ -615,6 +619,30 @@ export const api = {
     signal?: AbortSignal
   ) => fetchJSON<PlanningOperationReceipt>(
     `/projects/${encodeURIComponent(projectId)}/planning/operations/by-key/${encodeURIComponent(operationKey)}`,
+    { signal }
+  ),
+  prepareGenerationRun: (
+    projectId: string,
+    chapterId: string,
+    data: GenerationRunPrepareInput
+  ) => fetchJSON<GenerationRunResponse>(
+    `/projects/${encodeURIComponent(projectId)}/planning/chapters/${encodeURIComponent(chapterId)}/generation-runs`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
+  getGenerationRunByKey: (
+    projectId: string,
+    operationKey: string,
+    signal?: AbortSignal
+  ) => fetchJSON<GenerationRunResponse>(
+    `/projects/${encodeURIComponent(projectId)}/planning/generation-runs/by-key/${encodeURIComponent(operationKey)}`,
+    { signal }
+  ),
+  getGenerationRun: (
+    projectId: string,
+    runId: string,
+    signal?: AbortSignal
+  ) => fetchJSON<GenerationRunResponse>(
+    `/projects/${encodeURIComponent(projectId)}/planning/generation-runs/${encodeURIComponent(runId)}`,
     { signal }
   ),
   createPlanningPart: (projectId: string, data: PlanningPartCreateInput) =>

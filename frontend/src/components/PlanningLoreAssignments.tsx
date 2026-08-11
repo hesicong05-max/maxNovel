@@ -149,7 +149,7 @@ export default function PlanningLoreAssignments({
     <section className="planning-assignments" aria-busy={loading}>
       <div className="planning-assignment-heading">
         <div>
-          <h3>本范围使用的设定</h3>
+          <h3 tabIndex={-1}>本范围使用的设定</h3>
           <p>当前正在编辑：{scopeText(response.scope)}。移除只影响本范围的直接来源。</p>
         </div>
         <button ref={addButtonRef} className="btn btn-secondary" disabled={writeDisabled || response.scope.status === "archived"} onClick={() => setSearchOpen(true)}>添加设定</button>
