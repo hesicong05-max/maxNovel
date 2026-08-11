@@ -2,8 +2,10 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import PlanningStructurePanel, { type PlanningSelection } from "@/components/PlanningStructurePanel";
 import PlanningLoreAssignments from "@/components/PlanningLoreAssignments";
+import PlanningGenerationPreflight, { type GenerationRecoveryState } from "@/components/PlanningGenerationPreflight";
 import { useAuth } from "@/components/AuthContext";
 import { ApiError, api } from "@/services/api";
+import { generationRunContractError } from "@/services/generationRuns";
 import {
   clearPendingPlanningOperation,
   createPlanningOperationKey,
@@ -14,6 +16,7 @@ import {
   type PlanningOperationAction,
 } from "@/services/planningOperations";
 import type { LoreElementListItem } from "@/types/lore";
+import type { GenerationRunPrepareInput, GenerationRunResponse } from "@/types/generation";
 import type {
   NovelPlan,
   PlanningAssignmentCreateInput,
@@ -127,10 +130,24 @@ export default function ChapterPlanningPage() {
   const [refreshRequired, setRefreshRequired] = useState(false);
   const [hasUnsavedStructureDraft, setHasUnsavedStructureDraft] = useState(false);
   const [hasUnsavedPartCreationDraft, setHasUnsavedPartCreationDraft] = useState(false);
+  const [generationRun, setGenerationRun] = useState<GenerationRunResponse | null>(null);
+  const [generationBusy, setGenerationBusy] = useState(false);
+  const [generationLoadingSaved, setGenerationLoadingSaved] = useState(false);
+  const [generationError, setGenerationError] = useState("");
+  const [generationFeedbackChapterId, setGenerationFeedbackChapterId] = useState<string | null>(null);
+  const [generationRecoveryState, setGenerationRecoveryState] = useState<GenerationRecoveryState>("idle");
+  const [generationRecovered, setGenerationRecovered] = useState(false);
+  const [generationFocusToken, setGenerationFocusToken] = useState(0);
+  const [generationFeedbackFocusToken, setGenerationFeedbackFocusToken] = useState(0);
   const conflictRef = useRef<HTMLDivElement | null>(null);
   const assignmentConflictRef = useRef<HTMLDivElement | null>(null);
+  const globalGenerationFeedbackRef = useRef<HTMLDivElement | null>(null);
   const requestGeneration = useRef(0);
   const assignmentGeneration = useRef(0);
+  const generationRunRequest = useRef(0);
+  const acceptedGenerationRunId = useRef<string | null>(null);
+  const generationPointerTransition = useRef<string | null>(null);
+  const previousSelectionIdentity = useRef<string | null>(null);
   const selectionRef = useRef<PlanningSelection>({ kind: "novel", id: id ?? "" });
   const planRef = useRef<NovelPlan | null>(null);
   planRef.current = plan;
@@ -148,9 +165,51 @@ export default function ChapterPlanningPage() {
 
   const located = useMemo(() => plan ? locate(plan, selection) : { part: null, chapter: null }, [plan, selection]);
   selectionRef.current = selection;
-  const planningWriteDisabled = busy || !!pending || maintenance || conflict || assignmentConflict
+  const generationFeedbackInlineVisible = !!generationFeedbackChapterId
+    && selection.kind === "chapter"
+    && selection.id === generationFeedbackChapterId
+    && located.chapter?.status === "active"
+    && located.part?.status === "active";
+  const globalGenerationFeedbackVisible = !!generationError && !generationFeedbackInlineVisible;
+  const planningWriteDisabled = busy || generationBusy || !!pending || maintenance || conflict || assignmentConflict
     || refreshRequired || assignmentRefreshRequired || !!pendingStorageIssue;
   const assignmentWriteDisabled = planningWriteDisabled || assignmentLoading || !!assignmentError;
+  const generationStale = useMemo(() => {
+    if (!generationRun || !plan || selection.kind !== "chapter" || !located.chapter || !assignmentResponse) return false;
+    if (
+      generationRun.planning_chapter_id !== located.chapter.id ||
+      generationRun.structure_version !== plan.structure_version ||
+      generationRun.assignment_version !== plan.assignment_version ||
+      generationRun.chapter_lock_version !== located.chapter.lock_version
+    ) return true;
+    const currentVersions = new Map(
+      assignmentResponse.effective_elements
+        .filter((item) => item.generation_eligible)
+        .map((item) => [item.element_id, item.current_content_version])
+    );
+    if (currentVersions.size !== generationRun.context_manifest.elements.length) return true;
+    return generationRun.context_manifest.elements.some(
+      (item) => currentVersions.get(item.element_id) !== item.version.version_no
+    );
+  }, [generationRun, plan, selection.kind, located.chapter, assignmentResponse]);
+
+  const generationDisabledReason = useMemo(() => {
+    if (selection.kind !== "chapter" || !located.chapter) return "请选择一个活动章节。";
+    if (located.chapter.status !== "active" || located.part?.status !== "active") return "归档章节不能创建新的检查记录。";
+    if (hasUnsavedStructureDraft) return "当前章节或目标篇章有未保存修改；请先保存或恢复，再检查服务端权威内容。";
+    if (pendingStorageIssue) return "浏览器恢复存储不可用；为避免丢失结果，已停止新的检查。";
+    if (busy || generationBusy) return "当前操作尚未结束，请等待结果确认。";
+    if (pending?.action === "generation_prepare") return "上次生成前检查仍等待结果确认；请先核对原操作编号。";
+    if (pending) return "当前还有一项规划操作等待确认；请先完成恢复。";
+    if (maintenance || refreshRequired || assignmentRefreshRequired || conflict || assignmentConflict) return "当前资料尚未完成权威同步，请先刷新并解决冲突。";
+    if (assignmentLoading || !assignmentResponse) return "正在读取本章规划与设定。";
+    if (assignmentError) return "本章设定暂时无法读取，请先重新加载。";
+    if (assignmentResponse.scope.scope_type !== "chapter" || assignmentResponse.scope.scope_target_id !== located.chapter.id) return "本章设定范围尚未完成同步。";
+    if (assignmentResponse.assignment_version !== plan?.assignment_version) return "规划与设定分配版本尚未同步。";
+    if (assignmentResponse.counts.ineligible > 0) return "本章上下文包含已停用、未确认或冲突的设定；请先处理全部失效设定。";
+    if (assignmentResponse.counts.generation_eligible < 1) return "本章及上级范围没有可用于生成的设定，请先管理本章设定。";
+    return "";
+  }, [selection.kind, located.chapter, located.part, hasUnsavedStructureDraft, pendingStorageIssue, busy, generationBusy, pending, maintenance, refreshRequired, assignmentRefreshRequired, conflict, assignmentConflict, assignmentLoading, assignmentResponse, assignmentError, plan?.assignment_version]);
 
   const loadPlan = useCallback(async (showLoading = true, generation = requestGeneration.current): Promise<boolean> => {
     const projectId = id;
@@ -238,6 +297,16 @@ export default function ChapterPlanningPage() {
     setAssignmentFocusTarget(null);
     setHasUnsavedStructureDraft(false);
     setHasUnsavedPartCreationDraft(false);
+    setGenerationRun(null);
+    setGenerationBusy(false);
+    setGenerationLoadingSaved(false);
+    setGenerationError("");
+    setGenerationFeedbackChapterId(null);
+    setGenerationRecoveryState("idle");
+    setGenerationRecovered(false);
+    generationRunRequest.current += 1;
+    acceptedGenerationRunId.current = null;
+    generationPointerTransition.current = null;
     setMobileDetail(!!searchParams.get("target"));
     void loadPlan(true, generation);
   }, [id, user?.id]);
@@ -250,6 +319,59 @@ export default function ChapterPlanningPage() {
     void loadAssignmentScope(selection, generation, controller.signal);
     return () => controller.abort();
   }, [id, loadState, plan?.structure_version, selection.kind, selection.id]);
+
+  useEffect(() => {
+    const runId = searchParams.get("generation_run");
+    if (!runId && generationPointerTransition.current) return;
+    if (runId && generationPointerTransition.current === runId) generationPointerTransition.current = null;
+    if (pending?.action === "generation_prepare") {
+      generationRunRequest.current += 1;
+      setGenerationLoadingSaved(false);
+      return;
+    }
+    if (!id || loadState !== "ready" || selection.kind !== "chapter" || !runId) {
+      generationRunRequest.current += 1;
+      setGenerationLoadingSaved(false);
+      if (!runId || selection.kind !== "chapter") {
+        setGenerationRun(null);
+        setGenerationRecovered(false);
+      }
+      return;
+    }
+    if (acceptedGenerationRunId.current === runId || (generationRun?.id === runId && generationRun.planning_chapter_id === selection.id)) return;
+    const controller = new AbortController();
+    const request = ++generationRunRequest.current;
+    setGenerationLoadingSaved(true);
+    setGenerationError("");
+    setGenerationFeedbackChapterId(selection.id);
+    void api.getGenerationRun(id, runId, controller.signal)
+      .then((value) => {
+        if (request !== generationRunRequest.current) return;
+        const contractError = generationRunContractError(value, { projectId: id, chapterId: selection.id, runId });
+        if (contractError) {
+          setGenerationRun(null);
+          setGenerationRecoveryState("corrupt");
+          setGenerationError(contractError);
+          return;
+        }
+        setGenerationRun(value);
+        acceptedGenerationRunId.current = value.id;
+        setGenerationRecovered(true);
+        setGenerationRecoveryState("idle");
+      })
+      .catch((cause) => {
+        if (controller.signal.aborted || request !== generationRunRequest.current) return;
+        setGenerationRun(null);
+        setGenerationRecoveryState("saved_unavailable");
+        setGenerationError(cause instanceof ApiError && cause.status === 404
+          ? "这条已保存检查记录不存在或当前账号无权查看；可以关闭无效记录指针。"
+          : errorMessage(cause));
+      })
+      .finally(() => {
+        if (request === generationRunRequest.current) setGenerationLoadingSaved(false);
+      });
+    return () => controller.abort();
+  }, [id, loadState, selection.kind, selection.id, searchParams.get("generation_run"), pending?.action]);
 
   useEffect(() => {
     if (!mobileDetail) return;
@@ -274,6 +396,28 @@ export default function ChapterPlanningPage() {
 
   useEffect(() => { if (error) conflictRef.current?.focus(); }, [error]);
   useEffect(() => { if (assignmentConflict) assignmentConflictRef.current?.focus(); }, [assignmentConflict]);
+  useEffect(() => {
+    if (globalGenerationFeedbackVisible && generationFeedbackFocusToken > 0) {
+      globalGenerationFeedbackRef.current?.focus();
+    }
+  }, [globalGenerationFeedbackVisible, generationFeedbackFocusToken]);
+
+  useEffect(() => {
+    const current = scopeIdentity(selection.kind, selection.kind === "novel" ? id ?? selection.id : selection.id);
+    const previous = previousSelectionIdentity.current;
+    previousSelectionIdentity.current = current;
+    if (
+      previous &&
+      previous !== current &&
+      pending?.action !== "generation_prepare" &&
+      generationFeedbackChapterId &&
+      (selection.kind !== "chapter" || selection.id !== generationFeedbackChapterId)
+    ) {
+      setGenerationError("");
+      setGenerationFeedbackChapterId(null);
+      setGenerationRecoveryState("idle");
+    }
+  }, [id, selection.kind, selection.id, pending?.action, generationFeedbackChapterId]);
 
   useEffect(() => {
     if (!assignmentFocusTarget || !assignmentResponse) return;
@@ -288,6 +432,109 @@ export default function ChapterPlanningPage() {
       setAssignmentFocusTarget(null);
     }, 0);
   }, [assignmentFocusTarget, assignmentResponse, id]);
+
+  async function acceptGenerationRun(
+    value: GenerationRunResponse,
+    operation: PendingPlanningOperation<GenerationRunPrepareInput>,
+    generation: number,
+    recovered: boolean,
+    focusResult: boolean
+  ): Promise<boolean> {
+    if (!id || !user || generation !== requestGeneration.current) return false;
+    if (!recovered && (selectionRef.current.kind !== "chapter" || selectionRef.current.id !== operation.target_id)) {
+      setGenerationRecoveryState("unknown");
+      setGenerationError("检查响应返回时当前章节已经变化；已保留原操作编号，请先核对结果。");
+      setGenerationFeedbackChapterId(operation.target_id);
+      if (focusResult) setGenerationFeedbackFocusToken((token) => token + 1);
+      return false;
+    }
+    const contractError = generationRunContractError(value, {
+      projectId: id,
+      chapterId: operation.target_id ?? "",
+      operationKey: operation.operation_key,
+      payload: operation.payload,
+    });
+    if (contractError) {
+      setGenerationRun(null);
+      setGenerationRecoveryState("corrupt");
+      setGenerationError(contractError);
+      setGenerationFeedbackChapterId(operation.target_id);
+      if (focusResult) setGenerationFeedbackFocusToken((token) => token + 1);
+      return false;
+    }
+    acceptedGenerationRunId.current = value.id;
+    generationPointerTransition.current = value.id;
+    const params = new URLSearchParams(searchParams);
+    params.set("scope", "chapter");
+    params.set("target", operation.target_id!);
+    params.set("generation_run", value.id);
+    setSearchParams(params, { replace: true });
+    setGenerationRun(value);
+    setGenerationRecovered(recovered || value.replayed);
+    setGenerationError("");
+    setGenerationFeedbackChapterId(null);
+    setGenerationRecoveryState("idle");
+    if (focusResult) setGenerationFocusToken((token) => token + 1);
+    if (!clearPendingPlanningOperation(user.id, id)) {
+      setPendingStorageIssue("unavailable");
+      setGenerationError("检查记录已在服务端保存，但浏览器无法清除原恢复线索；继续保持禁写，请重新加载页面后核对。");
+      setGenerationFeedbackChapterId(operation.target_id);
+      setGenerationFeedbackFocusToken((token) => token + 1);
+      return false;
+    }
+    setPending(null);
+    selectionRef.current = { kind: "chapter", id: operation.target_id! };
+    const refreshed = await refreshPlanningAndAssignmentScope("chapter", operation.target_id!, generation);
+    if (generation !== requestGeneration.current) return false;
+    if (!refreshed) {
+      setAssignmentRefreshRequired(true);
+      setGenerationError("检查记录已保存，但权威规划与设定尚未完整读取；已保持禁写，请重新读取后再继续。");
+      setGenerationFeedbackChapterId(operation.target_id);
+      setGenerationFeedbackFocusToken((token) => token + 1);
+      return false;
+    }
+    setNotice(recovered || value.replayed
+      ? "已找回上次保存的生成前检查记录，并重新载入权威规划与设定。"
+      : "生成前检查记录已保存并完成权威同步；尚未调用 AI，也未创建或修改正文。");
+    return true;
+  }
+
+  async function reconcileGenerationPending(
+    operation: PendingPlanningOperation<GenerationRunPrepareInput>,
+    generation = requestGeneration.current,
+    focusResult = false
+  ): Promise<boolean> {
+    if (!id || generation !== requestGeneration.current) return false;
+    setGenerationRecoveryState("checking");
+    setGenerationError("");
+    setGenerationFeedbackChapterId(operation.target_id);
+    try {
+      const value = await api.getGenerationRunByKey(id, operation.operation_key);
+      if (generation !== requestGeneration.current) return false;
+      const accepted = await acceptGenerationRun(value, operation, generation, true, focusResult);
+      return accepted;
+    } catch (cause) {
+      if (generation !== requestGeneration.current) return false;
+      if (
+        cause instanceof ApiError &&
+        cause.status === 404 &&
+        cause.code === "GENERATION_RUN_NOT_FOUND" &&
+        cause.retryable &&
+        cause.recommendedAction === "retry_original_prepare"
+      ) {
+        setGenerationRecoveryState("not_found");
+        setGenerationError("");
+      } else {
+        setGenerationRecoveryState("unknown");
+        setGenerationError(cause instanceof ApiError && cause.status === 404
+          ? "服务端未给出可安全重试原请求的确定答复；已保留原操作编号并停止创建新记录。"
+          : errorMessage(cause));
+        if (cause instanceof ApiError && cause.status === 503) setMaintenance(true);
+      }
+      if (focusResult) setGenerationFeedbackFocusToken((token) => token + 1);
+      return false;
+    }
+  }
 
   useEffect(() => {
     if (!id || !user || loadState !== "ready") return;
@@ -312,6 +559,16 @@ export default function ChapterPlanningPage() {
     }
     const generation = requestGeneration.current;
     setPending(stored);
+    if (stored.action === "generation_prepare") {
+      generationRunRequest.current += 1;
+      setGenerationLoadingSaved(false);
+      void reconcileGenerationPending(
+        stored as unknown as PendingPlanningOperation<GenerationRunPrepareInput>,
+        generation,
+        false
+      );
+      return;
+    }
     void api.getPlanningOperation(id, stored.operation_key)
       .then(async (receipt) => {
         if (generation !== requestGeneration.current) return;
@@ -364,6 +621,14 @@ export default function ChapterPlanningPage() {
   function selectScope(next: PlanningSelection) {
     const current = selectionRef.current;
     const changingScope = current.kind !== next.kind || current.id !== next.id;
+    if (
+      changingScope &&
+      pending?.action === "generation_prepare" &&
+      (next.kind !== "chapter" || next.id !== pending.target_id)
+    ) {
+      setNotice("上次生成前检查仍等待确认；请先返回发起章节核对原操作编号。");
+      return;
+    }
     if (changingScope && !confirmEditorUnload()) return;
     setSearchParams(next.kind === "novel" ? {} : { scope: next.kind, target: next.id });
     setMobileDetail(true);
@@ -684,8 +949,111 @@ export default function ChapterPlanningPage() {
     }
   }
 
+  async function executeGenerationPrepare(
+    existing?: PendingPlanningOperation<GenerationRunPrepareInput>
+  ) {
+    if (!id || !user || generationBusy) return;
+    if (!existing && (!plan || selection.kind !== "chapter" || !located.chapter)) return;
+    if (!existing && generationDisabledReason) return;
+    const body: GenerationRunPrepareInput = existing?.payload ?? {
+      operation_key: createPlanningOperationKey("generation_prepare"),
+      expected_structure_version: plan!.structure_version,
+      expected_assignment_version: plan!.assignment_version,
+      expected_chapter_lock_version: located.chapter!.lock_version,
+    };
+    const operation: PendingPlanningOperation<GenerationRunPrepareInput> = existing ?? {
+      schema_version: 1,
+      user_id: user.id,
+      project_id: id,
+      operation_key: body.operation_key,
+      action: "generation_prepare",
+      target_id: located.chapter!.id,
+      payload: body,
+      created_at: new Date().toISOString(),
+    };
+    if (
+      operation.user_id !== user.id ||
+      operation.project_id !== id ||
+      !operation.target_id ||
+      operation.operation_key !== operation.payload.operation_key
+    ) {
+      setGenerationRecoveryState("corrupt");
+      setGenerationError("恢复请求与当前项目或章节不一致，已停止重试。");
+      setGenerationFeedbackChapterId(operation.target_id);
+      return;
+    }
+    if (!savePendingPlanningOperation(operation)) {
+      setPendingStorageIssue("unavailable");
+      setGenerationError("浏览器无法安全保存检查恢复信息，已停止请求。请检查会话存储设置。");
+      setGenerationFeedbackChapterId(operation.target_id);
+      setGenerationFeedbackFocusToken((token) => token + 1);
+      return;
+    }
+    const generation = requestGeneration.current;
+    setPending(operation as unknown as PendingPlanningOperation);
+    setGenerationBusy(true);
+    setGenerationError("");
+    setGenerationFeedbackChapterId(operation.target_id);
+    setGenerationRecoveryState("idle");
+    try {
+      const value = await api.prepareGenerationRun(id, operation.target_id, body);
+      if (generation !== requestGeneration.current) return;
+      await acceptGenerationRun(value, operation, generation, !!existing, true);
+    } catch (cause) {
+      if (generation !== requestGeneration.current) return;
+      const apiError = cause instanceof ApiError ? cause : null;
+      const keepPending = shouldKeepPlanningOperation(cause) || apiError?.status === 503;
+      let clearFailed = false;
+      if (!keepPending) {
+        if (clearPendingPlanningOperation(user.id, id)) {
+          setPending(null);
+          setGenerationRecoveryState("idle");
+        } else {
+          clearFailed = true;
+          setPending(operation as unknown as PendingPlanningOperation);
+          setPendingStorageIssue("unavailable");
+          setGenerationRecoveryState("corrupt");
+          setGenerationError("服务端已确定拒绝本次检查，但浏览器无法清除恢复线索；继续保持禁写，请重新加载页面。");
+        }
+      } else {
+        setPending(operation as unknown as PendingPlanningOperation);
+      }
+      if (!clearFailed) setGenerationError(errorMessage(cause));
+      setGenerationFeedbackChapterId(operation.target_id);
+      if (clearFailed) {
+        // The server outcome is known, but the browser recovery clue could not be cleared.
+        // Keep the in-memory pending lock and the storage-specific message above.
+      } else if (apiError?.status === 503) {
+        setMaintenance(true);
+        setGenerationRecoveryState("unknown");
+      } else if (keepPending) {
+        await reconcileGenerationPending(operation, generation, false);
+      } else if (apiError?.code === "GENERATION_LORE_INELIGIBLE") {
+        const refreshed = await refreshPlanningAndAssignmentScope("chapter", operation.target_id, generation);
+        if (!refreshed) setAssignmentRefreshRequired(true);
+        setGenerationError(refreshed
+          ? `${apiError.detail} 请在下方处理全部失效设定。`
+          : "检查发现失效设定，且最新设定分配读取失败；已保持禁写，请重新读取。");
+        setAssignmentFocusTarget({ elementId: "", scopeIdentity: scopeIdentity("chapter", operation.target_id) });
+      } else if (apiError?.status === 409 || apiError?.code?.includes("VERSION_CONFLICT")) {
+        const refreshed = await refreshPlanningAndAssignmentScope("chapter", operation.target_id, generation);
+        if (!refreshed) {
+          setAssignmentRefreshRequired(true);
+          setGenerationError("检查时资料版本发生变化，且最新规划与设定读取失败；已保持禁写。 ");
+        } else {
+          setGenerationError(`${apiError.detail} 已载入最新规划与设定，请核对后重新检查。`);
+        }
+      } else if (apiError?.code === "GENERATION_CONTEXT_EMPTY") {
+        setGenerationError(`${apiError.detail} 请先为本章、所属篇章或整部小说分配可用设定。`);
+      }
+      setGenerationFeedbackFocusToken((token) => token + 1);
+    } finally {
+      if (generation === requestGeneration.current) setGenerationBusy(false);
+    }
+  }
+
   async function retryPending() {
-    if (!id || !user || !pending || busy || refreshRequired) return;
+    if (!id || !user || !pending || busy || generationBusy || refreshRequired) return;
     const payloadKey = (pending.payload as { operation_key?: unknown }).operation_key;
     if (
       pending.project_id !== id ||
@@ -701,6 +1069,10 @@ export default function ChapterPlanningPage() {
     const generation = requestGeneration.current;
     const action = pending.action;
     const target = pending.target_id;
+    if (action === "generation_prepare") {
+      await executeGenerationPrepare(pending as unknown as PendingPlanningOperation<GenerationRunPrepareInput>);
+      return;
+    }
     const handlers: Record<string, () => Promise<unknown>> = {
       part_create: () => api.createPlanningPart(id, p as unknown as PlanningPartCreateInput),
       part_update: () => api.updatePlanningPart(id, target!, p as unknown as PlanningPartUpdateInput),
@@ -837,10 +1209,67 @@ export default function ChapterPlanningPage() {
     if (clearPendingPlanningOperation(user.id, id)) {
       setPendingStorageIssue(null);
       setError("");
+      setGenerationError("");
+      setGenerationFeedbackChapterId(null);
+      setGenerationRecoveryState("idle");
       setNotice("损坏的本地恢复记录已清除，可以重新开始操作。");
     } else {
       setError("浏览器会话存储仍不可用，无法清除损坏记录；继续保持禁写。");
     }
+  }
+
+  function clearGenerationRunPointer() {
+    generationRunRequest.current += 1;
+    acceptedGenerationRunId.current = null;
+    generationPointerTransition.current = null;
+    setGenerationLoadingSaved(false);
+    const params = new URLSearchParams(searchParams);
+    params.delete("generation_run");
+    setSearchParams(params, { replace: true });
+    setGenerationRun(null);
+    setGenerationRecovered(false);
+    setGenerationError("");
+    setGenerationFeedbackChapterId(null);
+    setGenerationRecoveryState("idle");
+    setNotice("已关闭本页的检查记录视图；服务端耐久记录未被删除。");
+  }
+
+  function returnToPendingGenerationChapter() {
+    if (!pending?.target_id || !planRef.current) return;
+    const target = locate(planRef.current, { kind: "chapter", id: pending.target_id });
+    if (!target.chapter) {
+      setGenerationError("原检查对应章节当前无法在规划中找到；已保留恢复线索并停止新检查。");
+      setGenerationFeedbackChapterId(pending.target_id);
+      setGenerationFeedbackFocusToken((token) => token + 1);
+      return;
+    }
+    const params = new URLSearchParams(searchParams);
+    params.set("scope", "chapter");
+    params.set("target", pending.target_id);
+    params.delete("generation_run");
+    setSearchParams(params);
+    setMobileDetail(true);
+  }
+
+  function abandonGenerationPending() {
+    if (!id || !user || pending?.action !== "generation_prepare") return;
+    if (!window.confirm("确定放弃这条浏览器恢复线索？这不会删除服务器上可能已经保存的检查记录，之后也不会再自动找回它。")) return;
+    if (!clearPendingPlanningOperation(user.id, id)) {
+      setPendingStorageIssue("unavailable");
+      setGenerationError("浏览器会话存储不可用，无法放弃原恢复线索；继续保持禁写。");
+      setGenerationFeedbackChapterId(pending.target_id);
+      setGenerationFeedbackFocusToken((token) => token + 1);
+      return;
+    }
+    setPending(null);
+    setGenerationError("");
+    setGenerationFeedbackChapterId(null);
+    setGenerationRecoveryState("idle");
+    setNotice("已放弃本浏览器中的原检查恢复线索；服务器上可能存在的检查记录未被删除。");
+  }
+
+  function focusPlanningAssignments() {
+    document.querySelector<HTMLElement>(".planning-assignments h3")?.focus();
   }
 
   if (!id) return <div className="card empty-state" role="alert">项目地址无效。</div>;
@@ -855,12 +1284,40 @@ export default function ChapterPlanningPage() {
 
       <div className="planning-live" aria-live="polite">{notice}</div>
       {error && <div className="planning-notice is-error" role="alert" tabIndex={-1} ref={conflictRef}><span>{error}{errorHint && <small className="planning-notice__hint">{errorHint}</small>}</span>{conflict ? <span className="planning-notice__actions"><button className="btn btn-secondary" onClick={() => { setServerSyncToken((value) => value + 1); setConflict(false); setError(""); setNotice("已载入服务器最新字段。"); }}>载入服务器最新值</button><button className="btn btn-secondary" onClick={() => { setConflict(false); setError(""); setNotice("旧草稿已保留；请与服务器最新值核对后再保存。"); }}>保留草稿并继续核对</button></span> : pendingStorageIssue === "corrupt" ? <button className="btn btn-secondary" onClick={clearCorruptRecoveryRecord}>确认清除损坏恢复记录</button> : (refreshRequired || assignmentRefreshRequired) ? <button className="btn btn-secondary" onClick={() => void reloadPlanningAndCurrentAssignments()}>重新读取规划与设定</button> : <button className="btn btn-secondary" onClick={() => loadPlan(false)}>刷新规划</button>}</div>}
+      {globalGenerationFeedbackVisible && (
+        <div className="planning-notice is-error" role="alert" tabIndex={-1} ref={globalGenerationFeedbackRef}>
+          <span><strong>生成前检查未通过</strong><small className="planning-notice__hint">{generationError}</small></span>
+        </div>
+      )}
       {assignmentConflict && <div ref={assignmentConflictRef} className="planning-notice is-error" role="alert" tabIndex={-1}><span>{assignmentError || "分配状态已更新，请核对服务器最新结果。"}</span><button className="btn btn-secondary" onClick={() => { setAssignmentConflict(false); setAssignmentError(""); setNotice("已核对服务器最新分配，可以继续操作。"); }}>已核对最新分配</button></div>}
       {maintenance && <div className="planning-notice" role="status">项目资料正在维护；已保留当前只读内容并暂停写入。</div>}
-      {pending && (
+      {pending && pending.action !== "generation_prepare" && (
         <div className="planning-notice" role="alert">
           <span>检测到结果尚未确认的操作，已暂停新的写入。</span>
           <button className="btn btn-secondary" disabled={busy} onClick={retryPending}>使用原操作编号安全重试</button>
+        </div>
+      )}
+      {pending?.action === "generation_prepare" && (
+        <div className="planning-notice" role="status">
+          <span>上次生成前检查仍等待确认；系统已冻结新的规划写入和新检查，避免重复记录。</span>
+          <span className="planning-notice__actions">
+            <button
+              className="btn btn-secondary"
+              disabled={generationBusy || generationRecoveryState === "checking"}
+              onClick={() => void reconcileGenerationPending(pending as unknown as PendingPlanningOperation<GenerationRunPrepareInput>, requestGeneration.current, true)}
+            >
+              {generationRecoveryState === "checking" ? "正在核对原检查…" : "核对原检查结果"}
+            </button>
+            {generationRecoveryState === "not_found" && (
+              <button className="btn btn-secondary" disabled={generationBusy} onClick={() => void retryPending()}>使用原编号与载荷重试</button>
+            )}
+            {(generationRecoveryState === "corrupt" || pendingStorageIssue === "unavailable") && (
+              <button className="btn btn-secondary" disabled={generationBusy} onClick={abandonGenerationPending}>处理恢复线索</button>
+            )}
+          </span>
+          {(selection.kind !== "chapter" || selection.id !== pending.target_id) && plan && locate(plan, { kind: "chapter", id: pending.target_id! }).chapter && (
+            <button className="btn btn-secondary" onClick={returnToPendingGenerationChapter}>返回发起章节核对</button>
+          )}
         </div>
       )}
 
@@ -901,20 +1358,49 @@ export default function ChapterPlanningPage() {
               />
             )}
             {selection.kind === "chapter" && located.part && located.chapter && (
-              <ChapterDetail
-                plan={plan}
-                part={located.part}
-                chapter={located.chapter}
-                busy={planningWriteDisabled}
-                serverSyncToken={serverSyncToken}
-                onDirtyChange={setHasUnsavedStructureDraft}
-                onUpdate={(body) => execute("chapter_update", located.chapter!.id, body, (value) => api.updatePlanningChapter(id, located.chapter!.id, value), "章节已保存。")}
-                onState={(action, body) => {
-                  if (action === "archive" && !confirmEditorUnload("归档后可恢复，确定继续吗？")) return;
-                  void execute(`chapter_${action}`, located.chapter!.id, body, (value) => api.changePlanningChapterState(id, located.chapter!.id, action, value), action === "archive" ? "章节已归档。" : "章节已恢复。", action === "archive" ? located.part!.id : located.chapter!.id);
-                }}
-                onMove={(targetPartId) => moveChapterTo(located.chapter!, targetPartId)}
-              />
+              <>
+                <ChapterDetail
+                  plan={plan}
+                  part={located.part}
+                  chapter={located.chapter}
+                  busy={planningWriteDisabled}
+                  serverSyncToken={serverSyncToken}
+                  onDirtyChange={setHasUnsavedStructureDraft}
+                  onUpdate={(body) => execute("chapter_update", located.chapter!.id, body, (value) => api.updatePlanningChapter(id, located.chapter!.id, value), "章节已保存。")}
+                  onState={(action, body) => {
+                    if (action === "archive" && !confirmEditorUnload("归档后可恢复，确定继续吗？")) return;
+                    void execute(`chapter_${action}`, located.chapter!.id, body, (value) => api.changePlanningChapterState(id, located.chapter!.id, action, value), action === "archive" ? "章节已归档。" : "章节已恢复。", action === "archive" ? located.part!.id : located.chapter!.id);
+                  }}
+                  onMove={(targetPartId) => moveChapterTo(located.chapter!, targetPartId)}
+                />
+                {located.chapter.status === "active" && located.part.status === "active" && (
+                  <PlanningGenerationPreflight
+                    plan={plan}
+                    part={located.part}
+                    chapter={located.chapter}
+                    run={generationRun}
+                    busy={generationBusy}
+                    loadingSaved={generationLoadingSaved}
+                    disabled={!!generationDisabledReason}
+                    disabledReason={generationDisabledReason}
+                    error={generationError}
+                    recoveryState={generationRecoveryState}
+                    stale={generationStale}
+                    recovered={generationRecovered}
+                    focusResultToken={generationFocusToken}
+                    focusFeedbackToken={generationFeedbackFocusToken}
+                    hasPendingRecovery={pending?.action === "generation_prepare"}
+                    onPrepare={() => void executeGenerationPrepare()}
+                    onCheckPending={() => {
+                      if (pending?.action === "generation_prepare") void reconcileGenerationPending(pending as unknown as PendingPlanningOperation<GenerationRunPrepareInput>, requestGeneration.current, true);
+                    }}
+                    onRetryOriginal={() => void retryPending()}
+                    onFocusAssignments={focusPlanningAssignments}
+                    onClearSavedPointer={clearGenerationRunPointer}
+                    onAbandonPending={abandonGenerationPending}
+                  />
+                )}
+              </>
             )}
             <PlanningLoreAssignments
               projectId={id}

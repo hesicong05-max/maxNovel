@@ -110,6 +110,47 @@ describe("planning operation recovery", () => {
     expect(loadPendingPlanningOperation("u", "p")).toEqual({ status: "corrupt" });
   });
 
+  it("strictly validates a generation prepare command and chapter target", () => {
+    const chapterId = "c".repeat(32);
+    const operation = {
+      schema_version: 1 as const,
+      user_id: "u",
+      project_id: "p",
+      operation_key: "planning:generation_prepare:12345678",
+      action: "generation_prepare" as const,
+      target_id: chapterId,
+      payload: {
+        operation_key: "planning:generation_prepare:12345678",
+        expected_structure_version: 3,
+        expected_assignment_version: 2,
+        expected_chapter_lock_version: 1,
+      },
+      created_at: "2026-08-11T13:50:00Z",
+    };
+
+    expect(savePendingPlanningOperation(operation)).toBe(true);
+    expect(loadPendingPlanningOperation("u", "p")).toEqual({
+      status: "available",
+      operation,
+    });
+
+    for (const invalid of [
+      { ...operation, target_id: "chapter-1" },
+      { ...operation, target_id: null },
+      { ...operation, payload: { ...operation.payload, unexpected: true } },
+      { ...operation, payload: { ...operation.payload, expected_structure_version: 0 } },
+      { ...operation, payload: { ...operation.payload, expected_assignment_version: 1.5 } },
+      { ...operation, payload: { ...operation.payload, expected_chapter_lock_version: -1 } },
+      { ...operation, payload: { ...operation.payload, operation_key: "different:key" } },
+    ]) {
+      sessionStorage.setItem(
+        "novel_pending_planning_operation_v1:u:p",
+        JSON.stringify(invalid)
+      );
+      expect(loadPendingPlanningOperation("u", "p")).toEqual({ status: "corrupt" });
+    }
+  });
+
   it("distinguishes unavailable session storage from a missing operation", () => {
     vi.stubGlobal("sessionStorage", {
       getItem: () => { throw new DOMException("blocked", "SecurityError"); },

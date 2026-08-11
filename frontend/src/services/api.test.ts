@@ -398,6 +398,41 @@ describe("API - relational planning", () => {
     );
   });
 
+  it("encodes generation prepare and durable recovery paths with the exact command", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ status: "prepared" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const body = {
+      operation_key: "planning:generation_prepare:12345678",
+      expected_structure_version: 4,
+      expected_assignment_version: 3,
+      expected_chapter_lock_version: 2,
+    };
+
+    await api.prepareGenerationRun("project/one", "chapter/one", body);
+    await api.getGenerationRunByKey("project/one", "planning:generation prepare:12345678");
+    await api.getGenerationRun("project/one", "run/one");
+
+    expect(fetchSpy.mock.calls[0][0]).toBe(
+      "/api/projects/project%2Fone/planning/chapters/chapter%2Fone/generation-runs"
+    );
+    expect(fetchSpy.mock.calls[0][1]).toEqual(expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify(body),
+    }));
+    expect(fetchSpy.mock.calls[1][0]).toBe(
+      "/api/projects/project%2Fone/planning/generation-runs/by-key/planning%3Ageneration%20prepare%3A12345678"
+    );
+    expect(fetchSpy.mock.calls[1][1]).toEqual(expect.any(Object));
+    expect(fetchSpy.mock.calls[2][0]).toBe(
+      "/api/projects/project%2Fone/planning/generation-runs/run%2Fone"
+    );
+    expect(fetchSpy.mock.calls[2][1]).toEqual(expect.any(Object));
+  });
+
   it("encodes scoped lore assignment reads, writes, state changes, and history", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       new Response(JSON.stringify({ receipt_kind: "assignment", assignments: [] }), {
