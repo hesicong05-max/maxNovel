@@ -73,6 +73,7 @@ async def setup_database():
     # Import all models to ensure they are registered
     from app.models import (  # noqa: F401
         community,
+        foreshadow,
         generation,
         lore,
         planning,
