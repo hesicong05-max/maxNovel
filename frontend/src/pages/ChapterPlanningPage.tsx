@@ -125,6 +125,8 @@ export default function ChapterPlanningPage() {
   const [focusTarget, setFocusTarget] = useState<string | null>(null);
   const [assignmentFocusTarget, setAssignmentFocusTarget] = useState<{ elementId: string; scopeIdentity: string } | null>(null);
   const [refreshRequired, setRefreshRequired] = useState(false);
+  const [hasUnsavedStructureDraft, setHasUnsavedStructureDraft] = useState(false);
+  const [hasUnsavedPartCreationDraft, setHasUnsavedPartCreationDraft] = useState(false);
   const conflictRef = useRef<HTMLDivElement | null>(null);
   const assignmentConflictRef = useRef<HTMLDivElement | null>(null);
   const requestGeneration = useRef(0);
@@ -234,6 +236,8 @@ export default function ChapterPlanningPage() {
     setRefreshRequired(false);
     setBusy(false);
     setAssignmentFocusTarget(null);
+    setHasUnsavedStructureDraft(false);
+    setHasUnsavedPartCreationDraft(false);
     setMobileDetail(!!searchParams.get("target"));
     void loadPlan(true, generation);
   }, [id, user?.id]);
@@ -268,7 +272,7 @@ export default function ChapterPlanningPage() {
     }, 0);
   }, [focusTarget, plan, mobileDetail]);
 
-  useEffect(() => { if (conflict && error) conflictRef.current?.focus(); }, [conflict, error]);
+  useEffect(() => { if (error) conflictRef.current?.focus(); }, [error]);
   useEffect(() => { if (assignmentConflict) assignmentConflictRef.current?.focus(); }, [assignmentConflict]);
 
   useEffect(() => {
@@ -339,7 +343,28 @@ export default function ChapterPlanningPage() {
       });
   }, [id, user?.id, loadState]);
 
+  function confirmEditorUnload(actionConfirmation?: string, includePartCreationDraft = false): boolean {
+    const hasDraft = hasUnsavedStructureDraft || (includePartCreationDraft && hasUnsavedPartCreationDraft);
+    const message = hasDraft
+      ? `${includePartCreationDraft && hasUnsavedPartCreationDraft ? "当前还有尚未提交的结构草稿。" : "当前篇章或章节还有尚未保存的修改。"}${actionConfirmation ? ` 继续此操作将放弃这些修改。${actionConfirmation}` : " 离开将放弃这些修改，是否继续？"}`
+      : actionConfirmation;
+    return !message || window.confirm(message);
+  }
+
+  useEffect(() => {
+    if (!hasUnsavedStructureDraft && !hasUnsavedPartCreationDraft) return;
+    const preventUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", preventUnload);
+    return () => window.removeEventListener("beforeunload", preventUnload);
+  }, [hasUnsavedStructureDraft, hasUnsavedPartCreationDraft]);
+
   function selectScope(next: PlanningSelection) {
+    const current = selectionRef.current;
+    const changingScope = current.kind !== next.kind || current.id !== next.id;
+    if (changingScope && !confirmEditorUnload()) return;
     setSearchParams(next.kind === "novel" ? {} : { scope: next.kind, target: next.id });
     setMobileDetail(true);
   }
@@ -822,10 +847,10 @@ export default function ChapterPlanningPage() {
 
   return (
     <div className="planning-page" aria-busy={loadState === "loading" || busy}>
-      <button className="btn-back" onClick={() => navigate(`/project/${id}`)}>← 返回项目</button>
+      <button className="btn-back" onClick={() => confirmEditorUnload(undefined, true) && navigate(`/project/${id}`)}>← 返回项目</button>
       <header className="page-header planning-header">
         <div><h1>章节规划</h1><p>在生成正文前组织篇章、章节和使用范围。</p></div>
-        <Link className="btn btn-secondary" to={`/project/${id}/lore`}>打开设定仓库</Link>
+        <Link className="btn btn-secondary" to={`/project/${id}/lore`} onClick={(event) => { if (!confirmEditorUnload(undefined, true)) event.preventDefault(); }}>打开设定仓库</Link>
       </header>
 
       <div className="planning-live" aria-live="polite">{notice}</div>
@@ -854,7 +879,7 @@ export default function ChapterPlanningPage() {
       {loadState === "ready" && plan && (
         <div className={`planning-workspace${mobileDetail ? " show-detail" : ""}`}>
           <aside className="card planning-workspace__tree">
-            <div className="planning-section-heading"><h2>篇章结构</h2><CreatePartForm plan={plan} busy={planningWriteDisabled} onCreate={(body) => execute("part_create", null, body, (value) => api.createPlanningPart(id, value), "篇章已创建。")} /></div>
+            <div className="planning-section-heading"><h2>篇章结构</h2><CreatePartForm plan={plan} busy={planningWriteDisabled} onDirtyChange={setHasUnsavedPartCreationDraft} onCreate={(body) => execute("part_create", null, body, (value) => api.createPlanningPart(id, value), "篇章已创建。")} /></div>
             <PlanningStructurePanel plan={plan} selected={selection} busy={planningWriteDisabled} onSelect={selectScope} onMovePart={movePart} onMoveChapter={moveChapter} />
           </aside>
           <main className="card planning-workspace__detail">
@@ -866,8 +891,12 @@ export default function ChapterPlanningPage() {
                 part={located.part}
                 busy={planningWriteDisabled}
                 serverSyncToken={serverSyncToken}
+                onDirtyChange={setHasUnsavedStructureDraft}
                 onUpdate={(body) => execute("part_update", located.part!.id, body, (value) => api.updatePlanningPart(id, located.part!.id, value), "篇章已保存。")}
-                onState={(action, body) => execute(`part_${action}`, located.part!.id, body, (value) => api.changePlanningPartState(id, located.part!.id, action, value), action === "archive" ? "篇章已归档。" : "篇章已恢复。", action === "archive" ? plan.project_id : located.part!.id)}
+                onState={(action, body) => {
+                  if (action === "archive" && !confirmEditorUnload("归档后可恢复，确定继续吗？")) return;
+                  void execute(`part_${action}`, located.part!.id, body, (value) => api.changePlanningPartState(id, located.part!.id, action, value), action === "archive" ? "篇章已归档。" : "篇章已恢复。", action === "archive" ? plan.project_id : located.part!.id);
+                }}
                 onCreateChapter={(body) => execute("chapter_create", located.part!.id, body, (value) => api.createPlanningChapter(id, located.part!.id, value), "章节已创建。")}
               />
             )}
@@ -878,8 +907,12 @@ export default function ChapterPlanningPage() {
                 chapter={located.chapter}
                 busy={planningWriteDisabled}
                 serverSyncToken={serverSyncToken}
+                onDirtyChange={setHasUnsavedStructureDraft}
                 onUpdate={(body) => execute("chapter_update", located.chapter!.id, body, (value) => api.updatePlanningChapter(id, located.chapter!.id, value), "章节已保存。")}
-                onState={(action, body) => execute(`chapter_${action}`, located.chapter!.id, body, (value) => api.changePlanningChapterState(id, located.chapter!.id, action, value), action === "archive" ? "章节已归档。" : "章节已恢复。", action === "archive" ? located.part!.id : located.chapter!.id)}
+                onState={(action, body) => {
+                  if (action === "archive" && !confirmEditorUnload("归档后可恢复，确定继续吗？")) return;
+                  void execute(`chapter_${action}`, located.chapter!.id, body, (value) => api.changePlanningChapterState(id, located.chapter!.id, action, value), action === "archive" ? "章节已归档。" : "章节已恢复。", action === "archive" ? located.part!.id : located.chapter!.id);
+                }}
                 onMove={(targetPartId) => moveChapterTo(located.chapter!, targetPartId)}
               />
             )}
@@ -899,6 +932,7 @@ export default function ChapterPlanningPage() {
                 void loadAssignmentScope(selectionRef.current, generation);
               }}
               onNavigateScope={navigateToAssignmentScope}
+              onOpenLore={() => confirmEditorUnload(undefined, true)}
               onAssign={assignLoreElement}
               onRemove={(assignment) => changeLoreAssignment(assignment, "remove")}
               onRestore={(assignment) => changeLoreAssignment(assignment, "restore")}
@@ -910,9 +944,12 @@ export default function ChapterPlanningPage() {
   );
 }
 
-function CreatePartForm({ plan, busy, onCreate }: { plan: NovelPlan; busy: boolean; onCreate: (body: PlanningPartCreateInput) => void }) {
+function CreatePartForm({ plan, busy, onDirtyChange, onCreate }: { plan: NovelPlan; busy: boolean; onDirtyChange: (dirty: boolean) => void; onCreate: (body: PlanningPartCreateInput) => void }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
+  const dirty = open && title.trim().length > 0;
+  useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!title.trim()) return;
@@ -939,9 +976,12 @@ function NovelDetail({ plan }: { plan: NovelPlan }) {
   );
 }
 
-function PartDetail({ plan, part, busy, serverSyncToken, onUpdate, onState, onCreateChapter }: { plan: NovelPlan; part: PlanningPart; busy: boolean; serverSyncToken: number; onUpdate: (body: PlanningPartUpdateInput) => void; onState: (action: "archive" | "restore", body: PlanningNodeStateInput) => void; onCreateChapter: (body: PlanningChapterCreateInput) => void }) {
+function PartDetail({ plan, part, busy, serverSyncToken, onDirtyChange, onUpdate, onState, onCreateChapter }: { plan: NovelPlan; part: PlanningPart; busy: boolean; serverSyncToken: number; onDirtyChange: (dirty: boolean) => void; onUpdate: (body: PlanningPartUpdateInput) => void; onState: (action: "archive" | "restore", body: PlanningNodeStateInput) => void; onCreateChapter: (body: PlanningChapterCreateInput) => void }) {
   const [title, setTitle] = useState(part.title); const [description, setDescription] = useState(part.description); const [chapterTitle, setChapterTitle] = useState("");
-  useEffect(() => { setTitle(part.title); setDescription(part.description); }, [part.id, serverSyncToken]);
+  useEffect(() => { setTitle(part.title); setDescription(part.description); setChapterTitle(""); }, [part.id, serverSyncToken]);
+  const dirty = title !== part.title || description !== part.description || chapterTitle.trim().length > 0;
+  useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
   const activeCount = part.chapters.filter((item) => item.status === "active").length;
   const archivedCount = part.chapters.length - activeCount;
   return (
@@ -964,7 +1004,7 @@ function PartDetail({ plan, part, busy, serverSyncToken, onUpdate, onState, onCr
           <p className="planning-blocker" role="status">当前含 {activeCount} 个活动章节、{archivedCount} 个已归档章节。请先移动或处理全部章节，才能归档篇章。</p>
         )}
         {part.status === "active" ? (
-          <button className="btn btn-secondary" disabled={busy || part.chapters.length > 0} onClick={() => window.confirm("归档后可恢复，确定归档这个篇章吗？") && onState("archive", { operation_key: createPlanningOperationKey("part_archive"), expected_structure_version: plan.structure_version })}>归档篇章</button>
+          <button className="btn btn-secondary" disabled={busy || part.chapters.length > 0} onClick={() => onState("archive", { operation_key: createPlanningOperationKey("part_archive"), expected_structure_version: plan.structure_version })}>归档篇章</button>
         ) : (
           <button className="btn btn-secondary" disabled={busy} onClick={() => onState("restore", { operation_key: createPlanningOperationKey("part_restore"), expected_structure_version: plan.structure_version })}>恢复篇章</button>
         )}
@@ -973,10 +1013,16 @@ function PartDetail({ plan, part, busy, serverSyncToken, onUpdate, onState, onCr
   );
 }
 
-function ChapterDetail({ plan, part, chapter, busy, serverSyncToken, onUpdate, onState, onMove }: { plan: NovelPlan; part: PlanningPart; chapter: PlanningChapter; busy: boolean; serverSyncToken: number; onUpdate: (body: PlanningChapterUpdateInput) => void; onState: (action: "archive" | "restore", body: PlanningNodeStateInput) => void; onMove: (targetPartId: string) => void }) {
+function ChapterDetail({ plan, part, chapter, busy, serverSyncToken, onDirtyChange, onUpdate, onState, onMove }: { plan: NovelPlan; part: PlanningPart; chapter: PlanningChapter; busy: boolean; serverSyncToken: number; onDirtyChange: (dirty: boolean) => void; onUpdate: (body: PlanningChapterUpdateInput) => void; onState: (action: "archive" | "restore", body: PlanningNodeStateInput) => void; onMove: (targetPartId: string) => void }) {
   const [title, setTitle] = useState(chapter.title); const [summary, setSummary] = useState(chapter.summary); const [wordCount, setWordCount] = useState(chapter.target_word_count?.toString() ?? ""); const [targetPart, setTargetPart] = useState(chapter.part_id);
-  useEffect(() => { setTitle(chapter.title); setSummary(chapter.summary); setWordCount(chapter.target_word_count?.toString() ?? ""); setTargetPart(chapter.part_id); }, [chapter.id, serverSyncToken]);
+  useEffect(() => { setTitle(chapter.title); setSummary(chapter.summary); setWordCount(chapter.target_word_count?.toString() ?? ""); setTargetPart(chapter.part_id); }, [chapter.id, chapter.part_id, serverSyncToken]);
   const targetValue = wordCount ? Number(wordCount) : null;
+  const dirty = title !== chapter.title
+    || summary !== chapter.summary
+    || targetValue !== chapter.target_word_count
+    || targetPart !== chapter.part_id;
+  useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
   return (
     <section>
       <h2 tabIndex={-1}>{chapter.title}</h2>
@@ -990,7 +1036,7 @@ function ChapterDetail({ plan, part, chapter, busy, serverSyncToken, onUpdate, o
       {chapter.status === "active" && <div className="planning-move"><label>移动至篇章<select value={targetPart} disabled={busy} onChange={(event) => setTargetPart(event.target.value)}>{plan.parts.filter((item) => item.status === "active").map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label><button className="btn btn-secondary" disabled={busy || targetPart === chapter.part_id} onClick={() => onMove(targetPart)}>移动到目标篇章末尾</button></div>}
       <div className="planning-danger-zone">
         {chapter.status === "archived" && part.status === "archived" && <p className="planning-blocker" role="status">请先恢复所属篇章，再恢复此章节。</p>}
-        {chapter.status === "active" ? <button className="btn btn-secondary" disabled={busy} onClick={() => window.confirm("归档后可恢复，确定归档这个章节吗？") && onState("archive", { operation_key: createPlanningOperationKey("chapter_archive"), expected_structure_version: plan.structure_version })}>归档章节</button> : <button className="btn btn-secondary" disabled={busy || part.status === "archived"} onClick={() => onState("restore", { operation_key: createPlanningOperationKey("chapter_restore"), expected_structure_version: plan.structure_version })}>恢复章节</button>}
+        {chapter.status === "active" ? <button className="btn btn-secondary" disabled={busy} onClick={() => onState("archive", { operation_key: createPlanningOperationKey("chapter_archive"), expected_structure_version: plan.structure_version })}>归档章节</button> : <button className="btn btn-secondary" disabled={busy || part.status === "archived"} onClick={() => onState("restore", { operation_key: createPlanningOperationKey("chapter_restore"), expected_structure_version: plan.structure_version })}>恢复章节</button>}
       </div>
     </section>
   );

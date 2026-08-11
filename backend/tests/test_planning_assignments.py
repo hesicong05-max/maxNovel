@@ -195,6 +195,378 @@ async def test_assignments_are_additive_deduplicated_and_source_preserving(
 
 
 @pytest.mark.usefixtures("clean_db")
+async def test_moving_chapter_recomputes_part_inheritance_without_rewriting_assignments(
+    client, auth_headers
+):
+    project_id, _ = await _initialized_project(client, auth_headers)
+    old_part_id, chapter_id = await _create_structure(
+        client, auth_headers, project_id
+    )
+    new_part = await client.post(
+        f"/api/projects/{project_id}/planning/parts",
+        headers=auth_headers,
+        json={
+            "operation_key": "a5-part-create-target",
+            "expected_structure_version": 3,
+            "title": "第二篇",
+        },
+    )
+    assert new_part.status_code == 200, new_part.text
+    new_part_id = new_part.json()["affected_node"]["id"]
+
+    novel_element = await _create_element(
+        client, auth_headers, project_id, name="整书法则"
+    )
+    old_part_element = await _create_element(
+        client, auth_headers, project_id, name="旧篇阵营"
+    )
+    new_part_element = await _create_element(
+        client, auth_headers, project_id, name="新篇地点"
+    )
+    chapter_element = await _create_element(
+        client, auth_headers, project_id, name="章节角色"
+    )
+
+    novel_assignment = await _assign(
+        client,
+        auth_headers,
+        project_id,
+        novel_element,
+        version=1,
+        scope_type="novel",
+        scope_target_id=project_id,
+        key="a5-assign-novel",
+    )
+    old_part_assignment = await _assign(
+        client,
+        auth_headers,
+        project_id,
+        old_part_element,
+        version=2,
+        scope_type="part",
+        scope_target_id=old_part_id,
+        key="a5-assign-old-part",
+    )
+    new_part_assignment = await _assign(
+        client,
+        auth_headers,
+        project_id,
+        new_part_element,
+        version=3,
+        scope_type="part",
+        scope_target_id=new_part_id,
+        key="a5-assign-new-part",
+    )
+    chapter_assignment = await _assign(
+        client,
+        auth_headers,
+        project_id,
+        chapter_element,
+        version=4,
+        scope_type="chapter",
+        scope_target_id=chapter_id,
+        key="a5-assign-chapter",
+    )
+    assert {
+        novel_assignment.status_code,
+        old_part_assignment.status_code,
+        new_part_assignment.status_code,
+        chapter_assignment.status_code,
+    } == {200}
+    novel_assignment_id = novel_assignment.json()["assignment"]["id"]
+    old_part_assignment_id = old_part_assignment.json()["assignment"]["id"]
+    new_part_assignment_id = new_part_assignment.json()["assignment"]["id"]
+    chapter_assignment_id = chapter_assignment.json()["assignment"]["id"]
+
+    before = await client.get(
+        f"/api/projects/{project_id}/planning/lore-assignments",
+        headers=auth_headers,
+        params={"scope_type": "chapter", "scope_target_id": chapter_id},
+    )
+    assert before.status_code == 200, before.text
+    before_ids = {
+        item["element_id"] for item in before.json()["effective_elements"]
+    }
+    assert before_ids == {
+        novel_element["id"],
+        old_part_element["id"],
+        chapter_element["id"],
+    }
+    before_by_element = {
+        item["element_id"]: item for item in before.json()["effective_elements"]
+    }
+    assert before_by_element[novel_element["id"]]["inherited_from"] == [
+        {
+            "assignment_id": novel_assignment_id,
+            "scope": {
+                "scope_type": "novel",
+                "scope_target_id": project_id,
+                "title": "整部小说",
+                "status": "active",
+                "part_id": None,
+            },
+            "lock_version": 1,
+            "assigned_at_content_version": novel_element["content_version"],
+        }
+    ]
+    assert before_by_element[old_part_element["id"]]["inherited_from"][0][
+        "assignment_id"
+    ] == old_part_assignment_id
+    assert before_by_element[old_part_element["id"]]["inherited_from"][0][
+        "scope"
+    ]["scope_target_id"] == old_part_id
+
+    moved = await client.post(
+        f"/api/projects/{project_id}/planning/structure/reorder",
+        headers=auth_headers,
+        json={
+            "operation_key": "a5-move-chapter-between-parts",
+            "expected_structure_version": 4,
+            "parts": [
+                {"part_id": old_part_id, "chapter_ids": []},
+                {"part_id": new_part_id, "chapter_ids": [chapter_id]},
+            ],
+        },
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["new_structure_version"] == 5
+
+    tree = await client.get(
+        f"/api/projects/{project_id}/planning", headers=auth_headers
+    )
+    assert tree.status_code == 200
+    assert tree.json()["structure_version"] == 5
+    assert tree.json()["assignment_version"] == 5
+    moved_chapter = next(
+        chapter
+        for part in tree.json()["parts"]
+        for chapter in part["chapters"]
+        if chapter["id"] == chapter_id
+    )
+    assert moved_chapter["part_id"] == new_part_id
+
+    after = await client.get(
+        f"/api/projects/{project_id}/planning/lore-assignments",
+        headers=auth_headers,
+        params={"scope_type": "chapter", "scope_target_id": chapter_id},
+    )
+    assert after.status_code == 200, after.text
+    after_body = after.json()
+    assert {
+        item["element_id"] for item in after_body["effective_elements"]
+    } == {
+        novel_element["id"],
+        new_part_element["id"],
+        chapter_element["id"],
+    }
+    chapter_effective = next(
+        item
+        for item in after_body["effective_elements"]
+        if item["element_id"] == chapter_element["id"]
+    )
+    assert chapter_effective["direct_assignments"][0]["assignment_id"] == (
+        chapter_assignment_id
+    )
+    assert chapter_effective["inherited_from"] == []
+    novel_effective = next(
+        item
+        for item in after_body["effective_elements"]
+        if item["element_id"] == novel_element["id"]
+    )
+    new_part_effective = next(
+        item
+        for item in after_body["effective_elements"]
+        if item["element_id"] == new_part_element["id"]
+    )
+    assert novel_effective["inherited_from"][0]["assignment_id"] == (
+        novel_assignment_id
+    )
+    assert novel_effective["inherited_from"][0]["scope"]["scope_type"] == "novel"
+    assert new_part_effective["inherited_from"][0]["assignment_id"] == (
+        new_part_assignment_id
+    )
+    assert new_part_effective["inherited_from"][0]["scope"][
+        "scope_target_id"
+    ] == new_part_id
+
+    history = await client.get(
+        f"/api/projects/{project_id}/planning/lore-assignments/history",
+        headers=auth_headers,
+        params={"element_id": chapter_element["id"]},
+    )
+    assert history.status_code == 200
+    assert history.json()["assignments"][0]["id"] == chapter_assignment_id
+    assert [
+        event["action"]
+        for event in history.json()["assignments"][0]["events"]
+    ] == ["assign"]
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_archive_remove_restore_chain_preserves_inheritance_and_history(
+    client, auth_headers
+):
+    project_id, _ = await _initialized_project(client, auth_headers)
+    _, chapter_id = await _create_structure(client, auth_headers, project_id)
+    inherited_element = await _create_element(
+        client, auth_headers, project_id, name="整书约束"
+    )
+    chapter_element = await _create_element(
+        client, auth_headers, project_id, name="本章道具"
+    )
+    inherited = await _assign(
+        client,
+        auth_headers,
+        project_id,
+        inherited_element,
+        version=1,
+        scope_type="novel",
+        scope_target_id=project_id,
+        key="a5-archive-inherited",
+    )
+    direct = await _assign(
+        client,
+        auth_headers,
+        project_id,
+        chapter_element,
+        version=2,
+        scope_type="chapter",
+        scope_target_id=chapter_id,
+        key="a5-archive-direct",
+    )
+    assert inherited.status_code == direct.status_code == 200
+    assignment_id = direct.json()["assignment"]["id"]
+
+    blocked = await client.post(
+        f"/api/projects/{project_id}/planning/chapters/{chapter_id}/archive",
+        headers=auth_headers,
+        json={
+            "operation_key": "a5-archive-blocked",
+            "expected_structure_version": 3,
+        },
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == (
+        "PLANNING_SCOPE_HAS_ACTIVE_ASSIGNMENTS"
+    )
+    assert blocked.json()["detail"]["active_assignment_count"] == 1
+
+    removed = await client.post(
+        f"/api/projects/{project_id}/planning/lore-assignments/{assignment_id}/remove",
+        headers=auth_headers,
+        json={
+            "operation_key": "a5-remove-before-archive",
+            "expected_assignment_version": 3,
+            "expected_lock_version": 1,
+            "scope_type": "chapter",
+            "scope_target_id": chapter_id,
+        },
+    )
+    assert removed.status_code == 200, removed.text
+    inherited_only = await client.get(
+        f"/api/projects/{project_id}/planning/lore-assignments",
+        headers=auth_headers,
+        params={"scope_type": "chapter", "scope_target_id": chapter_id},
+    )
+    assert inherited_only.status_code == 200
+    assert {
+        item["element_id"]
+        for item in inherited_only.json()["effective_elements"]
+    } == {inherited_element["id"]}
+
+    archived = await client.post(
+        f"/api/projects/{project_id}/planning/chapters/{chapter_id}/archive",
+        headers=auth_headers,
+        json={
+            "operation_key": "a5-archive-after-remove",
+            "expected_structure_version": 3,
+        },
+    )
+    assert archived.status_code == 200, archived.text
+    assert archived.json()["new_structure_version"] == 4
+    archived_scope = await client.get(
+        f"/api/projects/{project_id}/planning/lore-assignments",
+        headers=auth_headers,
+        params={"scope_type": "chapter", "scope_target_id": chapter_id},
+    )
+    assert archived_scope.status_code == 200
+    assert archived_scope.json()["scope"]["status"] == "archived"
+    assert archived_scope.json()["direct_assignments"][0]["status"] == "removed"
+
+    blocked_restore = await client.post(
+        f"/api/projects/{project_id}/planning/lore-assignments/{assignment_id}/restore",
+        headers=auth_headers,
+        json={
+            "operation_key": "a5-restore-on-archived-scope",
+            "expected_assignment_version": 4,
+            "expected_lock_version": 2,
+            "scope_type": "chapter",
+            "scope_target_id": chapter_id,
+        },
+    )
+    assert blocked_restore.status_code == 409
+    assert blocked_restore.json()["detail"]["code"] == "PLANNING_SCOPE_ARCHIVED"
+
+    restored_scope = await client.post(
+        f"/api/projects/{project_id}/planning/chapters/{chapter_id}/restore",
+        headers=auth_headers,
+        json={
+            "operation_key": "a5-restore-chapter-scope",
+            "expected_structure_version": 4,
+        },
+    )
+    assert restored_scope.status_code == 200, restored_scope.text
+    restored_assignment = await client.post(
+        f"/api/projects/{project_id}/planning/lore-assignments/{assignment_id}/restore",
+        headers=auth_headers,
+        json={
+            "operation_key": "a5-restore-assignment",
+            "expected_assignment_version": 4,
+            "expected_lock_version": 2,
+            "scope_type": "chapter",
+            "scope_target_id": chapter_id,
+        },
+    )
+    assert restored_assignment.status_code == 200, restored_assignment.text
+    assert restored_assignment.json()["assignment"]["id"] == assignment_id
+    assert restored_assignment.json()["assignment"]["lock_version"] == 3
+
+    disabled = await client.post(
+        f"/api/projects/{project_id}/lore/elements/{chapter_element['id']}/disable",
+        headers=auth_headers,
+        json={"expected_version": chapter_element["lock_version"]},
+    )
+    assert disabled.status_code == 200, disabled.text
+    current = await client.get(
+        f"/api/projects/{project_id}/planning/lore-assignments",
+        headers=auth_headers,
+        params={"scope_type": "chapter", "scope_target_id": chapter_id},
+    )
+    assert current.status_code == 200
+    assert current.json()["assignment_version"] == 5
+    disabled_effective = next(
+        item
+        for item in current.json()["effective_elements"]
+        if item["element_id"] == chapter_element["id"]
+    )
+    assert disabled_effective["generation_eligible"] is False
+    assert disabled_effective["ineligible_reasons"] == ["element_disabled"]
+
+    history = await client.get(
+        f"/api/projects/{project_id}/planning/lore-assignments/history",
+        headers=auth_headers,
+        params={"element_id": chapter_element["id"]},
+    )
+    assert history.status_code == 200
+    assert len(history.json()["assignments"]) == 1
+    assert history.json()["assignments"][0]["id"] == assignment_id
+    assert [
+        event["action"]
+        for event in history.json()["assignments"][0]["events"]
+    ] == ["assign", "remove", "restore"]
+
+
+@pytest.mark.usefixtures("clean_db")
 async def test_remove_restore_reuses_row_and_appends_history(client, auth_headers):
     project_id, _ = await _initialized_project(client, auth_headers)
     element = await _create_element(client, auth_headers, project_id)

@@ -86,6 +86,7 @@ function renderAssignments(overrides: Partial<React.ComponentProps<typeof Planni
     searchRefreshToken: 0,
     onReload: vi.fn(),
     onNavigateScope: vi.fn(),
+    onOpenLore: vi.fn(() => true),
     onAssign: vi.fn(),
     onRemove: vi.fn(),
     onRestore: vi.fn(),

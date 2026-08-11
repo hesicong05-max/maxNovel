@@ -31,6 +31,7 @@ interface Props {
   searchRefreshToken: number;
   onReload: () => void;
   onNavigateScope: (scope: PlanningScopeSnapshot) => void;
+  onOpenLore: () => boolean;
   onAssign: (element: LoreElementListItem) => void;
   onRemove: (assignment: PlanningAssignmentSnapshot) => void;
   onRestore: (assignment: PlanningAssignmentSnapshot) => void;
@@ -121,6 +122,7 @@ export default function PlanningLoreAssignments({
   searchRefreshToken,
   onReload,
   onNavigateScope,
+  onOpenLore,
   onAssign,
   onRemove,
   onRestore,
@@ -183,6 +185,7 @@ export default function PlanningLoreAssignments({
           projectId={projectId}
           writeDisabled={writeDisabled}
           onNavigateScope={onNavigateScope}
+          onOpenLore={onOpenLore}
           onRemove={onRemove}
           onRestore={onRestore}
         />
@@ -191,7 +194,7 @@ export default function PlanningLoreAssignments({
   );
 }
 
-function AssignmentSection({ section, title, items, scope, projectId, writeDisabled, onNavigateScope, onRemove, onRestore }: {
+function AssignmentSection({ section, title, items, scope, projectId, writeDisabled, onNavigateScope, onOpenLore, onRemove, onRestore }: {
   section: SectionKey;
   title: string;
   items: AssignmentCardModel[];
@@ -199,6 +202,7 @@ function AssignmentSection({ section, title, items, scope, projectId, writeDisab
   projectId: string;
   writeDisabled: boolean;
   onNavigateScope: (scope: PlanningScopeSnapshot) => void;
+  onOpenLore: () => boolean;
   onRemove: (assignment: PlanningAssignmentSnapshot) => void;
   onRestore: (assignment: PlanningAssignmentSnapshot) => void;
 }) {
@@ -207,19 +211,20 @@ function AssignmentSection({ section, title, items, scope, projectId, writeDisab
       <h4 tabIndex={-1}>{title}</h4>
       {items.length === 0 ? <p className="planning-assignment-empty">{emptyMessage(section, scope)}</p> : (
         <div className="planning-assignment-list">
-          {items.map((item) => <AssignmentCard key={item.elementId} item={item} scope={scope} projectId={projectId} writeDisabled={writeDisabled} onNavigateScope={onNavigateScope} onRemove={onRemove} onRestore={onRestore} />)}
+          {items.map((item) => <AssignmentCard key={item.elementId} item={item} scope={scope} projectId={projectId} writeDisabled={writeDisabled} onNavigateScope={onNavigateScope} onOpenLore={onOpenLore} onRemove={onRemove} onRestore={onRestore} />)}
         </div>
       )}
     </section>
   );
 }
 
-function AssignmentCard({ item, scope, projectId, writeDisabled, onNavigateScope, onRemove, onRestore }: {
+function AssignmentCard({ item, scope, projectId, writeDisabled, onNavigateScope, onOpenLore, onRemove, onRestore }: {
   item: AssignmentCardModel;
   scope: PlanningScopeSnapshot;
   projectId: string;
   writeDisabled: boolean;
   onNavigateScope: (scope: PlanningScopeSnapshot) => void;
+  onOpenLore: () => boolean;
   onRemove: (assignment: PlanningAssignmentSnapshot) => void;
   onRestore: (assignment: PlanningAssignmentSnapshot) => void;
 }) {
@@ -269,7 +274,7 @@ function AssignmentCard({ item, scope, projectId, writeDisabled, onNavigateScope
         {item.effective && inherited.map((source) => <button key={source.assignment_id} className="btn btn-secondary" onClick={() => onNavigateScope(source.scope)}>前往{scopeText(source.scope)}调整</button>)}
         {item.removedDirect && !item.activeDirect && <button className="btn btn-secondary" disabled={writeDisabled || !canRestore} onClick={() => onRestore(item.removedDirect!)}>{canRestore ? "恢复到本范围" : "暂不能恢复"}</button>}
         <button className="btn btn-secondary" aria-expanded={historyOpen} aria-controls={historyId} onClick={() => setHistoryOpen((value) => !value)}>{historyOpen ? "收起分配历史" : "查看分配历史"}</button>
-        <Link className="btn btn-secondary" to={`/project/${encodeURIComponent(projectId)}/lore?q=${encodeURIComponent(item.element.name)}`}>在设定仓库中查找</Link>
+        <Link className="btn btn-secondary" to={`/project/${encodeURIComponent(projectId)}/lore?q=${encodeURIComponent(item.element.name)}`} onClick={(event) => { if (!onOpenLore()) event.preventDefault(); }}>在设定仓库中查找</Link>
       </div>
       {confirming && item.activeDirect && (
         <div className="planning-assignment-confirm" role="alertdialog" aria-labelledby={confirmTitleId} aria-describedby={confirmImpactId} onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => { if (event.key === "Escape") cancelConfirm(); }}>

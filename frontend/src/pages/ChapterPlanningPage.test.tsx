@@ -152,6 +152,8 @@ describe("ChapterPlanningPage", () => {
     const createPlanningPart = vi.fn().mockResolvedValue({ receipt_kind: "structure" });
     renderPage({ createPlanningPart });
     const retry = await screen.findByRole("button", { name: "使用原操作编号安全重试" });
+    expect(await screen.findByRole("button", { name: "添加设定" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeDisabled();
     await userEvent.click(retry);
     await waitFor(() => expect(createPlanningPart).toHaveBeenCalledWith("project-1", payload));
   });
@@ -487,7 +489,10 @@ describe("ChapterPlanningPage", () => {
     const getPlanning = vi.fn().mockResolvedValueOnce(plan).mockResolvedValueOnce({ ...plan, assignment_version: 1 });
     const getPlanningLoreAssignments = vi.fn().mockResolvedValue(emptyAssignments);
     renderPage({ createPlanningLoreAssignment, getPlanning, getPlanningLoreAssignments });
-    await userEvent.click(await screen.findByRole("button", { name: "使用原操作编号安全重试" }));
+    const retry = await screen.findByRole("button", { name: "使用原操作编号安全重试" });
+    expect(await screen.findByRole("button", { name: "添加设定" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeDisabled();
+    await userEvent.click(retry);
     await waitFor(() => expect(createPlanningLoreAssignment).toHaveBeenCalledWith("project-1", payload));
   });
 
@@ -654,5 +659,136 @@ describe("ChapterPlanningPage", () => {
     resolveNovel?.(emptyAssignments);
     await waitFor(() => expect(screen.getByText((_, node) => node?.textContent === "当前正在编辑：篇章《第一篇》。移除只影响本范围的直接来源。")).toBeInTheDocument());
     expect(screen.queryByText((_, node) => node?.textContent?.includes("当前正在编辑：整部小说") === true)).not.toBeInTheDocument();
+  });
+
+  it("keeps an unsaved chapter draft when inherited-source navigation is cancelled", async () => {
+    const inheritedElement = {
+      id: "element-inherited", name: "整书法则", summary: "不可违背的世界规则",
+      type: { id: "type-rule", key: "rule", display_name: "世界规则", status: "active" as const },
+      confirmation_status: "confirmed" as const, lifecycle_status: "active" as const,
+      enabled: true, merged_into_element_id: null,
+    };
+    const chapterAssignments = {
+      ...emptyAssignments,
+      scope: { scope_type: "chapter" as const, scope_target_id: "chapter-1", title: "第一章", status: "active" as const, part_id: "part-1" },
+      effective_elements: [{
+        element_id: inheritedElement.id,
+        current_content_version: 1,
+        content_changed_since_any_assignment: false,
+        element: inheritedElement,
+        direct_assignments: [],
+        inherited_from: [{ assignment_id: "assignment-novel", scope: emptyAssignments.scope, lock_version: 1, assigned_at_content_version: 1 }],
+        all_sources: [{ assignment_id: "assignment-novel", scope: emptyAssignments.scope, lock_version: 1, assigned_at_content_version: 1 }],
+        generation_eligible: true,
+        ineligible_reasons: [],
+      }],
+      counts: { direct: 0, direct_active: 0, direct_removed: 0, effective: 1, generation_eligible: 1, ineligible: 0 },
+    };
+    const getPlanningLoreAssignments = vi.fn().mockImplementation(
+      (_projectId: string, scopeType: string) => Promise.resolve(
+        scopeType === "chapter" ? chapterAssignments : emptyAssignments
+      )
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderPage({ getPlanningLoreAssignments });
+
+    await userEvent.click(await screen.findByRole("button", { name: "第一章" }));
+    const summary = await screen.findByLabelText("章节摘要");
+    await userEvent.type(summary, "尚未保存的章节安排");
+    await userEvent.click(await screen.findByRole("button", { name: "前往整部小说调整" }));
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/尚未保存/));
+    expect(screen.getByRole("heading", { name: "第一章" })).toBeInTheDocument();
+    expect(screen.getByLabelText("章节摘要")).toHaveValue("尚未保存的章节安排");
+
+    await userEvent.click(screen.getByRole("link", { name: "在设定仓库中查找" }));
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("heading", { name: "第一章" })).toBeInTheDocument();
+    expect(screen.getByLabelText("章节摘要")).toHaveValue("尚未保存的章节安排");
+  });
+
+  it("keeps a new-chapter draft in its source part when scope switching is cancelled", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "第一篇" }));
+    await userEvent.type(screen.getByLabelText("新章节名称"), "只属于第一篇的草稿");
+    await userEvent.click(screen.getByRole("button", { name: "第二篇" }));
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/尚未保存/));
+    expect(screen.getByRole("heading", { name: "第一篇" })).toBeInTheDocument();
+    expect(screen.getByLabelText("新章节名称")).toHaveValue("只属于第一篇的草稿");
+  });
+
+  it("clears a new-chapter draft after the user confirms switching to another part", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "第一篇" }));
+    await userEvent.type(screen.getByLabelText("新章节名称"), "不应带到第二篇");
+    await userEvent.click(screen.getByRole("button", { name: "第二篇" }));
+
+    expect(await screen.findByRole("heading", { name: "第二篇" })).toBeInTheDocument();
+    expect(screen.getByLabelText("新章节名称")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "添加章节" })).toBeDisabled();
+  });
+
+  it("treats an unsubmitted target-part selection as a protected chapter draft", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "第一章" }));
+    await userEvent.selectOptions(screen.getByLabelText("移动至篇章"), "part-2");
+    await userEvent.click(screen.getByRole("button", { name: "整部小说" }));
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/尚未保存/));
+    expect(screen.getByRole("heading", { name: "第一章" })).toBeInTheDocument();
+    expect(screen.getByLabelText("移动至篇章")).toHaveValue("part-2");
+  });
+
+  it("does not call the archive API or discard fields when dirty-archive confirmation is cancelled", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const changePlanningChapterState = vi.fn();
+    renderPage({ changePlanningChapterState });
+
+    await userEvent.click(await screen.findByRole("button", { name: "第一章" }));
+    await userEvent.type(screen.getByLabelText("章节摘要"), "不应被归档操作丢弃");
+    await userEvent.click(screen.getByRole("button", { name: "归档章节" }));
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/将放弃这些修改/));
+    expect(changePlanningChapterState).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("章节摘要")).toHaveValue("不应被归档操作丢弃");
+  });
+
+  it("guards page-level project and lore exits while a structure draft exists", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "第一篇" }));
+    await userEvent.type(screen.getByLabelText("篇章说明"), "离页前保留");
+    await userEvent.click(screen.getByRole("link", { name: "打开设定仓库" }));
+    await userEvent.click(screen.getByRole("button", { name: "← 返回项目" }));
+
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("heading", { name: "第一篇" })).toBeInTheDocument();
+    expect(screen.getByLabelText("篇章说明")).toHaveValue("离页前保留");
+  });
+
+  it("focuses an actionable archive-blocked error after the server rejects the write", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const changePlanningChapterState = vi.fn().mockRejectedValue(new ApiError(409, {
+      detail: "该章节仍有活动设定分配。",
+      code: "PLANNING_SCOPE_HAS_ACTIVE_ASSIGNMENTS",
+      recommended_action: "remove_assignments_first",
+    }));
+    renderPage({ changePlanningChapterState });
+
+    await userEvent.click(await screen.findByRole("button", { name: "第一章" }));
+    await userEvent.click(screen.getByRole("button", { name: "归档章节" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("该章节仍有活动设定分配");
+    expect(alert).toHaveTextContent("移除本级分配后重试");
+    expect(alert).toHaveFocus();
   });
 });
