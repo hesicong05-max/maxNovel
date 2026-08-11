@@ -101,6 +101,24 @@ export interface PlanningScopeSnapshot {
   part_id: string | null;
 }
 
+export interface PlanningAssignmentTypeSnapshot {
+  id: string;
+  key: string;
+  display_name: string;
+  status: "active" | "archived";
+}
+
+export interface PlanningAssignedElementSnapshot {
+  id: string;
+  name: string;
+  summary: string;
+  type: PlanningAssignmentTypeSnapshot;
+  confirmation_status: "candidate" | "confirmed" | "rejected";
+  lifecycle_status: "active" | "archived" | "merged";
+  enabled: boolean;
+  merged_into_element_id: string | null;
+}
+
 export interface PlanningAssignmentSnapshot {
   id: string;
   element_id: string;
@@ -110,11 +128,89 @@ export interface PlanningAssignmentSnapshot {
   assigned_at_content_version: number;
   current_content_version: number;
   content_changed_since_assignment: boolean;
-  element: Record<string, unknown>;
+  element: PlanningAssignedElementSnapshot;
   generation_eligible: boolean;
   ineligible_reasons: string[];
   created_at: string;
   updated_at: string;
+}
+
+export interface PlanningAssignmentSource {
+  assignment_id: string;
+  scope: PlanningScopeSnapshot;
+  lock_version: number;
+  assigned_at_content_version: number;
+}
+
+export interface PlanningEffectiveElement {
+  element_id: string;
+  current_content_version: number;
+  content_changed_since_any_assignment: boolean;
+  element: PlanningAssignedElementSnapshot;
+  direct_assignments: PlanningAssignmentSource[];
+  inherited_from: PlanningAssignmentSource[];
+  all_sources: PlanningAssignmentSource[];
+  generation_eligible: boolean;
+  ineligible_reasons: string[];
+}
+
+export interface PlanningAssignmentCounts {
+  direct: number;
+  direct_active: number;
+  direct_removed: number;
+  effective: number;
+  generation_eligible: number;
+  ineligible: number;
+}
+
+export interface PlanningAssignmentScopeResponse {
+  scope: PlanningScopeSnapshot;
+  assignment_version: number;
+  direct_assignments: PlanningAssignmentSnapshot[];
+  effective_elements: PlanningEffectiveElement[];
+  counts: PlanningAssignmentCounts;
+}
+
+export interface PlanningAssignmentCreateInput {
+  operation_key: string;
+  expected_assignment_version: number;
+  element_id: string;
+  expected_element_content_version: number;
+  scope_type: PlanningScopeType;
+  scope_target_id: string;
+}
+
+export interface PlanningAssignmentStateInput {
+  operation_key: string;
+  expected_assignment_version: number;
+  expected_lock_version: number;
+  scope_type: PlanningScopeType;
+  scope_target_id: string;
+}
+
+export interface PlanningAssignmentEvent {
+  id: string;
+  action: "assign" | "remove" | "restore";
+  previous_status: "active" | "removed" | null;
+  new_status: "active" | "removed";
+  previous_lock_version: number;
+  new_lock_version: number;
+  element_content_version: number;
+  performed_by: string;
+  created_at: string;
+}
+
+export interface PlanningAssignmentHistoryItem {
+  id: string;
+  scope: PlanningScopeSnapshot;
+  status: "active" | "removed";
+  lock_version: number;
+  events: PlanningAssignmentEvent[];
+}
+
+export interface PlanningAssignmentHistoryResponse {
+  element_id: string;
+  assignments: PlanningAssignmentHistoryItem[];
 }
 
 export interface PlanningAssignmentMutationReceipt {

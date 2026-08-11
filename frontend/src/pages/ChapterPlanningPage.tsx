@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import PlanningStructurePanel, { type PlanningSelection } from "@/components/PlanningStructurePanel";
+import PlanningLoreAssignments from "@/components/PlanningLoreAssignments";
 import { useAuth } from "@/components/AuthContext";
 import { ApiError, api } from "@/services/api";
 import {
@@ -10,17 +11,26 @@ import {
   savePendingPlanningOperation,
   shouldKeepPlanningOperation,
   type PendingPlanningOperation,
+  type PlanningOperationAction,
 } from "@/services/planningOperations";
+import type { LoreElementListItem } from "@/types/lore";
 import type {
   NovelPlan,
+  PlanningAssignmentCreateInput,
+  PlanningAssignmentScopeResponse,
+  PlanningAssignmentSnapshot,
+  PlanningAssignmentStateInput,
   PlanningChapter,
   PlanningChapterCreateInput,
   PlanningChapterUpdateInput,
   PlanningNodeStateInput,
+  PlanningOperationReceipt,
   PlanningPart,
   PlanningPartCreateInput,
   PlanningPartUpdateInput,
   PlanningReorderInput,
+  PlanningScopeSnapshot,
+  PlanningScopeType,
 } from "@/types/planning";
 
 type LoadState = "loading" | "ready" | "uninitialized" | "migration" | "legacy" | "error";
@@ -66,6 +76,29 @@ function locate(plan: NovelPlan, selected: PlanningSelection) {
   return { part: null, chapter: null };
 }
 
+function selectionScope(selected: PlanningSelection, projectId: string): { scopeType: PlanningScopeType; scopeTargetId: string } {
+  return {
+    scopeType: selected.kind,
+    scopeTargetId: selected.kind === "novel" ? projectId : selected.id,
+  };
+}
+
+function scopeIdentity(scopeType: PlanningScopeType, scopeTargetId: string): string {
+  return `${scopeType}:${scopeTargetId}`;
+}
+
+function receiptMatchesPending(
+  receipt: PlanningOperationReceipt,
+  operation: PendingPlanningOperation,
+  projectId: string
+): boolean {
+  const assignment = operation.action.startsWith("assignment_");
+  return receipt.project_id === projectId
+    && receipt.operation_key === operation.operation_key
+    && receipt.operation_type === operation.action
+    && receipt.receipt_kind === (assignment ? "assignment" : "structure");
+}
+
 export default function ChapterPlanningPage() {
   const { id } = useParams<{ id: string }>();
   const { user } = useAuth();
@@ -81,11 +114,22 @@ export default function ChapterPlanningPage() {
   const [pending, setPending] = useState<PendingPlanningOperation | null>(null);
   const [mobileDetail, setMobileDetail] = useState(() => !!searchParams.get("target"));
   const [conflict, setConflict] = useState(false);
+  const [assignmentConflict, setAssignmentConflict] = useState(false);
+  const [assignmentResponse, setAssignmentResponse] = useState<PlanningAssignmentScopeResponse | null>(null);
+  const [assignmentLoading, setAssignmentLoading] = useState(false);
+  const [assignmentError, setAssignmentError] = useState("");
+  const [assignmentRefreshRequired, setAssignmentRefreshRequired] = useState(false);
+  const [assignmentSearchRefreshToken, setAssignmentSearchRefreshToken] = useState(0);
+  const [pendingStorageIssue, setPendingStorageIssue] = useState<"corrupt" | "unavailable" | null>(null);
   const [serverSyncToken, setServerSyncToken] = useState(0);
   const [focusTarget, setFocusTarget] = useState<string | null>(null);
+  const [assignmentFocusTarget, setAssignmentFocusTarget] = useState<{ elementId: string; scopeIdentity: string } | null>(null);
   const [refreshRequired, setRefreshRequired] = useState(false);
   const conflictRef = useRef<HTMLDivElement | null>(null);
+  const assignmentConflictRef = useRef<HTMLDivElement | null>(null);
   const requestGeneration = useRef(0);
+  const assignmentGeneration = useRef(0);
+  const selectionRef = useRef<PlanningSelection>({ kind: "novel", id: id ?? "" });
   const planRef = useRef<NovelPlan | null>(null);
   planRef.current = plan;
 
@@ -101,6 +145,10 @@ export default function ChapterPlanningPage() {
   }, [id, plan, searchParams]);
 
   const located = useMemo(() => plan ? locate(plan, selection) : { part: null, chapter: null }, [plan, selection]);
+  selectionRef.current = selection;
+  const planningWriteDisabled = busy || !!pending || maintenance || conflict || assignmentConflict
+    || refreshRequired || assignmentRefreshRequired || !!pendingStorageIssue;
+  const assignmentWriteDisabled = planningWriteDisabled || assignmentLoading || !!assignmentError;
 
   const loadPlan = useCallback(async (showLoading = true, generation = requestGeneration.current): Promise<boolean> => {
     const projectId = id;
@@ -138,6 +186,34 @@ export default function ChapterPlanningPage() {
     }
   }, [id]);
 
+  const loadAssignmentScope = useCallback(async (
+    selected: PlanningSelection,
+    generation: number,
+    signal?: AbortSignal,
+    showLoading = true
+  ): Promise<boolean> => {
+    const projectId = id;
+    if (!projectId) return false;
+    const scope = selectionScope(selected, projectId);
+    if (showLoading) setAssignmentLoading(true);
+    setAssignmentError("");
+    try {
+      const value = await api.getPlanningLoreAssignments(projectId, scope.scopeType, scope.scopeTargetId, signal);
+      if (generation !== assignmentGeneration.current) return false;
+      if (scopeIdentity(selectionRef.current.kind, selectionRef.current.kind === "novel" ? projectId : selectionRef.current.id)
+        !== scopeIdentity(scope.scopeType, scope.scopeTargetId)) return false;
+      setAssignmentResponse(value);
+      return true;
+    } catch (cause) {
+      if (signal?.aborted || generation !== assignmentGeneration.current) return false;
+      setAssignmentError(errorMessage(cause));
+      if (cause instanceof ApiError && cause.status === 503) setMaintenance(true);
+      return false;
+    } finally {
+      if (generation === assignmentGeneration.current) setAssignmentLoading(false);
+    }
+  }, [id]);
+
   useEffect(() => {
     const generation = ++requestGeneration.current;
     setPlan(null);
@@ -147,11 +223,29 @@ export default function ChapterPlanningPage() {
     setErrorHint("");
     setMaintenance(false);
     setConflict(false);
+    setAssignmentConflict(false);
+    setAssignmentResponse(null);
+    setAssignmentLoading(false);
+    setAssignmentError("");
+    setAssignmentRefreshRequired(false);
+    setAssignmentSearchRefreshToken(0);
+    setPendingStorageIssue(null);
+    assignmentGeneration.current += 1;
     setRefreshRequired(false);
     setBusy(false);
+    setAssignmentFocusTarget(null);
     setMobileDetail(!!searchParams.get("target"));
     void loadPlan(true, generation);
   }, [id, user?.id]);
+
+  useEffect(() => {
+    if (!id || loadState !== "ready" || !plan) return;
+    const controller = new AbortController();
+    const generation = ++assignmentGeneration.current;
+    setAssignmentResponse(null);
+    void loadAssignmentScope(selection, generation, controller.signal);
+    return () => controller.abort();
+  }, [id, loadState, plan?.structure_version, selection.kind, selection.id]);
 
   useEffect(() => {
     if (!mobileDetail) return;
@@ -175,11 +269,36 @@ export default function ChapterPlanningPage() {
   }, [focusTarget, plan, mobileDetail]);
 
   useEffect(() => { if (conflict && error) conflictRef.current?.focus(); }, [conflict, error]);
+  useEffect(() => { if (assignmentConflict) assignmentConflictRef.current?.focus(); }, [assignmentConflict]);
+
+  useEffect(() => {
+    if (!assignmentFocusTarget || !assignmentResponse) return;
+    const currentScope = selectionScope(selectionRef.current, id ?? "");
+    if (assignmentFocusTarget.scopeIdentity !== scopeIdentity(currentScope.scopeType, currentScope.scopeTargetId)) {
+      setAssignmentFocusTarget(null);
+      return;
+    }
+    window.setTimeout(() => {
+      const card = document.querySelector<HTMLElement>(`.planning-assignment-card[data-element-id="${CSS.escape(assignmentFocusTarget.elementId)}"] h5`);
+      (card ?? document.querySelector<HTMLElement>(".planning-assignments h3"))?.focus();
+      setAssignmentFocusTarget(null);
+    }, 0);
+  }, [assignmentFocusTarget, assignmentResponse, id]);
 
   useEffect(() => {
     if (!id || !user || loadState !== "ready") return;
-    const stored = loadPendingPlanningOperation(user.id, id);
-    if (!stored) { setPending(null); return; }
+    const loaded = loadPendingPlanningOperation(user.id, id);
+    if (loaded.status === "missing") { setPending(null); setPendingStorageIssue(null); return; }
+    if (loaded.status === "corrupt" || loaded.status === "unavailable") {
+      setPending(null);
+      setPendingStorageIssue(loaded.status);
+      setError(loaded.status === "corrupt"
+        ? "检测到损坏或不受支持的规划恢复记录，已安全停止全部规划写入。"
+        : "浏览器会话存储当前不可用，无法保证写入可恢复；已安全停止全部规划写入。");
+      return;
+    }
+    const stored = loaded.operation;
+    setPendingStorageIssue(null);
     if (stored.user_id !== user.id || stored.project_id !== id) { setPending(null); return; }
     if ((stored.payload as { operation_key?: unknown }).operation_key !== stored.operation_key) {
       clearPendingPlanningOperation(user.id, id);
@@ -190,17 +309,26 @@ export default function ChapterPlanningPage() {
     const generation = requestGeneration.current;
     setPending(stored);
     void api.getPlanningOperation(id, stored.operation_key)
-      .then(async () => {
+      .then(async (receipt) => {
         if (generation !== requestGeneration.current) return;
+        if (!receiptMatchesPending(receipt, stored, id)) {
+          setPending(null);
+          setPendingStorageIssue("corrupt");
+          setError("服务器返回的操作收据与本地恢复记录不一致，已安全停止全部规划写入。");
+          return;
+        }
         clearPendingPlanningOperation(user.id, id);
         setPending(null);
-        const refreshed = await loadPlan(false, generation);
+        const refreshed = stored.action.startsWith("assignment_")
+          ? await refreshConfirmedAssignmentOperation(stored, generation)
+          : await loadPlan(false, generation);
         if (generation !== requestGeneration.current) return;
         if (refreshed) {
-          setNotice("已找回上次操作结果，并重新载入最新规划。");
+          setNotice("已找回上次操作结果，并重新载入最新规划与分配。");
         } else {
-          setRefreshRequired(true);
-          setError("操作结果已确认，但最新规划尚未读取；已暂停新的写入。");
+          if (stored.action.startsWith("assignment_")) setAssignmentRefreshRequired(true);
+          else setRefreshRequired(true);
+          setError("操作结果已确认，但权威数据尚未完整读取；已暂停新的写入。");
         }
       })
       .catch((cause) => {
@@ -214,6 +342,13 @@ export default function ChapterPlanningPage() {
   function selectScope(next: PlanningSelection) {
     setSearchParams(next.kind === "novel" ? {} : { scope: next.kind, target: next.id });
     setMobileDetail(true);
+  }
+
+  function navigateToAssignmentScope(scope: PlanningScopeSnapshot) {
+    const next: PlanningSelection = scope.scope_type === "novel"
+      ? { kind: "novel", id: id ?? scope.scope_target_id }
+      : { kind: scope.scope_type, id: scope.scope_target_id };
+    selectScope(next);
   }
 
   function returnToMobileStructure() {
@@ -246,6 +381,77 @@ export default function ChapterPlanningPage() {
       setError(errorMessage(cause));
     } finally {
       if (generation === requestGeneration.current) setBusy(false);
+    }
+  }
+
+  async function refreshPlanningAndAssignmentScope(
+    scopeType: PlanningScopeType,
+    scopeTargetId: string,
+    generation = requestGeneration.current
+  ): Promise<boolean> {
+    if (!id) return false;
+    const projectId = id;
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const [latestPlan, latestAssignments] = await Promise.all([
+          api.getPlanning(projectId),
+          api.getPlanningLoreAssignments(projectId, scopeType, scopeTargetId),
+        ]);
+        if (generation !== requestGeneration.current) return false;
+        if (latestPlan.assignment_version !== latestAssignments.assignment_version) continue;
+        const currentScope = selectionScope(selectionRef.current, projectId);
+        let currentAssignments = latestAssignments;
+        if (scopeIdentity(currentScope.scopeType, currentScope.scopeTargetId) !== scopeIdentity(scopeType, scopeTargetId)) {
+          currentAssignments = await api.getPlanningLoreAssignments(projectId, currentScope.scopeType, currentScope.scopeTargetId);
+          if (generation !== requestGeneration.current) return false;
+          const selectedAfterRead = selectionScope(selectionRef.current, projectId);
+          if (scopeIdentity(selectedAfterRead.scopeType, selectedAfterRead.scopeTargetId)
+            !== scopeIdentity(currentScope.scopeType, currentScope.scopeTargetId)) continue;
+          if (latestPlan.assignment_version !== currentAssignments.assignment_version) continue;
+        }
+        setPlan(latestPlan);
+        setLoadState("ready");
+        setMaintenance(false);
+        setAssignmentRefreshRequired(false);
+        assignmentGeneration.current += 1;
+        setAssignmentResponse(currentAssignments);
+        setAssignmentError("");
+        setAssignmentLoading(false);
+        return true;
+      }
+      setAssignmentError("规划版本与设定分配版本尚未同步，请重新读取。");
+      return false;
+    } catch (cause) {
+      if (generation !== requestGeneration.current) return false;
+      setAssignmentError(errorMessage(cause));
+      if (cause instanceof ApiError && cause.status === 503) setMaintenance(true);
+      return false;
+    }
+  }
+
+  async function refreshConfirmedAssignmentOperation(
+    operation: PendingPlanningOperation,
+    generation = requestGeneration.current
+  ): Promise<boolean> {
+    const payload = operation.payload as Record<string, unknown>;
+    const scopeType = payload.scope_type as PlanningScopeType;
+    const scopeTargetId = payload.scope_target_id as string;
+    return refreshPlanningAndAssignmentScope(scopeType, scopeTargetId, generation);
+  }
+
+  async function reloadPlanningAndCurrentAssignments(): Promise<void> {
+    if (!id) return;
+    const scope = selectionScope(selectionRef.current, id);
+    const refreshed = await refreshPlanningAndAssignmentScope(scope.scopeType, scope.scopeTargetId);
+    if (refreshed) {
+      setRefreshRequired(false);
+      setAssignmentRefreshRequired(false);
+      setError("");
+      setAssignmentError("");
+      setNotice("已重新载入最新规划与设定分配。");
+    } else {
+      setAssignmentRefreshRequired(true);
+      setError("权威规划与设定分配尚未完整读取，继续保持禁写。");
     }
   }
 
@@ -282,14 +488,14 @@ export default function ChapterPlanningPage() {
   }
 
   async function execute<T extends object>(
-    action: string,
+    action: PlanningOperationAction,
     targetId: string | null,
     payload: T,
     request: (body: T) => Promise<unknown>,
     success: string,
     focusAfter?: string
   ) {
-    if (!id || !user || busy || pending || maintenance || refreshRequired || conflict) return;
+    if (!id || !user || planningWriteDisabled) return;
     const operation: PendingPlanningOperation<T> = {
       schema_version: 1,
       user_id: user.id,
@@ -302,6 +508,7 @@ export default function ChapterPlanningPage() {
     };
     const generation = requestGeneration.current;
     if (!savePendingPlanningOperation(operation)) {
+      setPendingStorageIssue("unavailable");
       setError("浏览器无法安全保存操作恢复信息，已停止写入。请检查会话存储设置。");
       return;
     }
@@ -343,6 +550,115 @@ export default function ChapterPlanningPage() {
     }
   }
 
+  async function handleAssignmentWriteError(
+    cause: unknown,
+    scopeType: PlanningScopeType,
+    scopeTargetId: string,
+    generation = requestGeneration.current
+  ) {
+    setAssignmentError(errorMessage(cause));
+    if (!(cause instanceof ApiError)) return;
+    if (cause.status === 503) {
+      setMaintenance(true);
+      return;
+    }
+    if (cause.recommendedAction === "open_source_scope") {
+      const source = cause.context.source_scope;
+      if (source && typeof source === "object") {
+        const typed = source as Partial<PlanningScopeSnapshot>;
+        if ((typed.scope_type === "novel" || typed.scope_type === "part" || typed.scope_type === "chapter")
+          && typeof typed.scope_target_id === "string" && typeof typed.title === "string"
+          && (typed.status === "active" || typed.status === "archived")) {
+          navigateToAssignmentScope(typed as PlanningScopeSnapshot);
+        }
+      }
+      return;
+    }
+    const shouldRefresh = cause.status === 409 || cause.recommendedAction === "refresh_assignments";
+    if (!shouldRefresh) return;
+    const refreshed = await refreshPlanningAndAssignmentScope(scopeType, scopeTargetId, generation);
+    if (generation !== requestGeneration.current) return;
+    if (!refreshed) {
+      setAssignmentRefreshRequired(true);
+      setAssignmentConflict(false);
+      setAssignmentError("分配状态发生变化，但权威规划与分配读取失败；已保持禁写。");
+      return;
+    }
+    const resolvedByRefresh = [
+      "PLANNING_ASSIGNMENT_EXISTS",
+      "PLANNING_ASSIGNMENT_REMOVED",
+      "PLANNING_ASSIGNMENT_ACTIVE",
+      "PLANNING_ASSIGNMENT_NOT_FOUND",
+    ].includes(cause.code ?? "");
+    const elementVersionConflict = cause.code === "PLANNING_ELEMENT_VERSION_CONFLICT"
+      || cause.recommendedAction === "review_lore_element";
+    setAssignmentConflict(!resolvedByRefresh);
+    if (resolvedByRefresh) {
+      setAssignmentError("");
+      setNotice(`${cause.detail} 已载入当前记录。`);
+    } else {
+      if (elementVersionConflict) setAssignmentSearchRefreshToken((value) => value + 1);
+      setAssignmentError(`${cause.detail} 已载入服务器最新分配，请核对后继续。`);
+    }
+  }
+
+  async function executeAssignment<T extends PlanningAssignmentCreateInput | PlanningAssignmentStateInput>(
+    action: "assignment_create" | "assignment_remove" | "assignment_restore",
+    targetId: string | null,
+    payload: T,
+    request: (body: T) => Promise<unknown>,
+    success: string,
+    focusElementId: string
+  ) {
+    if (!id || !user || planningWriteDisabled) return;
+    const operation: PendingPlanningOperation<T> = {
+      schema_version: 1,
+      user_id: user.id,
+      project_id: id,
+      operation_key: payload.operation_key,
+      action,
+      target_id: targetId,
+      payload,
+      created_at: new Date().toISOString(),
+    };
+    const generation = requestGeneration.current;
+    if (!savePendingPlanningOperation(operation)) {
+      setPendingStorageIssue("unavailable");
+      setAssignmentError("浏览器无法安全保存操作恢复信息，已停止全部规划写入。请检查会话存储设置。");
+      return;
+    }
+    setBusy(true);
+    setAssignmentError("");
+    try {
+      await request(payload);
+      clearPendingPlanningOperation(user.id, id);
+      if (generation !== requestGeneration.current) return;
+      setPending(null);
+      const refreshed = await refreshPlanningAndAssignmentScope(payload.scope_type, payload.scope_target_id, generation);
+      if (generation !== requestGeneration.current) return;
+      if (!refreshed) {
+        setAssignmentRefreshRequired(true);
+        setAssignmentError("操作已确认，但最新规划与分配尚未完整载入。请只刷新列表，不要重复提交。");
+        return;
+      }
+      setAssignmentFocusTarget({
+        elementId: focusElementId,
+        scopeIdentity: scopeIdentity(payload.scope_type, payload.scope_target_id),
+      });
+      setNotice(success);
+    } catch (cause) {
+      if (!shouldKeepPlanningOperation(cause)) {
+        clearPendingPlanningOperation(user.id, id);
+      } else if (generation === requestGeneration.current) {
+        setPending(operation as PendingPlanningOperation);
+      }
+      if (generation !== requestGeneration.current) return;
+      await handleAssignmentWriteError(cause, payload.scope_type, payload.scope_target_id, generation);
+    } finally {
+      if (generation === requestGeneration.current) setBusy(false);
+    }
+  }
+
   async function retryPending() {
     if (!id || !user || !pending || busy || refreshRequired) return;
     const payloadKey = (pending.payload as { operation_key?: unknown }).operation_key;
@@ -370,6 +686,9 @@ export default function ChapterPlanningPage() {
       chapter_archive: () => api.changePlanningChapterState(id, target!, "archive", p as unknown as PlanningNodeStateInput),
       chapter_restore: () => api.changePlanningChapterState(id, target!, "restore", p as unknown as PlanningNodeStateInput),
       structure_reorder: () => api.reorderPlanningStructure(id, p as unknown as PlanningReorderInput),
+      assignment_create: () => api.createPlanningLoreAssignment(id, p as unknown as PlanningAssignmentCreateInput),
+      assignment_remove: () => api.changePlanningLoreAssignmentState(id, target!, "remove", p as unknown as PlanningAssignmentStateInput),
+      assignment_restore: () => api.changePlanningLoreAssignmentState(id, target!, "restore", p as unknown as PlanningAssignmentStateInput),
     };
     const handler = handlers[action];
     if (!handler) return;
@@ -380,17 +699,29 @@ export default function ChapterPlanningPage() {
       clearPendingPlanningOperation(user.id, id);
       if (generation !== requestGeneration.current) return;
       setPending(null);
-      const refreshed = await loadPlan(false, generation);
+      const refreshed = action.startsWith("assignment_")
+        ? await refreshConfirmedAssignmentOperation(pending, generation)
+        : await loadPlan(false, generation);
       if (generation !== requestGeneration.current) return;
       if (!refreshed) {
-        setRefreshRequired(true);
-        setError("操作已确认，但最新规划暂时无法读取；已暂停新的写入。");
+        if (action.startsWith("assignment_")) setAssignmentRefreshRequired(true);
+        else setRefreshRequired(true);
+        setError("操作已确认，但权威数据尚未完整读取；已暂停新的写入。");
         return;
       }
       setNotice("上次未确认的操作已使用原操作编号安全完成。");
     } catch (cause) {
       if (generation !== requestGeneration.current) return;
-      await handleWriteError(cause, generation);
+      if (action.startsWith("assignment_")) {
+        await handleAssignmentWriteError(
+          cause,
+          p.scope_type as PlanningScopeType,
+          p.scope_target_id as string,
+          generation
+        );
+      } else {
+        await handleWriteError(cause, generation);
+      }
       if (generation !== requestGeneration.current) return;
       if (!shouldKeepPlanningOperation(cause)) {
         clearPendingPlanningOperation(user.id, id);
@@ -441,6 +772,52 @@ export default function ChapterPlanningPage() {
     reorder(parts, "章节已移动到目标篇章末尾。", chapter.id);
   }
 
+  function assignmentScopeLabel(): string {
+    if (!assignmentResponse) return "当前范围";
+    if (assignmentResponse.scope.scope_type === "novel") return "整部小说";
+    return `《${assignmentResponse.scope.title}》`;
+  }
+
+  function assignLoreElement(element: LoreElementListItem) {
+    if (!id || !assignmentResponse) return;
+    const body: PlanningAssignmentCreateInput = {
+      operation_key: createPlanningOperationKey("assignment_create"),
+      expected_assignment_version: assignmentResponse.assignment_version,
+      element_id: element.id,
+      expected_element_content_version: element.current_version,
+      scope_type: assignmentResponse.scope.scope_type,
+      scope_target_id: assignmentResponse.scope.scope_target_id,
+    };
+    void executeAssignment("assignment_create", element.id, body, (value) => api.createPlanningLoreAssignment(id, value), `《${element.name}》已加入${assignmentScopeLabel()}。`, element.id);
+  }
+
+  function changeLoreAssignment(assignment: PlanningAssignmentSnapshot, action: "remove" | "restore") {
+    if (!id || !assignmentResponse) return;
+    const body: PlanningAssignmentStateInput = {
+      operation_key: createPlanningOperationKey(`assignment_${action}`),
+      expected_assignment_version: assignmentResponse.assignment_version,
+      expected_lock_version: assignment.lock_version,
+      scope_type: assignmentResponse.scope.scope_type,
+      scope_target_id: assignmentResponse.scope.scope_target_id,
+    };
+    const success = action === "remove"
+      ? `《${assignment.element.name}》已从${assignmentScopeLabel()}移除；其他范围的直接分配未改变。`
+      : `《${assignment.element.name}》已恢复为${assignmentScopeLabel()}的直接设定。`;
+    void executeAssignment(`assignment_${action}`, assignment.id, body, (value) => api.changePlanningLoreAssignmentState(id, assignment.id, action, value), success, assignment.element_id);
+  }
+
+  function clearCorruptRecoveryRecord() {
+    if (!id || !user || pendingStorageIssue !== "corrupt") return;
+    if (!window.confirm("只清除这条损坏的浏览器会话恢复记录？不会删除任何小说、设定或服务器数据。")) return;
+    if (clearPendingPlanningOperation(user.id, id)) {
+      setPendingStorageIssue(null);
+      setError("");
+      setNotice("损坏的本地恢复记录已清除，可以重新开始操作。");
+    } else {
+      setError("浏览器会话存储仍不可用，无法清除损坏记录；继续保持禁写。");
+    }
+  }
+
   if (!id) return <div className="card empty-state" role="alert">项目地址无效。</div>;
 
   return (
@@ -452,7 +829,8 @@ export default function ChapterPlanningPage() {
       </header>
 
       <div className="planning-live" aria-live="polite">{notice}</div>
-      {error && <div className="planning-notice is-error" role="alert" tabIndex={-1} ref={conflictRef}><span>{error}{errorHint && <small className="planning-notice__hint">{errorHint}</small>}</span>{conflict ? <span className="planning-notice__actions"><button className="btn btn-secondary" onClick={() => { setServerSyncToken((value) => value + 1); setConflict(false); setError(""); setNotice("已载入服务器最新字段。"); }}>载入服务器最新值</button><button className="btn btn-secondary" onClick={() => { setConflict(false); setError(""); setNotice("旧草稿已保留；请与服务器最新值核对后再保存。"); }}>保留草稿并继续核对</button></span> : <button className="btn btn-secondary" onClick={() => loadPlan(false)}>刷新规划</button>}</div>}
+      {error && <div className="planning-notice is-error" role="alert" tabIndex={-1} ref={conflictRef}><span>{error}{errorHint && <small className="planning-notice__hint">{errorHint}</small>}</span>{conflict ? <span className="planning-notice__actions"><button className="btn btn-secondary" onClick={() => { setServerSyncToken((value) => value + 1); setConflict(false); setError(""); setNotice("已载入服务器最新字段。"); }}>载入服务器最新值</button><button className="btn btn-secondary" onClick={() => { setConflict(false); setError(""); setNotice("旧草稿已保留；请与服务器最新值核对后再保存。"); }}>保留草稿并继续核对</button></span> : pendingStorageIssue === "corrupt" ? <button className="btn btn-secondary" onClick={clearCorruptRecoveryRecord}>确认清除损坏恢复记录</button> : (refreshRequired || assignmentRefreshRequired) ? <button className="btn btn-secondary" onClick={() => void reloadPlanningAndCurrentAssignments()}>重新读取规划与设定</button> : <button className="btn btn-secondary" onClick={() => loadPlan(false)}>刷新规划</button>}</div>}
+      {assignmentConflict && <div ref={assignmentConflictRef} className="planning-notice is-error" role="alert" tabIndex={-1}><span>{assignmentError || "分配状态已更新，请核对服务器最新结果。"}</span><button className="btn btn-secondary" onClick={() => { setAssignmentConflict(false); setAssignmentError(""); setNotice("已核对服务器最新分配，可以继续操作。"); }}>已核对最新分配</button></div>}
       {maintenance && <div className="planning-notice" role="status">项目资料正在维护；已保留当前只读内容并暂停写入。</div>}
       {pending && (
         <div className="planning-notice" role="alert">
@@ -476,8 +854,8 @@ export default function ChapterPlanningPage() {
       {loadState === "ready" && plan && (
         <div className={`planning-workspace${mobileDetail ? " show-detail" : ""}`}>
           <aside className="card planning-workspace__tree">
-            <div className="planning-section-heading"><h2>篇章结构</h2><CreatePartForm plan={plan} busy={busy || !!pending || maintenance || conflict || refreshRequired} onCreate={(body) => execute("part_create", null, body, (value) => api.createPlanningPart(id, value), "篇章已创建。")} /></div>
-            <PlanningStructurePanel plan={plan} selected={selection} busy={busy || !!pending || maintenance || conflict || refreshRequired} onSelect={selectScope} onMovePart={movePart} onMoveChapter={moveChapter} />
+            <div className="planning-section-heading"><h2>篇章结构</h2><CreatePartForm plan={plan} busy={planningWriteDisabled} onCreate={(body) => execute("part_create", null, body, (value) => api.createPlanningPart(id, value), "篇章已创建。")} /></div>
+            <PlanningStructurePanel plan={plan} selected={selection} busy={planningWriteDisabled} onSelect={selectScope} onMovePart={movePart} onMoveChapter={moveChapter} />
           </aside>
           <main className="card planning-workspace__detail">
             <button className="btn btn-secondary planning-mobile-back" onClick={returnToMobileStructure}>← 返回结构</button>
@@ -486,7 +864,7 @@ export default function ChapterPlanningPage() {
               <PartDetail
                 plan={plan}
                 part={located.part}
-                busy={busy || !!pending || maintenance || conflict || refreshRequired}
+                busy={planningWriteDisabled}
                 serverSyncToken={serverSyncToken}
                 onUpdate={(body) => execute("part_update", located.part!.id, body, (value) => api.updatePlanningPart(id, located.part!.id, value), "篇章已保存。")}
                 onState={(action, body) => execute(`part_${action}`, located.part!.id, body, (value) => api.changePlanningPartState(id, located.part!.id, action, value), action === "archive" ? "篇章已归档。" : "篇章已恢复。", action === "archive" ? plan.project_id : located.part!.id)}
@@ -498,13 +876,33 @@ export default function ChapterPlanningPage() {
                 plan={plan}
                 part={located.part}
                 chapter={located.chapter}
-                busy={busy || !!pending || maintenance || conflict || refreshRequired}
+                busy={planningWriteDisabled}
                 serverSyncToken={serverSyncToken}
                 onUpdate={(body) => execute("chapter_update", located.chapter!.id, body, (value) => api.updatePlanningChapter(id, located.chapter!.id, value), "章节已保存。")}
                 onState={(action, body) => execute(`chapter_${action}`, located.chapter!.id, body, (value) => api.changePlanningChapterState(id, located.chapter!.id, action, value), action === "archive" ? "章节已归档。" : "章节已恢复。", action === "archive" ? located.part!.id : located.chapter!.id)}
                 onMove={(targetPartId) => moveChapterTo(located.chapter!, targetPartId)}
               />
             )}
+            <PlanningLoreAssignments
+              projectId={id}
+              response={assignmentResponse}
+              loading={assignmentLoading}
+              error={assignmentConflict ? "" : assignmentError}
+              writeDisabled={assignmentWriteDisabled}
+              searchRefreshToken={assignmentSearchRefreshToken}
+              onReload={() => {
+                if (maintenance || refreshRequired || assignmentRefreshRequired) {
+                  void reloadPlanningAndCurrentAssignments();
+                  return;
+                }
+                const generation = ++assignmentGeneration.current;
+                void loadAssignmentScope(selectionRef.current, generation);
+              }}
+              onNavigateScope={navigateToAssignmentScope}
+              onAssign={assignLoreElement}
+              onRemove={(assignment) => changeLoreAssignment(assignment, "remove")}
+              onRestore={(assignment) => changeLoreAssignment(assignment, "restore")}
+            />
           </main>
         </div>
       )}
@@ -536,7 +934,7 @@ function NovelDetail({ plan }: { plan: NovelPlan }) {
         <div><strong>{activeParts.length}</strong><span>活动篇章</span></div>
         <div><strong>{activeChapters.length}</strong><span>活动章节</span></div>
       </div>
-      <p>选择左侧篇章或章节进行编辑和排序。设定分配将在下一连续交付中接入。</p>
+      <p>选择左侧篇章或章节进行编辑和排序；下方可以管理整部小说直接使用的设定。</p>
     </section>
   );
 }

@@ -68,6 +68,12 @@ import type {
 } from "@/types/lore";
 import type {
   NovelPlan,
+  PlanningAssignmentCreateInput,
+  PlanningAssignmentHistoryResponse,
+  PlanningAssignmentMutationReceipt,
+  PlanningAssignmentScopeResponse,
+  PlanningAssignmentStateInput,
+  PlanningScopeType,
   PlanningChapterCreateInput,
   PlanningChapterUpdateInput,
   PlanningMutationReceipt,
@@ -660,6 +666,42 @@ export const api = {
       `/projects/${encodeURIComponent(projectId)}/planning/structure/reorder`,
       { method: "POST", body: JSON.stringify(data) }
     ),
+  getPlanningLoreAssignments: (
+    projectId: string,
+    scopeType: PlanningScopeType,
+    scopeTargetId: string,
+    signal?: AbortSignal
+  ) => fetchJSON<PlanningAssignmentScopeResponse>(
+    withQuery(`/projects/${encodeURIComponent(projectId)}/planning/lore-assignments`, {
+      scope_type: scopeType,
+      scope_target_id: scopeTargetId,
+    }),
+    { signal }
+  ),
+  createPlanningLoreAssignment: (projectId: string, data: PlanningAssignmentCreateInput) =>
+    fetchJSON<PlanningAssignmentMutationReceipt>(
+      `/projects/${encodeURIComponent(projectId)}/planning/lore-assignments`,
+      { method: "POST", body: JSON.stringify(data) }
+    ),
+  changePlanningLoreAssignmentState: (
+    projectId: string,
+    assignmentId: string,
+    action: "remove" | "restore",
+    data: PlanningAssignmentStateInput
+  ) => fetchJSON<PlanningAssignmentMutationReceipt>(
+    `/projects/${encodeURIComponent(projectId)}/planning/lore-assignments/${encodeURIComponent(assignmentId)}/${action}`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
+  getPlanningLoreAssignmentHistory: (
+    projectId: string,
+    elementId: string,
+    signal?: AbortSignal
+  ) => fetchJSON<PlanningAssignmentHistoryResponse>(
+    withQuery(`/projects/${encodeURIComponent(projectId)}/planning/lore-assignments/history`, {
+      element_id: elementId,
+    }),
+    { signal }
+  ),
 
   // Chapters
   listChapters: (projectId: string) =>

@@ -1298,6 +1298,198 @@ input, select, textarea { font-family: inherit; }
   margin-bottom: 1rem;
 }
 
+/* DEV-017A4b：当前规划范围的设定分配 */
+.planning-assignments {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1.25rem;
+  min-width: 0;
+}
+
+.planning-assignment-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.planning-assignment-heading h3,
+.planning-assignment-heading h4,
+.planning-assignment-heading p,
+.planning-assignment-section h4,
+.planning-assignment-card h5,
+.planning-assignment-card p {
+  margin: 0;
+}
+
+.planning-assignment-heading p,
+.planning-assignment-empty,
+.planning-assignment-card > p,
+.planning-assignment-search-results p,
+.planning-assignment-search-results small {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.planning-assignment-counts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.planning-assignment-counts span,
+.planning-assignment-sources span {
+  padding: 0.5rem 0.625rem;
+  border-radius: var(--r-md);
+  background: var(--bg-soft);
+  color: var(--text-2);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.planning-assignment-error,
+.planning-assignment-warning,
+.planning-assignment-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--gold-border);
+  border-radius: var(--r-md);
+  background: var(--gold-light);
+}
+
+.planning-assignment-error {
+  border-color: var(--danger-border, #e6b5b5);
+  background: var(--danger-light, #fff0f0);
+}
+
+.planning-assignment-section,
+.planning-assignment-list,
+.planning-assignment-card,
+.planning-assignment-search,
+.planning-assignment-search-results,
+.planning-assignment-history {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.planning-assignment-section {
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.planning-assignment-card,
+.planning-assignment-search {
+  padding: 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--white);
+}
+
+.planning-assignment-card header,
+.planning-assignment-search-results article {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.planning-assignment-card header > div,
+.planning-assignment-search-results article > div {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.planning-assignment-card h5,
+.planning-assignment-card header span,
+.planning-assignment-card header strong,
+.planning-assignment-search-results strong,
+.planning-assignment-search-results span,
+.planning-assignment-history strong,
+.planning-assignment-history span,
+.planning-assignment-history li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.planning-assignment-card header span,
+.planning-assignment-card header strong,
+.planning-assignment-search-results span {
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.planning-assignment-sources,
+.planning-assignment-actions,
+.planning-assignment-confirm > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.planning-assignment-reasons {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--text-2);
+}
+
+.planning-assignment-confirm {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.planning-assignment-confirm p {
+  color: var(--text-2);
+}
+
+.planning-assignment-search form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.5rem;
+}
+
+.planning-assignment-search label {
+  display: grid;
+  gap: 0.375rem;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.planning-assignment-search input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  font: inherit;
+}
+
+.planning-assignment-search-results article,
+.planning-assignment-history article {
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.planning-assignment-history {
+  padding: 0.75rem;
+  border-radius: var(--r-md);
+  background: var(--bg-soft);
+}
+
+.planning-assignment-history ol {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+  color: var(--text-2);
+}
+
 @media (max-width: 640px) {
   .project-planning-link {
     margin-left: 0;
@@ -1336,6 +1528,30 @@ input, select, textarea { font-family: inherit; }
   .planning-page select {
     font-size: 16px;
   }
+
+  .planning-assignment-heading,
+  .planning-assignment-card header,
+  .planning-assignment-search-results article,
+  .planning-assignment-error {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .planning-assignment-counts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .planning-assignment-actions,
+  .planning-assignment-confirm > div {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .planning-assignment-actions .btn,
+  .planning-assignment-confirm .btn,
+  .planning-assignment-search-results .btn {
+    width: 100%;
+  }
 }
 
 @media (max-width: 390px) {
@@ -1351,6 +1567,10 @@ input, select, textarea { font-family: inherit; }
 
   .planning-tree__chapters {
     margin-left: 0.5rem !important;
+  }
+
+  .planning-assignment-search form {
+    grid-template-columns: 1fr;
   }
 }
 

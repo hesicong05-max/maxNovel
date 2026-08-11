@@ -397,6 +397,49 @@ describe("API - relational planning", () => {
       expect.any(Object)
     );
   });
+
+  it("encodes scoped lore assignment reads, writes, state changes, and history", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(JSON.stringify({ receipt_kind: "assignment", assignments: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const create = {
+      operation_key: "planning:assignment_create:12345678",
+      expected_assignment_version: 2,
+      element_id: "element/one",
+      expected_element_content_version: 4,
+      scope_type: "part" as const,
+      scope_target_id: "part/one",
+    };
+    const change = {
+      operation_key: "planning:assignment_remove:12345678",
+      expected_assignment_version: 3,
+      expected_lock_version: 1,
+      scope_type: "part" as const,
+      scope_target_id: "part/one",
+    };
+    await api.getPlanningLoreAssignments("project/one", "part", "part/one");
+    await api.createPlanningLoreAssignment("project/one", create);
+    await api.changePlanningLoreAssignmentState("project/one", "assignment/one", "remove", change);
+    await api.getPlanningLoreAssignmentHistory("project/one", "element/one");
+
+    expect(fetchSpy.mock.calls[0][0]).toBe(
+      "/api/projects/project%2Fone/planning/lore-assignments?scope_type=part&scope_target_id=part%2Fone"
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(2,
+      "/api/projects/project%2Fone/planning/lore-assignments",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(create) })
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(3,
+      "/api/projects/project%2Fone/planning/lore-assignments/assignment%2Fone/remove",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(change) })
+    );
+    expect(fetchSpy.mock.calls[3][0]).toBe(
+      "/api/projects/project%2Fone/planning/lore-assignments/history?element_id=element%2Fone"
+    );
+  });
 });
 
 describe("API - lore repository", () => {
