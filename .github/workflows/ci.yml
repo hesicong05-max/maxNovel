@@ -126,6 +126,7 @@ jobs:
           tests/test_planning_models.py
           tests/test_planning_writes.py
           tests/test_planning_assignments.py
+          tests/test_generation_preflight.py
           -v --tb=short
 
   docker-build:

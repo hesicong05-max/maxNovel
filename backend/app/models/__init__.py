@@ -49,3 +49,4 @@ from app.models.planning import (  # noqa: F401
     PlanningMutationOperation,
     PlanningPart,
 )
+from app.models.generation import ChapterGenerationRun  # noqa: F401
