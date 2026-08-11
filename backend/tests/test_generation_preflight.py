@@ -1182,9 +1182,12 @@ async def test_postgres_concurrent_same_prepare_key_returns_one_durable_run(
         scope_type="novel",
         scope_target_id=project_id,
     )
-    first, second = await asyncio.gather(
-        _prepare(client, auth_headers, project_id, chapter_id),
-        _prepare(client, auth_headers, project_id, chapter_id),
+    first, second = await asyncio.wait_for(
+        asyncio.gather(
+            _prepare(client, auth_headers, project_id, chapter_id),
+            _prepare(client, auth_headers, project_id, chapter_id),
+        ),
+        timeout=20,
     )
     assert first.status_code == second.status_code == 200
     assert sorted([first.json()["replayed"], second.json()["replayed"]]) == [False, True]
@@ -1332,27 +1335,30 @@ async def test_postgres_prepare_and_assignment_race_is_old_snapshot_or_conflict(
         scope_type="novel",
         scope_target_id=project_id,
     )
-    prepare, assignment = await asyncio.gather(
-        _prepare(
-            client,
-            auth_headers,
-            project_id,
-            chapter_id,
-            operation_key="generation-race-assignment",
-            assignment_version=2,
+    prepare, assignment = await asyncio.wait_for(
+        asyncio.gather(
+            _prepare(
+                client,
+                auth_headers,
+                project_id,
+                chapter_id,
+                operation_key="generation-race-assignment",
+                assignment_version=2,
+            ),
+            client.post(
+                f"/api/projects/{project_id}/planning/lore-assignments",
+                headers=auth_headers,
+                json={
+                    "operation_key": "generation-race-assignment-write",
+                    "expected_assignment_version": 2,
+                    "element_id": second["id"],
+                    "expected_element_content_version": second["content_version"],
+                    "scope_type": "chapter",
+                    "scope_target_id": chapter_id,
+                },
+            ),
         ),
-        client.post(
-            f"/api/projects/{project_id}/planning/lore-assignments",
-            headers=auth_headers,
-            json={
-                "operation_key": "generation-race-assignment-write",
-                "expected_assignment_version": 2,
-                "element_id": second["id"],
-                "expected_element_content_version": second["content_version"],
-                "scope_type": "chapter",
-                "scope_target_id": chapter_id,
-            },
-        ),
+        timeout=20,
     )
     assert assignment.status_code == 200, assignment.text
     if prepare.status_code == 200:
@@ -1386,25 +1392,28 @@ async def test_postgres_prepare_and_lore_edit_never_mix_versions(
         scope_type="novel",
         scope_target_id=project_id,
     )
-    prepare, edit = await asyncio.gather(
-        _prepare(
-            client,
-            auth_headers,
-            project_id,
-            chapter_id,
-            operation_key="generation-race-lore-edit",
+    prepare, edit = await asyncio.wait_for(
+        asyncio.gather(
+            _prepare(
+                client,
+                auth_headers,
+                project_id,
+                chapter_id,
+                operation_key="generation-race-lore-edit",
+            ),
+            client.patch(
+                f"/api/projects/{project_id}/lore/elements/{element['id']}",
+                headers=auth_headers,
+                json={
+                    "expected_version": 1,
+                    "name": "沈星",
+                    "summary": "沈星的第二版摘要",
+                    "payload": {"identity": "沈星"},
+                    "field_states": {},
+                },
+            ),
         ),
-        client.patch(
-            f"/api/projects/{project_id}/lore/elements/{element['id']}",
-            headers=auth_headers,
-            json={
-                "expected_version": 1,
-                "name": "沈星",
-                "summary": "沈星的第二版摘要",
-                "payload": {"identity": "沈星"},
-                "field_states": {},
-            },
-        ),
+        timeout=20,
     )
     assert edit.status_code == 200, edit.text
     assert prepare.status_code == 200, prepare.text
@@ -1455,26 +1464,29 @@ async def test_postgres_prepare_and_relation_edit_never_mix_versions(
         },
     )
     assert relation.status_code == 201, relation.text
-    prepare, edit = await asyncio.gather(
-        _prepare(
-            client,
-            auth_headers,
-            project_id,
-            chapter_id,
-            operation_key="generation-race-relation-edit",
-            assignment_version=3,
+    prepare, edit = await asyncio.wait_for(
+        asyncio.gather(
+            _prepare(
+                client,
+                auth_headers,
+                project_id,
+                chapter_id,
+                operation_key="generation-race-relation-edit",
+                assignment_version=3,
+            ),
+            client.patch(
+                f"/api/projects/{project_id}/lore/relations/{relation.json()['id']}",
+                headers=auth_headers,
+                json={
+                    "expected_version": relation.json()["lock_version"],
+                    "forward_label": "并肩",
+                    "reverse_label": "并肩",
+                    "description": "新关系摘要",
+                    "metadata": {"chapter": 1},
+                },
+            ),
         ),
-        client.patch(
-            f"/api/projects/{project_id}/lore/relations/{relation.json()['id']}",
-            headers=auth_headers,
-            json={
-                "expected_version": relation.json()["lock_version"],
-                "forward_label": "并肩",
-                "reverse_label": "并肩",
-                "description": "新关系摘要",
-                "metadata": {"chapter": 1},
-            },
-        ),
+        timeout=20,
     )
     assert edit.status_code == 200, edit.text
     assert prepare.status_code == 200, prepare.text

@@ -218,8 +218,12 @@ async def _load_locked_scope(
     expected_assignment_version: int,
     expected_chapter_lock_version: int,
 ) -> tuple[NovelPlan, PlanningPart, PlanningChapter]:
+    # Keep the project identity stable without conflicting with the key-share lock
+    # PostgreSQL takes when Lore rows reference their parent project.
     project = await db.scalar(
-        select(Project).where(Project.id == project_id).with_for_update()
+        select(Project)
+        .where(Project.id == project_id)
+        .with_for_update(read=True, key_share=True)
     )
     if project is None:
         raise GenerationPreparationError(
