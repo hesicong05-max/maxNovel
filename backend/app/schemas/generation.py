@@ -226,3 +226,122 @@ class GenerationRunResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(extra="forbid")
+
+
+class GenerationAttemptExecuteCommand(BaseModel):
+    operation_key: str = Field(
+        min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"
+    )
+    expected_context_checksum: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    expected_capability_checksum: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    confirm_model_call: Literal[True]
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class GenerationAttemptError(BaseModel):
+    code: str = Field(min_length=1, max_length=80)
+    message: str
+    retryable: Literal[False]
+    recommended_action: Literal[
+        "inspect_failure", "keep_unknown_result", "start_new_confirmed_attempt"
+    ]
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class GenerationCapabilitySnapshot(BaseModel):
+    schema_version: Literal[1]
+    provider_name: str = Field(min_length=1, max_length=80)
+    model_name: str = Field(min_length=1, max_length=200)
+    max_output_tokens: int = Field(ge=1, le=1_000_000)
+    input_limit_availability: Literal["unavailable"]
+    max_input_tokens: None = None
+    price_availability: Literal["unavailable"]
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class GenerationCapabilityResponse(GenerationCapabilitySnapshot):
+    capability_checksum: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+
+
+class GenerationAttemptUsage(BaseModel):
+    status: Literal["reported", "unavailable", "unknown"]
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_shape(self):
+        values = (self.input_tokens, self.output_tokens, self.total_tokens)
+        if self.status == "reported":
+            if any(value is None for value in values):
+                raise ValueError("供应商已报告用量时 token 字段必须完整")
+            if self.total_tokens != self.input_tokens + self.output_tokens:
+                raise ValueError("token 总量与输入输出之和不一致")
+        elif any(value is not None for value in values):
+            raise ValueError("未报告或未知用量不能伪造 token 数")
+        return self
+
+
+class GenerationAttemptResponse(BaseModel):
+    id: str = Field(min_length=32, max_length=32)
+    project_id: str = Field(min_length=32, max_length=32)
+    run_id: str = Field(min_length=32, max_length=32)
+    planning_chapter_id: str = Field(min_length=32, max_length=32)
+    operation_key: str
+    replayed: bool
+    status: Literal[
+        "reserved", "calling", "succeeded", "failed", "outcome_unknown"
+    ]
+    execution_mode: Literal["single_call"]
+    billing_confirmed: Literal[True]
+    ai_invoked: bool
+    billing_effect: Literal["none", "possible"]
+    capability: GenerationCapabilityResponse
+    model_name: str
+    prompt_schema_version: int = Field(ge=1)
+    prompt_checksum: str = Field(min_length=64, max_length=64)
+    context_checksum: str = Field(min_length=64, max_length=64)
+    lock_version: int = Field(ge=1)
+    usage: GenerationAttemptUsage
+    candidate_id: str | None = Field(default=None, min_length=32, max_length=32)
+    error: GenerationAttemptError | None = None
+    claimed_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class GenerationCandidateResponse(BaseModel):
+    id: str = Field(min_length=32, max_length=32)
+    project_id: str = Field(min_length=32, max_length=32)
+    run_id: str = Field(min_length=32, max_length=32)
+    planning_chapter_id: str = Field(min_length=32, max_length=32)
+    source_attempt_id: str | None = Field(default=None, min_length=32, max_length=32)
+    parent_candidate_id: str | None = Field(
+        default=None, min_length=32, max_length=32
+    )
+    version_no: int = Field(ge=1)
+    origin_kind: Literal["generated", "manual_edit"]
+    title: str
+    content: str
+    content_format: Literal["plain_text"]
+    content_checksum: str = Field(min_length=64, max_length=64)
+    content_size_bytes: int = Field(ge=1, le=262_144)
+    word_count: int = Field(ge=1)
+    created_by: str = Field(min_length=32, max_length=32)
+    created_at: datetime
+
+    model_config = ConfigDict(extra="forbid")

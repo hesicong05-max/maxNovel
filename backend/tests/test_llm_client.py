@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from app.core.llm_client import (
+    LLMFrozenSingleCallConfig,
     LLMClient,
     LLMResponseTruncatedError,
     LLMSingleCallError,
@@ -409,6 +410,103 @@ class TestLLMClientChat:
 
 
 class TestLLMClientChatOnce:
+    @pytest.mark.asyncio
+    async def test_frozen_chat_once_never_uses_mock_without_key(self):
+        client = LLMClient()
+        config = LLMFrozenSingleCallConfig(
+            api_key="",
+            base_url="https://frozen.example.test/v1",
+            model="frozen-model",
+            max_tokens=2048,
+            temperature=0.8,
+        )
+        with pytest.raises(LLMSingleCallError) as caught:
+            await client.chat_once_frozen(
+                [{"role": "user", "content": "Hi"}], config=config
+            )
+        assert caught.value.code == "LLM_NOT_CONFIGURED"
+
+    @pytest.mark.asyncio
+    async def test_frozen_chat_once_timeout_is_unknown_and_never_retries(self):
+        client = LLMClient()
+        mock_http_client = AsyncMock()
+        mock_http_client.post = AsyncMock(
+            side_effect=httpx.TimeoutException("timeout")
+        )
+        mock_http_client.is_closed = False
+        client._client = mock_http_client
+        config = LLMFrozenSingleCallConfig(
+            api_key="sk-frozen-secret",
+            base_url="https://frozen.example.test/v1",
+            model="frozen-model",
+            max_tokens=2048,
+            temperature=0.8,
+        )
+
+        with pytest.raises(LLMSingleCallError) as caught:
+            await client.chat_once_frozen(
+                [{"role": "user", "content": "Hi"}], config=config
+            )
+
+        assert caught.value.code == "LLM_OUTCOME_UNKNOWN"
+        assert caught.value.outcome_unknown is True
+        assert mock_http_client.post.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_frozen_chat_once_never_reloads_or_mixes_new_settings(self):
+        client = LLMClient()
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"content": "frozen response"},
+                }
+            ]
+        }
+        mock_http_client = AsyncMock()
+        mock_http_client.post = AsyncMock(return_value=response)
+        mock_http_client.is_closed = False
+        client._client = mock_http_client
+        frozen = LLMFrozenSingleCallConfig(
+            api_key="sk-frozen-secret",
+            base_url="https://frozen.example.test/tenant/v1",
+            model="frozen-model",
+            max_tokens=2345,
+            temperature=0.45,
+        )
+        assert "sk-frozen-secret" not in repr(frozen)
+        assert "frozen.example.test" not in repr(frozen)
+
+        with patch("app.core.llm_client.load_settings") as mock_load:
+            mock_load.return_value = {
+                "api_key": "sk-new-secret",
+                "base_url": "https://new.example.test/v1",
+                "model": "new-model",
+                "max_tokens": 9999,
+                "temperature": 1.5,
+            }
+            result = await client.chat_once_frozen(
+                [{"role": "user", "content": "Hi"}], config=frozen
+            )
+
+        assert result == "frozen response"
+        mock_load.assert_not_called()
+        mock_http_client.post.assert_awaited_once_with(
+            "https://frozen.example.test/tenant/v1/chat/completions",
+            headers={
+                "Authorization": "Bearer sk-frozen-secret",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "frozen-model",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "temperature": 0.45,
+                "max_tokens": 2345,
+            },
+        )
+
     @pytest.mark.asyncio
     async def test_chat_once_never_uses_mock_without_key(self):
         client = LLMClient()

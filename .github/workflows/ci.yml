@@ -127,6 +127,7 @@ jobs:
           tests/test_planning_writes.py
           tests/test_planning_assignments.py
           tests/test_generation_preflight.py
+          tests/test_generation_execution.py
           tests/test_foreshadow_lifecycle.py
           -v --tb=short
 
