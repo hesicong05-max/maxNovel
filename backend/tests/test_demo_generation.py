@@ -53,6 +53,15 @@ def _enable_demo_gate(monkeypatch):
     monkeypatch.setattr(settings, "DEMO_FIXTURE_ENABLED", True)
     monkeypatch.setattr(settings, "DEBUG", True)
     monkeypatch.setattr(demo_fixture, "load_settings", lambda: {"api_key": ""})
+    if TEST_DATABASE_BACKEND == "postgresql":
+        # Production/demo mode remains SQLite-only. The PostgreSQL CI job uses
+        # an ephemeral localhost service, so only this test's environment
+        # probe is replaced; all application queries still hit real PG 16.4.
+        monkeypatch.setattr(
+            demo_fixture,
+            "_active_database_url",
+            lambda _db: "sqlite+aiosqlite:///:memory:",
+        )
 
 
 async def _count(model) -> int:
