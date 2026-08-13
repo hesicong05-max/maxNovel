@@ -151,6 +151,59 @@ describe("planning operation recovery", () => {
     }
   });
 
+  it("recognizes generation v3 as foreign and refuses to overwrite shared work", () => {
+    const key = "novel_pending_planning_operation_v1:u:p";
+    const generation = {
+      schema_version: 3,
+      workspace: "generation_execution",
+      operation_key: "generation:execute:12345678",
+    };
+    sessionStorage.setItem(key, JSON.stringify(generation));
+    expect(loadPendingPlanningOperation("u", "p")).toEqual({
+      status: "foreign",
+      workspace: "generation_execution",
+    });
+    const operation = {
+      schema_version: 1 as const,
+      user_id: "u",
+      project_id: "p",
+      operation_key: "planning:part_create:12345678",
+      action: "part_create" as const,
+      target_id: null,
+      payload: {
+        operation_key: "planning:part_create:12345678",
+        expected_structure_version: 1,
+        title: "第一篇",
+        description: "",
+      },
+      created_at: "2026-08-13T08:00:00Z",
+    };
+    expect(savePendingPlanningOperation(operation)).toBe(false);
+    expect(JSON.parse(sessionStorage.getItem(key)!)).toEqual(generation);
+
+    const foreshadow = {
+      schema_version: 2,
+      workspace: "foreshadow",
+      operation_key: "foreshadow:write:12345678",
+    };
+    sessionStorage.setItem(key, JSON.stringify(foreshadow));
+    expect(savePendingPlanningOperation(operation)).toBe(false);
+    expect(JSON.parse(sessionStorage.getItem(key)!)).toEqual(foreshadow);
+
+    sessionStorage.clear();
+    expect(savePendingPlanningOperation(operation)).toBe(true);
+    expect(savePendingPlanningOperation(operation)).toBe(true);
+    expect(savePendingPlanningOperation({
+      ...operation,
+      operation_key: "planning:part_create:other123",
+      payload: { ...operation.payload, operation_key: "planning:part_create:other123" },
+    })).toBe(false);
+    expect(loadPendingPlanningOperation("u", "p")).toEqual({
+      status: "available",
+      operation,
+    });
+  });
+
   it("distinguishes unavailable session storage from a missing operation", () => {
     vi.stubGlobal("sessionStorage", {
       getItem: () => { throw new DOMException("blocked", "SecurityError"); },

@@ -1124,3 +1124,47 @@ describe("API - durable foreshadow lifecycle", () => {
     expect(fetchSpy).toHaveBeenLastCalledWith("/api/projects/project%2Fone/planning/foreshadows/life%2Fcycle/facts/resource%2Fitem/retract", expect.objectContaining({ body: JSON.stringify(retractInput) }));
   });
 });
+
+describe("API - durable generation execution", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("uses four encoded routes and sends the exact confirmed execute body", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+    );
+    const project = "project/one";
+    const run = "run/one";
+    const candidate = "candidate/one";
+    const operationKey = "generation:key/one";
+    const input = {
+      operation_key: operationKey,
+      expected_context_checksum: "a".repeat(64),
+      expected_capability_checksum: "b".repeat(64),
+      confirm_model_call: true as const,
+    };
+
+    await api.getGenerationCapability(project);
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "/api/projects/project%2Fone/planning/generation-capabilities/current",
+      expect.any(Object)
+    );
+    await api.executeGenerationAttempt(project, run, input);
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "/api/projects/project%2Fone/planning/generation-runs/run%2Fone/attempts",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(input) })
+    );
+    await api.getGenerationAttemptByKey(project, operationKey);
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "/api/projects/project%2Fone/planning/generation-attempts/by-key/generation%3Akey%2Fone",
+      expect.any(Object)
+    );
+    await api.getGenerationCandidate(project, candidate);
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "/api/projects/project%2Fone/planning/generation-candidates/candidate%2Fone",
+      expect.any(Object)
+    );
+  });
+});

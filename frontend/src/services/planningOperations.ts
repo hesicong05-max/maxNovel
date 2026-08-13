@@ -29,7 +29,7 @@ export interface PendingPlanningOperation<T extends object = Record<string, unkn
 export type PendingPlanningOperationLoad =
   | { status: "missing" }
   | { status: "available"; operation: PendingPlanningOperation }
-  | { status: "foreign"; workspace: "foreshadow" }
+  | { status: "foreign"; workspace: "foreshadow" | "generation_execution" }
   | { status: "corrupt" }
   | { status: "unavailable" };
 
@@ -170,10 +170,11 @@ export function savePendingPlanningOperation<T extends object>(
   operation: PendingPlanningOperation<T>
 ): boolean {
   try {
-    sessionStorage.setItem(
-      pendingProjectOperationKey(operation.user_id, operation.project_id),
-      JSON.stringify(operation)
-    );
+    const key = pendingProjectOperationKey(operation.user_id, operation.project_id);
+    const serialized = JSON.stringify(operation);
+    const existing = sessionStorage.getItem(key);
+    if (existing !== null) return existing === serialized;
+    sessionStorage.setItem(key, serialized);
     return true;
   } catch {
     return false;
@@ -195,6 +196,9 @@ export function loadPendingPlanningOperation(
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     if (parsed.schema_version === 2 && parsed.workspace === "foreshadow") {
       return { status: "foreign", workspace: "foreshadow" };
+    }
+    if (parsed.schema_version === 3 && parsed.workspace === "generation_execution") {
+      return { status: "foreign", workspace: "generation_execution" };
     }
     const value = parsed as Partial<PendingPlanningOperation>;
     if (
