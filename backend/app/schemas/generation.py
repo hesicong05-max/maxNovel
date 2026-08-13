@@ -345,3 +345,169 @@ class GenerationCandidateResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(extra="forbid")
+
+
+class GenerationCandidateAuditIntegrity(BaseModel):
+    status: Literal["pass", "review"]
+    content_size_bytes: int = Field(ge=1, le=262_144)
+    word_count: int = Field(ge=1)
+    storage_limit_bytes: Literal[262_144]
+    storage_limit_reached: bool
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_limit_status(self):
+        reached = self.content_size_bytes == self.storage_limit_bytes
+        if self.storage_limit_reached != reached:
+            raise ValueError("候选存储边界状态不一致")
+        if self.status != ("review" if reached else "pass"):
+            raise ValueError("候选完整性状态与存储边界不一致")
+        return self
+
+
+class GenerationCandidateAuditTargetLength(BaseModel):
+    status: Literal["pass", "review", "not_applicable"]
+    actual_word_count: int = Field(ge=1)
+    target_word_count: int | None = Field(default=None, ge=500, le=10_000)
+    minimum_word_count: int | None = Field(default=None, ge=1)
+    maximum_word_count: int | None = Field(default=None, ge=1)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_target_shape(self):
+        if self.target_word_count is None:
+            if self.status != "not_applicable" or any(
+                value is not None
+                for value in (self.minimum_word_count, self.maximum_word_count)
+            ):
+                raise ValueError("无目标字数时不能生成字数结论")
+            return self
+        expected_minimum = max(1, self.target_word_count * 70 // 100)
+        expected_maximum = (self.target_word_count * 130 + 99) // 100
+        if (
+            self.minimum_word_count != expected_minimum
+            or self.maximum_word_count != expected_maximum
+        ):
+            raise ValueError("目标字数边界不一致")
+        expected_status = (
+            "pass"
+            if expected_minimum <= self.actual_word_count <= expected_maximum
+            else "review"
+        )
+        if self.status != expected_status:
+            raise ValueError("目标字数状态不一致")
+        return self
+
+
+class GenerationCandidateAuditPreparation(BaseModel):
+    status: Literal["pass", "review"]
+    warnings: list[GenerationContextWarning]
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_warning_status(self):
+        if self.status != ("review" if self.warnings else "pass"):
+            raise ValueError("准备提示状态不一致")
+        return self
+
+
+class GenerationCandidateAuditTermEvidence(BaseModel):
+    term: str = Field(min_length=1, max_length=80)
+    excerpt: str = Field(min_length=1, max_length=208)
+    start_offset: int = Field(ge=0)
+    end_offset: int = Field(gt=0)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_offsets(self):
+        if self.end_offset <= self.start_offset:
+            raise ValueError("专名证据位置无效")
+        return self
+
+
+class GenerationCandidateAuditTerms(BaseModel):
+    status: Literal["pass", "review"]
+    items: list[GenerationCandidateAuditTermEvidence] = Field(max_length=20)
+    truncated: bool
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_term_status(self):
+        if self.status != ("review" if self.items else "pass"):
+            raise ValueError("专名提示状态不一致")
+        if self.truncated and len(self.items) != 20:
+            raise ValueError("专名提示截断标记无效")
+        return self
+
+
+class GenerationCandidateAuditContextElement(BaseModel):
+    element_id: str = Field(min_length=32, max_length=32)
+    type_key: str
+    type_display_name: str
+    name: str
+    version_no: int = Field(ge=1)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class GenerationCandidateAuditContextSummary(BaseModel):
+    element_count: int = Field(ge=1, le=100)
+    relation_count: int = Field(ge=0, le=300)
+    warning_count: int = Field(ge=0)
+    elements: list[GenerationCandidateAuditContextElement] = Field(
+        min_length=1, max_length=100
+    )
+    foreshadow_actions_supported: Literal[False]
+    foreshadow_action_count: Literal[0]
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_counts(self):
+        if self.element_count != len(self.elements):
+            raise ValueError("审计上下文设定计数不一致")
+        return self
+
+
+class GenerationCandidateAuditResponse(BaseModel):
+    schema_version: Literal[1]
+    ruleset_version: Literal[1]
+    project_id: str = Field(min_length=32, max_length=32)
+    run_id: str = Field(min_length=32, max_length=32)
+    planning_chapter_id: str = Field(min_length=32, max_length=32)
+    candidate_id: str = Field(min_length=32, max_length=32)
+    candidate_version: int = Field(ge=1)
+    candidate_checksum: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    context_checksum: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    status: Literal["pass", "review"]
+    integrity: GenerationCandidateAuditIntegrity
+    target_length: GenerationCandidateAuditTargetLength
+    preparation: GenerationCandidateAuditPreparation
+    unrecognized_explicit_terms: GenerationCandidateAuditTerms
+    context_summary: GenerationCandidateAuditContextSummary
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_overall_status(self):
+        review = any(
+            item.status == "review"
+            for item in (
+                self.integrity,
+                self.target_length,
+                self.preparation,
+                self.unrecognized_explicit_terms,
+            )
+        )
+        if self.status != ("review" if review else "pass"):
+            raise ValueError("审计总状态与分项状态不一致")
+        return self

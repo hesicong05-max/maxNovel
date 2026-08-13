@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import PlanningGenerationPreflight from "./PlanningGenerationPreflight";
-import type { GenerationAttemptResponse, GenerationCandidateResponse, GenerationCapabilityResponse, GenerationRunResponse } from "@/types/generation";
+import type { GenerationAttemptResponse, GenerationCandidateAuditResponse, GenerationCandidateResponse, GenerationCapabilityResponse, GenerationRunResponse } from "@/types/generation";
 import type { NovelPlan, PlanningChapter, PlanningPart } from "@/types/planning";
 
 const id = (value: string) => value.padEnd(32, value).slice(0, 32);
@@ -80,8 +80,8 @@ function props(overrides: Record<string, unknown> = {}) {
     plan, part, chapter, run, busy: false, loadingSaved: false, disabled: false,
     disabledReason: "", error: "", recoveryState: "idle" as const, stale: false,
     recovered: false, focusResultToken: 0, focusFeedbackToken: 0, hasPendingRecovery: false,
-    capability: null, attempt: null, candidate: null, executionBusy: false,
-    candidateLoading: false, executionError: "", executionDisabledReason: "", confirmationOpen: false,
+    capability: null, attempt: null, candidate: null, candidateAudit: null, executionBusy: false,
+    candidateLoading: false, auditLoading: false, auditError: "", executionError: "", executionDisabledReason: "", confirmationOpen: false,
     runActionsDisabledReason: "", confirmationUsesOriginalRequest: false,
     originalRetryAllowed: false,
     newAttemptDisabled: false,
@@ -89,7 +89,7 @@ function props(overrides: Record<string, unknown> = {}) {
     onRetryOriginal: vi.fn(), onFocusAssignments: vi.fn(), onClearSavedPointer: vi.fn(),
     onAbandonPending: vi.fn(),
     onOpenGenerationConfirmation: vi.fn(), onCancelGenerationConfirmation: vi.fn(),
-    onConfirmGeneration: vi.fn(), onCheckGenerationAttempt: vi.fn(), onReadGenerationCandidate: vi.fn(),
+    onConfirmGeneration: vi.fn(), onCheckGenerationAttempt: vi.fn(), onReadGenerationCandidate: vi.fn(), onReadGenerationCandidateAudit: vi.fn(),
     onRetryOriginalGeneration: vi.fn(), onStartNewAfterFailure: vi.fn(),
     ...overrides,
   };
@@ -181,6 +181,56 @@ describe("PlanningGenerationPreflight", () => {
     const heading = screen.getByRole("heading", { name: "候选正文已就绪：第一章" });
     await waitFor(() => expect(heading).toHaveFocus());
     expect(screen.getByLabelText("候选正文内容")).toHaveAttribute("tabindex", "0");
+  });
+
+  it("shows deterministic review evidence without claiming semantic approval", async () => {
+    const candidate: GenerationCandidateResponse = {
+      id: id("candidate"), project_id: projectId, run_id: run.id,
+      planning_chapter_id: chapterId, source_attempt_id: id("attempt"), parent_candidate_id: null,
+      version_no: 1, origin_kind: "generated", title: "第一章", content: "提到了《无名星门》。",
+      content_format: "plain_text", content_checksum: "d".repeat(64), content_size_bytes: 30,
+      word_count: 9, created_by: id("user"), created_at: now,
+    };
+    const audit: GenerationCandidateAuditResponse = {
+      schema_version: 1, ruleset_version: 1, project_id: projectId, run_id: run.id,
+      planning_chapter_id: chapterId, candidate_id: candidate.id, candidate_version: 1,
+      candidate_checksum: candidate.content_checksum, context_checksum: run.context_checksum,
+      status: "review",
+      integrity: { status: "pass", content_size_bytes: 30, word_count: 9, storage_limit_bytes: 262144, storage_limit_reached: false },
+      target_length: { status: "review", actual_word_count: 9, target_word_count: 2000, minimum_word_count: 1400, maximum_word_count: 2600 },
+      preparation: { status: "review", warnings: run.context_manifest.warnings },
+      unrecognized_explicit_terms: { status: "review", items: [{ term: "无名星门", excerpt: "提到了《无名星门》。", start_offset: 3, end_offset: 9 }], truncated: false },
+      context_summary: { element_count: 2, relation_count: 1, warning_count: 1, elements: run.context_manifest.elements.map((item) => ({ element_id: item.element_id, type_key: item.type.key, type_display_name: item.type.display_name, name: item.version.name, version_no: item.version.version_no })), foreshadow_actions_supported: false, foreshadow_action_count: 0 },
+    };
+    render(<PlanningGenerationPreflight {...props({ candidate, candidateAudit: audit })} />);
+    expect(screen.getByRole("heading", { name: "确定性检查" })).toBeInTheDocument();
+    expect(screen.getByText("需要人工核对")).toBeInTheDocument();
+    expect(screen.getByText(/不判断情节、人物或世界规则的语义一致性/)).toBeInTheDocument();
+    expect(screen.getByText(/发现需要核对的《》标记名称/)).toBeInTheDocument();
+    expect(screen.getByText(/仅因《》标记且未出现在本次冻结清单中/)).toBeInTheDocument();
+    expect(screen.getByText("需要人工核对")).toHaveAttribute("role", "status");
+    expect(screen.getByText("查看本次冻结设定").closest("summary")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/一致性通过|AI.*验证|违规设定|事实冲突/);
+    expect(screen.getByText("《无名星门》")).toBeInTheDocument();
+    const evidence = screen.getAllByText("提到了《无名星门》。").find((item) => item.tagName === "BLOCKQUOTE");
+    expect(evidence).toBeDefined();
+    expect(evidence).not.toHaveAttribute("tabindex");
+  });
+
+  it("keeps candidate readable when audit fails and retries only the audit", () => {
+    const onReadGenerationCandidateAudit = vi.fn();
+    const candidate: GenerationCandidateResponse = {
+      id: id("candidate"), project_id: projectId, run_id: run.id,
+      planning_chapter_id: chapterId, source_attempt_id: id("attempt"), parent_candidate_id: null,
+      version_no: 1, origin_kind: "generated", title: "第一章", content: "候选正文",
+      content_format: "plain_text", content_checksum: "d".repeat(64), content_size_bytes: 12,
+      word_count: 4, created_by: id("user"), created_at: now,
+    };
+    render(<PlanningGenerationPreflight {...props({ candidate, auditError: "检查暂不可用。候选正文仍保留只读。", onReadGenerationCandidateAudit })} />);
+    expect(screen.getByLabelText("候选正文内容")).toHaveTextContent("候选正文");
+    fireEvent.click(screen.getByRole("button", { name: "重新读取检查" }));
+    expect(onReadGenerationCandidateAudit).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: /确认并生成/ })).not.toBeInTheDocument();
   });
 
   it("focuses a newly entered failed terminal alert but keeps calling as polite status", async () => {

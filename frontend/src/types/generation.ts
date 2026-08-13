@@ -229,3 +229,74 @@ export interface GenerationCandidateResponse {
   created_by: string;
   created_at: string;
 }
+
+export type GenerationCandidateAuditStatus = "pass" | "review";
+
+export interface GenerationCandidateAuditIntegrity {
+  status: GenerationCandidateAuditStatus;
+  content_size_bytes: number;
+  word_count: number;
+  storage_limit_bytes: 262144;
+  storage_limit_reached: boolean;
+}
+
+export interface GenerationCandidateAuditTargetLength {
+  status: GenerationCandidateAuditStatus | "not_applicable";
+  actual_word_count: number;
+  target_word_count: number | null;
+  minimum_word_count: number | null;
+  maximum_word_count: number | null;
+}
+
+export interface GenerationCandidateAuditPreparation {
+  status: GenerationCandidateAuditStatus;
+  warnings: GenerationContextWarning[];
+}
+
+export interface GenerationCandidateAuditTermEvidence {
+  term: string;
+  excerpt: string;
+  start_offset: number;
+  end_offset: number;
+}
+
+export interface GenerationCandidateAuditTerms {
+  status: GenerationCandidateAuditStatus;
+  items: GenerationCandidateAuditTermEvidence[];
+  truncated: boolean;
+}
+
+export interface GenerationCandidateAuditContextElement {
+  element_id: string;
+  type_key: string;
+  type_display_name: string;
+  name: string;
+  version_no: number;
+}
+
+export interface GenerationCandidateAuditContextSummary {
+  element_count: number;
+  relation_count: number;
+  warning_count: number;
+  elements: GenerationCandidateAuditContextElement[];
+  foreshadow_actions_supported: false;
+  foreshadow_action_count: 0;
+}
+
+export interface GenerationCandidateAuditResponse {
+  schema_version: 1;
+  ruleset_version: 1;
+  project_id: string;
+  run_id: string;
+  planning_chapter_id: string;
+  candidate_id: string;
+  candidate_version: number;
+  candidate_checksum: string;
+  context_checksum: string;
+  status: GenerationCandidateAuditStatus;
+  integrity: GenerationCandidateAuditIntegrity;
+  target_length: GenerationCandidateAuditTargetLength;
+  preparation: GenerationCandidateAuditPreparation;
+  unrecognized_explicit_terms: GenerationCandidateAuditTerms;
+  context_summary: GenerationCandidateAuditContextSummary;
+}

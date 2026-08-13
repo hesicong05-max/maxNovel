@@ -17,6 +17,7 @@ from app.core.generation_execution import (
     generation_attempt_response,
     get_generation_transport,
 )
+from app.core.generation_audit import generation_candidate_audit_response
 from app.core.generation_preflight import (
     GenerationPreparationError,
     find_generation_run_by_key,
@@ -29,6 +30,7 @@ from app.schemas.generation import (
     GenerationAttemptExecuteCommand,
     GenerationAttemptResponse,
     GenerationCandidateResponse,
+    GenerationCandidateAuditResponse,
     GenerationCapabilityResponse,
     GenerationRunPrepareCommand,
     GenerationRunResponse,
@@ -217,6 +219,41 @@ async def get_generation_candidate(
         )
     try:
         return await generation_candidate_response(
+            db, candidate, user_id=current_user.id
+        )
+    except GenerationExecutionError as exc:
+        _raise_execution(exc)
+
+
+@router.get(
+    "/generation-candidates/{candidate_id}/audit",
+    response_model=GenerationCandidateAuditResponse,
+)
+async def get_generation_candidate_audit(
+    project_id: str,
+    candidate_id: Annotated[str, Path(min_length=32, max_length=32)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    await get_project_for_owner(project_id, current_user, db)
+    candidate = await db.scalar(
+        select(ChapterGenerationCandidate).where(
+            ChapterGenerationCandidate.project_id == project_id,
+            ChapterGenerationCandidate.id == candidate_id,
+        )
+    )
+    if candidate is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "GENERATION_CANDIDATE_NOT_FOUND",
+                "message": "未找到可检查的章节候选。",
+                "retryable": False,
+                "recommended_action": "check_execution_by_key",
+            },
+        )
+    try:
+        return await generation_candidate_audit_response(
             db, candidate, user_id=current_user.id
         )
     except GenerationExecutionError as exc:
