@@ -1,7 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import PlanningGenerationPreflight from "./PlanningGenerationPreflight";
-import type { GenerationRunResponse } from "@/types/generation";
+import type { GenerationAttemptResponse, GenerationCandidateResponse, GenerationCapabilityResponse, GenerationRunResponse } from "@/types/generation";
 import type { NovelPlan, PlanningChapter, PlanningPart } from "@/types/planning";
 
 const id = (value: string) => value.padEnd(32, value).slice(0, 32);
@@ -45,26 +45,65 @@ const run: GenerationRunResponse = {
   },
 };
 
+const capability: GenerationCapabilityResponse = {
+  schema_version: 1,
+  provider_name: "provider-internal-hash",
+  model_name: "demo-model",
+  max_output_tokens: 4096,
+  input_limit_availability: "unavailable",
+  max_input_tokens: null,
+  price_availability: "unavailable",
+  capability_checksum: "a".repeat(64),
+};
+
+function attempt(status: GenerationAttemptResponse["status"], aiInvoked = true): GenerationAttemptResponse {
+  return {
+    id: id("attempt"), project_id: projectId, run_id: run.id, planning_chapter_id: chapterId,
+    operation_key: "generation:execute:12345678", replayed: false, status,
+    execution_mode: "single_call", billing_confirmed: true, ai_invoked: aiInvoked,
+    billing_effect: aiInvoked ? "possible" : "none", capability, model_name: capability.model_name,
+    prompt_schema_version: 1, prompt_checksum: "c".repeat(64), context_checksum: run.context_checksum,
+    lock_version: 1,
+    usage: status === "calling" || status === "outcome_unknown"
+      ? { status: "unknown", input_tokens: null, output_tokens: null, total_tokens: null }
+      : { status: "unavailable", input_tokens: null, output_tokens: null, total_tokens: null },
+    candidate_id: null,
+    error: status === "failed" || status === "outcome_unknown" ? { code: "PROVIDER_ERROR", message: "failed", retryable: false, recommended_action: status === "failed" ? "inspect_failure" : "keep_unknown_result" } : null,
+    claimed_at: aiInvoked ? now : null,
+    completed_at: status === "failed" || status === "outcome_unknown" ? now : null,
+    created_at: now, updated_at: now,
+  };
+}
+
 function props(overrides: Record<string, unknown> = {}) {
   return {
     plan, part, chapter, run, busy: false, loadingSaved: false, disabled: false,
     disabledReason: "", error: "", recoveryState: "idle" as const, stale: false,
     recovered: false, focusResultToken: 0, focusFeedbackToken: 0, hasPendingRecovery: false,
+    capability: null, attempt: null, candidate: null, executionBusy: false,
+    candidateLoading: false, executionError: "", executionDisabledReason: "", confirmationOpen: false,
+    runActionsDisabledReason: "", confirmationUsesOriginalRequest: false,
+    originalRetryAllowed: false,
+    newAttemptDisabled: false,
     onPrepare: vi.fn(), onCheckPending: vi.fn(),
     onRetryOriginal: vi.fn(), onFocusAssignments: vi.fn(), onClearSavedPointer: vi.fn(),
     onAbandonPending: vi.fn(),
+    onOpenGenerationConfirmation: vi.fn(), onCancelGenerationConfirmation: vi.fn(),
+    onConfirmGeneration: vi.fn(), onCheckGenerationAttempt: vi.fn(), onReadGenerationCandidate: vi.fn(),
+    onRetryOriginalGeneration: vi.fn(), onStartNewAfterFailure: vi.fn(),
     ...overrides,
   };
 }
 
 describe("PlanningGenerationPreflight", () => {
-  it("shows the exact zero-cost boundary, full sources, relationship, and warnings without a generation action", () => {
+  it("limits the zero-cost claim to preflight while separating the paid generation step", () => {
     render(<PlanningGenerationPreflight {...props()} />);
     expect(screen.getByText("检查记录已保存")).toBeInTheDocument();
-    expect(screen.getByText("AI 未调用")).toBeInTheDocument();
-    expect(screen.getByText("模型费用：无")).toBeInTheDocument();
-    expect(screen.getByText("正文：未创建或修改")).toBeInTheDocument();
-    expect(screen.queryByText(/开始生成|正在生成|生成完成/)).not.toBeInTheDocument();
+    expect(screen.getByText("上下文检查：零 AI · 零费用")).toBeInTheDocument();
+    expect(screen.getByText("本次检查：AI 未调用")).toBeInTheDocument();
+    expect(screen.getByText("本次检查费用：无")).toBeInTheDocument();
+    expect(screen.getByText("可能调用模型并产生费用")).toBeInTheDocument();
+    expect(screen.queryByText(run.context_checksum)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText("查看 2 项设定"));
     fireEvent.click(screen.getAllByText("查看全部分配来源")[0]);
@@ -89,5 +128,68 @@ describe("PlanningGenerationPreflight", () => {
     expect(screen.getByText("基于旧版本")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "重新检查当前上下文" })).toBeDisabled();
     expect(screen.getByText("当前章节有未保存修改。")).toBeInTheDocument();
+  });
+
+  it("keeps recheck and close disabled while an execution receipt is pending", () => {
+    render(<PlanningGenerationPreflight {...props({
+      runActionsDisabledReason: "生成执行收据仍在处理中；只能核对当前生成。",
+      attempt: attempt("reserved", false),
+    })} />);
+    expect(screen.getByRole("button", { name: "再次检查当前上下文" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "关闭这条记录" })).toBeDisabled();
+    expect(screen.getByText(/生成执行收据仍在处理中/)).toBeInTheDocument();
+  });
+
+  it("presents an alert dialog with unavailable limits, honest billing, and an anonymous provider label", () => {
+    const onCancelGenerationConfirmation = vi.fn();
+    render(<PlanningGenerationPreflight {...props({ capability, confirmationOpen: true, onCancelGenerationConfirmation })} />);
+    const dialog = screen.getByRole("alertdialog", { name: "确认调用模型生成候选" });
+    expect(dialog).toHaveTextContent("已配置的模型服务 / demo-model");
+    expect(dialog).not.toHaveTextContent("provider-internal-hash");
+    expect(dialog).toHaveTextContent("输入上限");
+    expect(dialog).toHaveTextContent("最终以服务商账单为准");
+    expect(dialog).toHaveTextContent("不覆盖任何现有正文");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onCancelGenerationConfirmation).toHaveBeenCalledOnce();
+  });
+
+  it("never offers a second POST path for an unknown outcome and reports possible billing", () => {
+    const onCheckGenerationAttempt = vi.fn();
+    render(<PlanningGenerationPreflight {...props({ attempt: attempt("outcome_unknown"), onCheckGenerationAttempt })} />);
+    expect(screen.getByText(/可能已被服务商受理并产生费用/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /重新获取/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "按原编号核对状态" }));
+    expect(onCheckGenerationAttempt).toHaveBeenCalledOnce();
+  });
+
+  it("distinguishes a pre-call failure from a possibly billed post-call failure", () => {
+    const { rerender } = render(<PlanningGenerationPreflight {...props({ attempt: attempt("failed", false) })} />);
+    expect(screen.getByText(/在模型调用前失败，没有模型费用/)).toBeInTheDocument();
+    rerender(<PlanningGenerationPreflight {...props({ attempt: attempt("failed", true) })} />);
+    expect(screen.getByText(/已进入模型调用，可能产生费用/)).toBeInTheDocument();
+  });
+
+  it("moves focus to a newly validated candidate heading", async () => {
+    const candidate: GenerationCandidateResponse = {
+      id: id("candidate"), project_id: projectId, run_id: run.id,
+      planning_chapter_id: chapterId, source_attempt_id: id("attempt"), parent_candidate_id: null,
+      version_no: 1, origin_kind: "generated", title: "第一章", content: "候选正文",
+      content_format: "plain_text", content_checksum: "d".repeat(64), content_size_bytes: 12,
+      word_count: 4, created_by: id("user"), created_at: now,
+    };
+    render(<PlanningGenerationPreflight {...props({ candidate })} />);
+    const heading = screen.getByRole("heading", { name: "候选正文已就绪：第一章" });
+    await waitFor(() => expect(heading).toHaveFocus());
+    expect(screen.getByLabelText("候选正文内容")).toHaveAttribute("tabindex", "0");
+  });
+
+  it("focuses a newly entered failed terminal alert but keeps calling as polite status", async () => {
+    const failed = attempt("failed", false);
+    const { rerender } = render(<PlanningGenerationPreflight {...props({ attempt: failed })} />);
+    const failedAlert = screen.getByText("failed").closest("[role='alert']");
+    await waitFor(() => expect(failedAlert).toHaveFocus());
+    rerender(<PlanningGenerationPreflight {...props({ attempt: attempt("calling") })} />);
+    expect(screen.getByText("模型调用中")).toBeInTheDocument();
+    expect(screen.getByText("模型调用中").closest("[role='alert']")).toBeNull();
   });
 });

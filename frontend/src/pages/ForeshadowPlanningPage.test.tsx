@@ -174,6 +174,30 @@ describe("ForeshadowPlanningPage", () => {
     expect(screen.getByRole("button", { name: "加入已有伏笔" })).toBeDisabled();
   });
 
+  it("distinguishes generation execution pending state and links back without implying a planning write", async () => {
+    sessionStorage.setItem(`novel_pending_planning_operation_v1:user-1:${projectId}`, JSON.stringify({
+      schema_version: 3,
+      workspace: "generation_execution",
+      user_id: "user-1",
+      project_id: projectId,
+      chapter_id: "c".repeat(32),
+      run_id: "r".repeat(32),
+      operation_key: "generation:execute:pending123",
+      payload: {
+        operation_key: "generation:execute:pending123",
+        expected_context_checksum: "a".repeat(64),
+        expected_capability_checksum: "b".repeat(64),
+        confirm_model_call: true,
+      },
+      created_at: now,
+    }));
+    renderPage();
+    expect(await screen.findByText(/生成候选中还有结果未确认的模型调用/)).toBeInTheDocument();
+    expect(screen.queryByText(/章节规划中还有结果未确认的写入/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "加入已有伏笔" })).toBeDisabled();
+    expect(screen.getByRole("link", { name: "返回发起章节核对生成" })).toHaveAttribute("href", `/project/${projectId}/plan/chapters`);
+  });
+
   it("protects dirty forms from filter, route, and browser exits", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     const listForeshadows = vi.fn().mockResolvedValue(list());

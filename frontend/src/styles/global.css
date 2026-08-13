@@ -1588,10 +1588,105 @@ input, select, textarea { font-family: inherit; }
 .planning-generation__result,
 .planning-generation__list,
 .planning-generation__item,
-.planning-generation__warnings {
+.planning-generation__warnings,
+.planning-generation__execution,
+.planning-generation__attempt,
+.planning-generation__candidate {
   display: grid;
   gap: 0.75rem;
   min-width: 0;
+}
+
+.planning-generation__execution {
+  padding: 1rem;
+  border: 1px solid var(--gold-border);
+  border-radius: var(--r-lg);
+  background: var(--white);
+}
+
+.planning-generation__execution > header,
+.planning-generation__candidate > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.planning-generation__execution > header > div,
+.planning-generation__candidate > header > div {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.planning-generation__possible-cost {
+  flex: 0 0 auto;
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--gold-border);
+  border-radius: 999px;
+  background: var(--gold-light);
+  font-size: 13px;
+}
+
+.planning-generation__candidate pre {
+  max-height: 32rem;
+  margin: 0;
+  padding: 1rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-soft);
+  font: inherit;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.planning-generation__candidate h6:focus-visible,
+.planning-generation__candidate pre:focus-visible {
+  outline: 3px solid var(--gold-border);
+  outline-offset: 3px;
+}
+
+.planning-generation-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  overflow-y: auto;
+  background: rgba(20, 18, 16, 0.62);
+}
+
+.planning-generation-confirm {
+  display: grid;
+  gap: 1rem;
+  width: min(620px, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  padding: 1.25rem;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.planning-generation-confirm h4,
+.planning-generation-confirm p,
+.planning-generation-confirm ul {
+  margin: 0;
+}
+
+.planning-generation-confirm ul {
+  padding-left: 1.25rem;
+  color: var(--text-2);
+}
+
+.planning-generation-confirm :focus-visible {
+  outline: 3px solid var(--gold-border);
+  outline-offset: 3px;
 }
 
 .planning-generation__guarantees,
@@ -1762,6 +1857,23 @@ input, select, textarea { font-family: inherit; }
   .planning-generation__actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .planning-generation__execution > header,
+  .planning-generation__candidate > header,
+  .planning-generation-confirm .planning-generation__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .planning-generation__possible-cost {
+    align-self: flex-start;
+  }
+
+  .planning-generation-confirm .btn,
+  .planning-generation__execution .btn {
+    width: 100%;
+    min-height: 44px;
   }
 
   .planning-assignment-counts,
