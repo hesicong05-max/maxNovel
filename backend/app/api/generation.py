@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,13 @@ from app.core.generation_execution import (
     generation_capability_response,
     generation_attempt_response,
     get_generation_transport,
+)
+from app.core.generation_candidates import (
+    create_manual_edit_candidate,
+    find_manual_edit_by_key,
+    get_candidate_version_detail,
+    list_candidate_versions,
+    manual_edit_response,
 )
 from app.core.generation_audit import generation_candidate_audit_response
 from app.core.generation_preflight import (
@@ -31,6 +38,10 @@ from app.schemas.generation import (
     GenerationAttemptResponse,
     GenerationCandidateResponse,
     GenerationCandidateAuditResponse,
+    GenerationCandidateManualEditCommand,
+    GenerationCandidateManualEditResponse,
+    GenerationCandidateVersionDetail,
+    GenerationCandidateVersionListResponse,
     GenerationCapabilityResponse,
     GenerationRunPrepareCommand,
     GenerationRunResponse,
@@ -220,6 +231,135 @@ async def get_generation_candidate(
     try:
         return await generation_candidate_response(
             db, candidate, user_id=current_user.id
+        )
+    except GenerationExecutionError as exc:
+        _raise_execution(exc)
+
+
+@router.get(
+    "/generation-runs/{run_id}/candidate-versions",
+    response_model=GenerationCandidateVersionListResponse,
+)
+async def get_generation_candidate_versions(
+    project_id: str,
+    run_id: Annotated[str, Path(min_length=32, max_length=32)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+    before_version_no: Annotated[int | None, Query(ge=1)] = None,
+):
+    try:
+        return await list_candidate_versions(
+            db,
+            project_id=project_id,
+            run_id=run_id,
+            user_id=current_user.id,
+            limit=limit,
+            before_version_no=before_version_no,
+        )
+    except GenerationExecutionError as exc:
+        _raise_execution(exc)
+
+
+@router.get(
+    "/generation-runs/{run_id}/candidate-versions/{candidate_id}",
+    response_model=GenerationCandidateVersionDetail,
+)
+async def get_generation_candidate_version(
+    project_id: str,
+    run_id: Annotated[str, Path(min_length=32, max_length=32)],
+    candidate_id: Annotated[str, Path(min_length=32, max_length=32)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    await get_project_for_owner(project_id, current_user, db)
+    try:
+        candidate = await get_candidate_version_detail(
+            db,
+            project_id=project_id,
+            run_id=run_id,
+            candidate_id=candidate_id,
+            user_id=current_user.id,
+        )
+    except GenerationExecutionError as exc:
+        _raise_execution(exc)
+    if candidate is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "GENERATION_CANDIDATE_VERSION_NOT_FOUND",
+                "message": "未找到该章节候选版本。",
+                "retryable": False,
+                "recommended_action": "reload_generation_candidate_versions",
+            },
+        )
+    return candidate
+
+
+@router.post(
+    "/generation-runs/{run_id}/candidate-manual-edits",
+    response_model=GenerationCandidateManualEditResponse,
+)
+async def create_generation_candidate_manual_edit(
+    project_id: str,
+    run_id: Annotated[str, Path(min_length=32, max_length=32)],
+    body: GenerationCandidateManualEditCommand,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    await get_project_for_owner(project_id, current_user, db)
+    try:
+        return await create_manual_edit_candidate(
+            db=db,
+            project_id=project_id,
+            run_id=run_id,
+            user_id=current_user.id,
+            operation_key=body.operation_key,
+            parent_candidate_id=body.parent_candidate_id,
+            expected_parent_version_no=body.expected_parent_version_no,
+            expected_parent_checksum=body.expected_parent_checksum,
+            expected_context_checksum=body.expected_context_checksum,
+            content=body.content,
+        )
+    except GenerationExecutionError as exc:
+        _raise_execution(exc)
+
+
+@router.get(
+    "/generation-runs/{run_id}/candidate-manual-edits/by-key/{operation_key}",
+    response_model=GenerationCandidateManualEditResponse,
+)
+async def get_generation_candidate_manual_edit_by_key(
+    project_id: str,
+    run_id: Annotated[str, Path(min_length=32, max_length=32)],
+    operation_key: Annotated[
+        str,
+        Path(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"),
+    ],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    await get_project_for_owner(project_id, current_user, db)
+    candidate = await find_manual_edit_by_key(
+        db,
+        project_id=project_id,
+        run_id=run_id,
+        user_id=current_user.id,
+        operation_key=operation_key,
+    )
+    if candidate is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "GENERATION_CANDIDATE_MANUAL_EDIT_NOT_FOUND",
+                "message": "尚未找到该手工另存记录。",
+                "retryable": True,
+                "recommended_action": "retry_original_candidate_manual_edit",
+            },
+        )
+    try:
+        return await manual_edit_response(
+            db, candidate, user_id=current_user.id, replayed=True
         )
     except GenerationExecutionError as exc:
         _raise_execution(exc)
