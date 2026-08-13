@@ -16,6 +16,7 @@ import {
   savePendingForeshadowOperation,
   type PendingForeshadowOperation,
 } from "@/services/foreshadowOperations";
+import { loadPendingGenerationExecution } from "@/services/generationExecution";
 import { clearPendingProjectOperationRecord } from "@/services/pendingProjectOperations";
 import type { LoreElementListItem } from "@/types/lore";
 import type {
@@ -149,7 +150,7 @@ export default function ForeshadowPlanningPage() {
   const [conflict, setConflict] = useState(false);
   const [refreshRequired, setRefreshRequired] = useState(false);
   const [pending, setPending] = useState<PendingForeshadowOperation | null>(null);
-  const [foreignPending, setForeignPending] = useState(false);
+  const [foreignPending, setForeignPending] = useState<{ workspace: "planning" | "generation_execution"; chapterId: string | null } | null>(null);
   const [storageIssue, setStorageIssue] = useState<"corrupt" | "unavailable" | null>(null);
   const [recoveryState, setRecoveryState] = useState<RecoveryState>("idle");
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
@@ -169,7 +170,7 @@ export default function ForeshadowPlanningPage() {
   const confirmReturnFocus = useRef<HTMLElement | null>(null);
   const commitSequence = useRef(0);
 
-  const writesDisabled = busy || maintenance || conflict || refreshRequired || !!pending || foreignPending || !!storageIssue || !plan;
+  const writesDisabled = busy || maintenance || conflict || refreshRequired || !!pending || !!foreignPending || !!storageIssue || !plan;
   const currentCounts = list?.counts ?? { unplanted: 0, planted: 0, pending_resolution: 0, resolved: 0 };
 
   const loadPlan = useCallback(async (generation = requestGeneration.current): Promise<boolean> => {
@@ -259,7 +260,7 @@ export default function ForeshadowPlanningPage() {
     selectedLifecycleRef.current = null;
     setPlan(null); setList(null); setSelectedId(null); setDetail(null); setHistory(null);
     setNotice(""); setError(""); setErrorHint(""); setMaintenance(false); setConflict(false);
-    setRefreshRequired(false); setPending(null); setForeignPending(false); setStorageIssue(null);
+    setRefreshRequired(false); setPending(null); setForeignPending(null); setStorageIssue(null);
     setRecoveryState("idle"); setBusy(false); setMobileDetail(false); setHasDraft(false); setCommittedAction(null);
     setStatus("active"); setState("all");
     void loadPlan(generation);
@@ -387,8 +388,19 @@ export default function ForeshadowPlanningPage() {
   useEffect(() => {
     if (!projectId || !user || !plan) return;
     const loaded = loadPendingForeshadowOperation(user.id, projectId);
-    if (loaded.status === "missing") return;
-    if (loaded.status === "foreign") { setForeignPending(true); return; }
+    if (loaded.status === "missing") { setForeignPending(null); setStorageIssue(null); return; }
+    if (loaded.status === "foreign") {
+      setPending(null);
+      setStorageIssue(null);
+      const generationPending = loaded.workspace === "generation_execution"
+        ? loadPendingGenerationExecution(user.id, projectId)
+        : null;
+      setForeignPending({
+        workspace: loaded.workspace,
+        chapterId: generationPending?.status === "available" ? generationPending.operation.chapter_id : null,
+      });
+      return;
+    }
     if (loaded.status === "corrupt" || loaded.status === "unavailable") {
       setStorageIssue(loaded.status);
       setError(loaded.status === "corrupt"
@@ -396,6 +408,8 @@ export default function ForeshadowPlanningPage() {
         : "浏览器会话存储不可用，无法保证操作可恢复；已安全停止全部伏笔写入。");
       return;
     }
+    setForeignPending(null);
+    setStorageIssue(null);
     setPending(loaded.operation);
     void reconcilePending(loaded.operation);
   }, [projectId, user?.id, !!plan]);
@@ -598,7 +612,8 @@ export default function ForeshadowPlanningPage() {
       <div className="foreshadow-live" role="status" aria-live="polite">{notice}</div>
       {error && <div className="planning-notice is-error" role="alert" tabIndex={-1} ref={errorRef}><span>{error}{errorHint && <small className="planning-notice__hint">{errorHint}</small>}</span><span className="planning-notice__actions">{storageIssue === "corrupt" && <button className="btn btn-secondary" onClick={clearCorruptRecovery}>清除本机损坏线索</button>}{(conflict || refreshRequired) && <button className="btn btn-secondary" onClick={() => void refreshAuthoritative(selectedId).then((ok) => { if (ok) { setConflict(false); setRefreshRequired(false); setError(""); setNotice("已核对服务器最新规划与伏笔资料。"); } })}>核对服务器最新状态</button>}</span></div>}
       {maintenance && <div className="planning-notice" role="status">项目正在维护；只读内容和原表单已保留，新写入已暂停。</div>}
-      {foreignPending && <div className="planning-notice" role="alert"><span>章节规划中还有结果未确认的写入；伏笔写入已暂停。</span><Link className="btn btn-secondary" to={`/project/${projectId}/plan/chapters`}>返回章节规划核对</Link></div>}
+      {foreignPending?.workspace === "planning" && <div className="planning-notice" role="alert"><span>章节规划中还有结果未确认的写入；伏笔写入已暂停。</span><Link className="btn btn-secondary" to={`/project/${projectId}/plan/chapters`}>返回章节规划核对</Link></div>}
+      {foreignPending?.workspace === "generation_execution" && <div className="planning-notice" role="alert"><span>生成候选中还有结果未确认的模型调用；伏笔写入已暂停，且不会自动确认埋入或回收。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${projectId}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${projectId}/plan/chapters`}>返回发起章节核对生成</Link></div>}
       {pending && <div className="planning-notice" role="status"><span>上次伏笔操作仍等待确认；已冻结新写入，避免重复记录。</span><span className="planning-notice__actions"><button className="btn btn-secondary" disabled={busy} onClick={() => void reconcilePending(pending)}>{recoveryState === "checking" ? "正在核对…" : "核对原操作结果"}</button>{recoveryState === "not_found" && <button className="btn btn-secondary" disabled={busy} onClick={() => void retryPending()}>使用原编号和内容重试</button>}</span></div>}
 
       <section className="foreshadow-overview" aria-label="伏笔状态概况">

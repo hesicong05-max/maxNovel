@@ -7,6 +7,18 @@ import ForeshadowPlanningSummary from "@/components/ForeshadowPlanningSummary";
 import { useAuth } from "@/components/AuthContext";
 import { ApiError, api } from "@/services/api";
 import { generationRunContractError } from "@/services/generationRuns";
+import { pendingProjectOperationKey } from "@/services/pendingProjectOperations";
+import {
+  clearPendingGenerationExecution,
+  createGenerationExecutionKey,
+  loadPendingGenerationExecution,
+  readGenerationAttemptByKey,
+  readGenerationCandidate,
+  readGenerationCapability,
+  requestGenerationAttempt,
+  savePendingGenerationExecution,
+  type PendingGenerationExecution,
+} from "@/services/generationExecution";
 import {
   clearPendingPlanningOperation,
   createPlanningOperationKey,
@@ -17,7 +29,13 @@ import {
   type PlanningOperationAction,
 } from "@/services/planningOperations";
 import type { LoreElementListItem } from "@/types/lore";
-import type { GenerationRunPrepareInput, GenerationRunResponse } from "@/types/generation";
+import type {
+  GenerationAttemptResponse,
+  GenerationCandidateResponse,
+  GenerationCapabilityResponse,
+  GenerationRunPrepareInput,
+  GenerationRunResponse,
+} from "@/types/generation";
 import type {
   NovelPlan,
   PlanningAssignmentCreateInput,
@@ -103,6 +121,21 @@ function receiptMatchesPending(
     && receipt.receipt_kind === (assignment ? "assignment" : "structure");
 }
 
+function replaceFailedGenerationPending(
+  previous: PendingGenerationExecution,
+  next: PendingGenerationExecution
+): boolean {
+  try {
+    const key = pendingProjectOperationKey(previous.user_id, previous.project_id);
+    const raw = sessionStorage.getItem(key);
+    if (!raw || JSON.stringify(JSON.parse(raw)) !== JSON.stringify(previous)) return false;
+    sessionStorage.setItem(key, JSON.stringify(next));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export default function ChapterPlanningPage() {
   const { id } = useParams<{ id: string }>();
   const { user } = useAuth();
@@ -125,7 +158,7 @@ export default function ChapterPlanningPage() {
   const [assignmentRefreshRequired, setAssignmentRefreshRequired] = useState(false);
   const [assignmentSearchRefreshToken, setAssignmentSearchRefreshToken] = useState(0);
   const [pendingStorageIssue, setPendingStorageIssue] = useState<"corrupt" | "unavailable" | null>(null);
-  const [foreignForeshadowPending, setForeignForeshadowPending] = useState(false);
+  const [foreignPending, setForeignPending] = useState<{ workspace: "foreshadow" | "generation_execution"; chapterId: string | null } | null>(null);
   const [serverSyncToken, setServerSyncToken] = useState(0);
   const [focusTarget, setFocusTarget] = useState<string | null>(null);
   const [assignmentFocusTarget, setAssignmentFocusTarget] = useState<{ elementId: string; scopeIdentity: string } | null>(null);
@@ -141,12 +174,27 @@ export default function ChapterPlanningPage() {
   const [generationRecovered, setGenerationRecovered] = useState(false);
   const [generationFocusToken, setGenerationFocusToken] = useState(0);
   const [generationFeedbackFocusToken, setGenerationFeedbackFocusToken] = useState(0);
+  const [generationCapability, setGenerationCapability] = useState<GenerationCapabilityResponse | null>(null);
+  const [generationAttempt, setGenerationAttempt] = useState<GenerationAttemptResponse | null>(null);
+  const [generationCandidate, setGenerationCandidate] = useState<GenerationCandidateResponse | null>(null);
+  const [generationExecutionPending, setGenerationExecutionPending] = useState<PendingGenerationExecution | null>(null);
+  const [generationExecutionBusy, setGenerationExecutionBusy] = useState(false);
+  const [generationCandidateLoading, setGenerationCandidateLoading] = useState(false);
+  const [generationExecutionError, setGenerationExecutionError] = useState("");
+  const [generationConfirmationOpen, setGenerationConfirmationOpen] = useState(false);
+  const [generationConfirmationKind, setGenerationConfirmationKind] = useState<"new_attempt" | "original_retry" | null>(null);
+  const [generationConfirmationIdentity, setGenerationConfirmationIdentity] = useState<{ runId: string; chapterId: string; contextChecksum: string; structureVersion: number; assignmentVersion: number; chapterLockVersion: number; operationKey: string | null } | null>(null);
+  const [generationOriginalRetryAllowed, setGenerationOriginalRetryAllowed] = useState(false);
+  const [generationExecutionRequiresNewPreflight, setGenerationExecutionRequiresNewPreflight] = useState(false);
   const conflictRef = useRef<HTMLDivElement | null>(null);
   const assignmentConflictRef = useRef<HTMLDivElement | null>(null);
   const globalGenerationFeedbackRef = useRef<HTMLDivElement | null>(null);
   const requestGeneration = useRef(0);
   const assignmentGeneration = useRef(0);
   const generationRunRequest = useRef(0);
+  const generationExecutionRequest = useRef(0);
+  const generationCandidateRequest = useRef(0);
+  const generationExecutionPendingRef = useRef<PendingGenerationExecution | null>(null);
   const acceptedGenerationRunId = useRef<string | null>(null);
   const generationPointerTransition = useRef<string | null>(null);
   const previousSelectionIdentity = useRef<string | null>(null);
@@ -167,14 +215,15 @@ export default function ChapterPlanningPage() {
 
   const located = useMemo(() => plan ? locate(plan, selection) : { part: null, chapter: null }, [plan, selection]);
   selectionRef.current = selection;
+  generationExecutionPendingRef.current = generationExecutionPending;
   const generationFeedbackInlineVisible = !!generationFeedbackChapterId
     && selection.kind === "chapter"
     && selection.id === generationFeedbackChapterId
     && located.chapter?.status === "active"
     && located.part?.status === "active";
   const globalGenerationFeedbackVisible = !!generationError && !generationFeedbackInlineVisible;
-  const planningWriteDisabled = busy || generationBusy || !!pending || maintenance || conflict || assignmentConflict
-    || refreshRequired || assignmentRefreshRequired || !!pendingStorageIssue || foreignForeshadowPending;
+  const planningWriteDisabled = busy || generationBusy || generationExecutionBusy || !!generationExecutionPending || !!pending || maintenance || conflict || assignmentConflict
+    || refreshRequired || assignmentRefreshRequired || !!pendingStorageIssue || !!foreignPending;
   const assignmentWriteDisabled = planningWriteDisabled || assignmentLoading || !!assignmentError;
   const generationStale = useMemo(() => {
     if (!generationRun || !plan || selection.kind !== "chapter" || !located.chapter || !assignmentResponse) return false;
@@ -212,6 +261,20 @@ export default function ChapterPlanningPage() {
     if (assignmentResponse.counts.generation_eligible < 1) return "本章及上级范围没有可用于生成的设定，请先管理本章设定。";
     return "";
   }, [selection.kind, located.chapter, located.part, hasUnsavedStructureDraft, pendingStorageIssue, busy, generationBusy, pending, maintenance, refreshRequired, assignmentRefreshRequired, conflict, assignmentConflict, assignmentLoading, assignmentResponse, assignmentError, plan?.assignment_version]);
+
+  const generationExecutionDisabledReason = useMemo(() => {
+    if (!generationRun) return "请先完成并保存生成前上下文检查。";
+    if (generationExecutionRequiresNewPreflight) return "模型能力已变化，必须重新检查最新上下文。";
+    if (generationStale) return "当前检查记录已过期，请先重新检查最新上下文。";
+    if (generationExecutionPending) return "上次生成尚未完成可验证恢复，只能按原编号核对。";
+    if (generationBusy || busy || generationExecutionBusy) return "当前操作尚未结束。";
+    if (generationDisabledReason) return generationDisabledReason;
+    return "";
+  }, [generationRun, generationExecutionRequiresNewPreflight, generationStale, generationExecutionPending, generationBusy, busy, generationExecutionBusy, generationDisabledReason]);
+
+  const generationRunActionsDisabledReason = generationExecutionPending || (generationAttempt && !generationCandidate)
+    ? "生成执行收据仍在处理中；只能核对或处理当前生成，不能重新检查或关闭记录。"
+    : "";
 
   const loadPlan = useCallback(async (showLoading = true, generation = requestGeneration.current): Promise<boolean> => {
     const projectId = id;
@@ -293,7 +356,7 @@ export default function ChapterPlanningPage() {
     setAssignmentRefreshRequired(false);
     setAssignmentSearchRefreshToken(0);
     setPendingStorageIssue(null);
-    setForeignForeshadowPending(false);
+    setForeignPending(null);
     assignmentGeneration.current += 1;
     setRefreshRequired(false);
     setBusy(false);
@@ -307,6 +370,21 @@ export default function ChapterPlanningPage() {
     setGenerationFeedbackChapterId(null);
     setGenerationRecoveryState("idle");
     setGenerationRecovered(false);
+    setGenerationCapability(null);
+    setGenerationAttempt(null);
+    setGenerationCandidate(null);
+    generationExecutionPendingRef.current = null;
+    setGenerationExecutionPending(null);
+    setGenerationExecutionBusy(false);
+    setGenerationCandidateLoading(false);
+    setGenerationExecutionError("");
+    setGenerationConfirmationOpen(false);
+    setGenerationConfirmationKind(null);
+    setGenerationConfirmationIdentity(null);
+    setGenerationOriginalRetryAllowed(false);
+    setGenerationExecutionRequiresNewPreflight(false);
+    generationExecutionRequest.current += 1;
+    generationCandidateRequest.current += 1;
     generationRunRequest.current += 1;
     acceptedGenerationRunId.current = null;
     generationPointerTransition.current = null;
@@ -327,6 +405,11 @@ export default function ChapterPlanningPage() {
     const runId = searchParams.get("generation_run");
     if (!runId && generationPointerTransition.current) return;
     if (runId && generationPointerTransition.current === runId) generationPointerTransition.current = null;
+    if (generationExecutionPending) {
+      generationRunRequest.current += 1;
+      setGenerationLoadingSaved(false);
+      return;
+    }
     if (pending?.action === "generation_prepare") {
       generationRunRequest.current += 1;
       setGenerationLoadingSaved(false);
@@ -374,7 +457,40 @@ export default function ChapterPlanningPage() {
         if (request === generationRunRequest.current) setGenerationLoadingSaved(false);
       });
     return () => controller.abort();
-  }, [id, loadState, selection.kind, selection.id, searchParams.get("generation_run"), pending?.action]);
+  }, [id, loadState, selection.kind, selection.id, searchParams.get("generation_run"), pending?.action, generationExecutionPending?.operation_key]);
+
+  useEffect(() => {
+    const attemptId = searchParams.get("generation_attempt");
+    const candidateId = searchParams.get("generation_candidate");
+    if (
+      !id || !user || !generationRun || generationExecutionPending
+      || selection.kind !== "chapter" || !located.chapter
+      || !attemptId || !candidateId
+    ) return;
+    if (generationCandidate?.id === candidateId) return;
+    const controller = new AbortController();
+    const request = ++generationCandidateRequest.current;
+    setGenerationCandidateLoading(true);
+    setGenerationExecutionError("");
+    void readGenerationCandidate({
+      projectId: id,
+      runId: generationRun.id,
+      chapterId: selection.id,
+      attemptId,
+      candidateId,
+      userId: user.id,
+      chapterTitle: located.chapter.title,
+    }, controller.signal).then((value) => {
+      if (request === generationCandidateRequest.current) setGenerationCandidate(value);
+    }).catch((cause) => {
+      if (controller.signal.aborted || request !== generationCandidateRequest.current) return;
+      setGenerationCandidate(null);
+      setGenerationExecutionError(`${errorMessage(cause)} 候选指针只用于读取；系统不会因此发起生成。`);
+    }).finally(() => {
+      if (request === generationCandidateRequest.current) setGenerationCandidateLoading(false);
+    });
+    return () => controller.abort();
+  }, [id, user?.id, generationRun?.id, generationExecutionPending?.operation_key, selection.kind, selection.id, located.chapter?.title, searchParams.get("generation_attempt"), searchParams.get("generation_candidate")]);
 
   useEffect(() => {
     if (!mobileDetail) return;
@@ -473,6 +589,7 @@ export default function ChapterPlanningPage() {
     params.set("generation_run", value.id);
     setSearchParams(params, { replace: true });
     setGenerationRun(value);
+    setGenerationExecutionRequiresNewPreflight(false);
     setGenerationRecovered(recovered || value.replayed);
     setGenerationError("");
     setGenerationFeedbackChapterId(null);
@@ -541,11 +658,91 @@ export default function ChapterPlanningPage() {
 
   useEffect(() => {
     if (!id || !user || loadState !== "ready") return;
+    const executionLoaded = loadPendingGenerationExecution(user.id, id);
+    if (executionLoaded.status === "available") {
+      const operation = executionLoaded.operation;
+      setPending(null);
+      setForeignPending(null);
+      setPendingStorageIssue(null);
+      generationExecutionPendingRef.current = operation;
+      setGenerationExecutionPending(operation);
+      setGenerationExecutionError("");
+      const target = planRef.current ? locate(planRef.current, { kind: "chapter", id: operation.chapter_id }) : { chapter: null };
+      if (!target.chapter) {
+        setGenerationExecutionError("生成恢复记录对应的章节当前不存在；已保留原编号并停止新生成。");
+        return;
+      }
+      const params = new URLSearchParams(searchParams);
+      params.set("scope", "chapter");
+      params.set("target", operation.chapter_id);
+      params.set("generation_run", operation.run_id);
+      setSearchParams(params, { replace: true });
+      setMobileDetail(true);
+      const request = ++generationExecutionRequest.current;
+      setGenerationExecutionBusy(true);
+      void Promise.all([
+        api.getGenerationRun(id, operation.run_id),
+        readGenerationAttemptByKey({
+          projectId: id,
+          runId: operation.run_id,
+          chapterId: operation.chapter_id,
+          operationKey: operation.operation_key,
+          contextChecksum: operation.payload.expected_context_checksum,
+          capabilityChecksum: operation.payload.expected_capability_checksum,
+        }),
+      ]).then(async ([savedRun, savedAttempt]) => {
+        if (request !== generationExecutionRequest.current) return;
+        const contractError = generationRunContractError(savedRun, {
+          projectId: id,
+          chapterId: operation.chapter_id,
+          runId: operation.run_id,
+        });
+        if (contractError) throw new Error(contractError);
+        setGenerationRun(savedRun);
+        await acceptGenerationAttempt(savedAttempt, operation, savedRun);
+      }).catch((cause) => {
+        if (request !== generationExecutionRequest.current) return;
+        const safeMissing = cause instanceof ApiError
+          && cause.status === 404
+          && cause.code === "GENERATION_ATTEMPT_NOT_FOUND"
+          && cause.retryable
+          && cause.recommendedAction === "retry_original_execute";
+        setGenerationOriginalRetryAllowed(safeMissing);
+        setGenerationExecutionError(safeMissing
+          ? "服务端明确未找到原生成尝试。如需继续，必须由你显式使用原编号和原载荷重试。"
+          : `${errorMessage(cause)} 已保留原编号，不会自动再次调用模型。`);
+      }).finally(() => {
+        if (request === generationExecutionRequest.current) setGenerationExecutionBusy(false);
+      });
+      return;
+    }
+    if (executionLoaded.status === "corrupt" || executionLoaded.status === "unavailable") {
+      generationExecutionPendingRef.current = null;
+      setGenerationExecutionPending(null);
+      setPendingStorageIssue(executionLoaded.status);
+      setGenerationExecutionError("");
+      setError(executionLoaded.status === "corrupt"
+        ? "检测到损坏或身份不匹配的浏览器恢复记录，已安全停止全部写入。"
+        : "浏览器恢复存储不可用；已安全停止全部写入。");
+      return;
+    }
+    generationExecutionPendingRef.current = null;
+    setGenerationExecutionPending(null);
+    setGenerationAttempt(null);
+    setGenerationCandidate(null);
+    setGenerationExecutionError("");
     const loaded = loadPendingPlanningOperation(user.id, id);
-    if (loaded.status === "missing") { setPending(null); setPendingStorageIssue(null); return; }
+    if (loaded.status === "missing") { setPending(null); setPendingStorageIssue(null); setForeignPending(null); return; }
     if (loaded.status === "foreign") {
       setPending(null);
-      setForeignForeshadowPending(true);
+      setPendingStorageIssue(null);
+      const generationPending = loaded.workspace === "generation_execution"
+        ? loadPendingGenerationExecution(user.id, id)
+        : null;
+      setForeignPending({
+        workspace: loaded.workspace,
+        chapterId: generationPending?.status === "available" ? generationPending.operation.chapter_id : null,
+      });
       return;
     }
     if (loaded.status === "corrupt" || loaded.status === "unavailable") {
@@ -557,6 +754,7 @@ export default function ChapterPlanningPage() {
       return;
     }
     const stored = loaded.operation;
+    setForeignPending(null);
     setPendingStorageIssue(null);
     if (stored.user_id !== user.id || stored.project_id !== id) { setPending(null); return; }
     if ((stored.payload as { operation_key?: unknown }).operation_key !== stored.operation_key) {
@@ -635,6 +833,13 @@ export default function ChapterPlanningPage() {
       (next.kind !== "chapter" || next.id !== pending.target_id)
     ) {
       setNotice("上次生成前检查仍等待确认；请先返回发起章节核对原操作编号。");
+      return;
+    }
+    if (
+      changingScope && generationExecutionPending
+      && (next.kind !== "chapter" || next.id !== generationExecutionPending.chapter_id)
+    ) {
+      setNotice("生成执行仍等待核对；已保持在发起章节，避免把执行收据显示到其他范围。");
       return;
     }
     if (changingScope && !confirmEditorUnload()) return;
@@ -1233,13 +1438,378 @@ export default function ChapterPlanningPage() {
     setGenerationLoadingSaved(false);
     const params = new URLSearchParams(searchParams);
     params.delete("generation_run");
+    params.delete("generation_attempt");
+    params.delete("generation_candidate");
     setSearchParams(params, { replace: true });
     setGenerationRun(null);
+    setGenerationAttempt(null);
+    setGenerationCandidate(null);
+    setGenerationConfirmationOpen(false);
+    setGenerationConfirmationKind(null);
+    setGenerationConfirmationIdentity(null);
+    setGenerationExecutionRequiresNewPreflight(false);
     setGenerationRecovered(false);
     setGenerationError("");
     setGenerationFeedbackChapterId(null);
     setGenerationRecoveryState("idle");
     setNotice("已关闭本页的检查记录视图；服务端耐久记录未被删除。");
+  }
+
+  async function readCandidateForAttempt(
+    attempt: GenerationAttemptResponse,
+    operation: PendingGenerationExecution,
+    runValue: GenerationRunResponse
+  ): Promise<boolean> {
+    if (!id || !user || attempt.status !== "succeeded" || !attempt.candidate_id) return false;
+    if (generationExecutionPendingRef.current && generationExecutionPendingRef.current.operation_key !== operation.operation_key) return false;
+    const chapterLocation = planRef.current
+      ? locate(planRef.current, { kind: "chapter", id: operation.chapter_id })
+      : { chapter: null };
+    if (!chapterLocation.chapter) {
+      setGenerationExecutionError("无法确认生成候选的章节身份；已保留恢复线索且不会重新调用模型。");
+      return false;
+    }
+    const request = ++generationCandidateRequest.current;
+    setGenerationCandidateLoading(true);
+    setGenerationExecutionError("");
+    try {
+      const value = await readGenerationCandidate({
+        projectId: id,
+        runId: operation.run_id,
+        chapterId: operation.chapter_id,
+        attemptId: attempt.id,
+        candidateId: attempt.candidate_id,
+        userId: user.id,
+        chapterTitle: chapterLocation.chapter.title,
+      });
+      if (request !== generationCandidateRequest.current) return false;
+      if (generationExecutionPendingRef.current && generationExecutionPendingRef.current.operation_key !== operation.operation_key) return false;
+      const params = new URLSearchParams(searchParams);
+      params.set("scope", "chapter");
+      params.set("target", operation.chapter_id);
+      params.set("generation_run", runValue.id);
+      params.set("generation_attempt", attempt.id);
+      params.set("generation_candidate", value.id);
+      setSearchParams(params, { replace: true });
+      setGenerationCandidate(value);
+      if (!clearPendingGenerationExecution(user.id, id, operation.operation_key)) {
+        setGenerationExecutionError("候选已经过严格校验，但浏览器无法按原编号清除恢复线索；继续保持禁写。");
+        return false;
+      }
+      generationExecutionPendingRef.current = null;
+      setGenerationExecutionPending(null);
+      setGenerationOriginalRetryAllowed(false);
+      setNotice("生成候选已保存并通过完整性校验；未覆盖原稿，也未自动确认伏笔。");
+      return true;
+    } catch (cause) {
+      if (request !== generationCandidateRequest.current) return false;
+      setGenerationExecutionError(`${errorMessage(cause)} 只会重新读取已保存候选，不会重新调用模型。`);
+      return false;
+    } finally {
+      if (request === generationCandidateRequest.current) setGenerationCandidateLoading(false);
+    }
+  }
+
+  async function acceptGenerationAttempt(
+    value: GenerationAttemptResponse,
+    operation: PendingGenerationExecution,
+    runValue = generationRun
+  ): Promise<void> {
+    if (generationExecutionPendingRef.current && generationExecutionPendingRef.current.operation_key !== operation.operation_key) return;
+    const operationChapter = planRef.current
+      ? locate(planRef.current, { kind: "chapter", id: operation.chapter_id }).chapter
+      : null;
+    if (operationChapter && (selectionRef.current.kind !== "chapter" || selectionRef.current.id !== operation.chapter_id)) return;
+    setGenerationAttempt(value);
+    setGenerationCapability(value.capability);
+    setGenerationOriginalRetryAllowed(false);
+    setGenerationExecutionError("");
+    if (value.status === "succeeded") {
+      if (!runValue) {
+        setGenerationExecutionError("执行已成功，但生成前检查记录尚未读取；只允许继续读取，不会再次生成。");
+        return;
+      }
+      await readCandidateForAttempt(value, operation, runValue);
+    }
+  }
+
+  async function reconcileGenerationExecution(
+    operation: PendingGenerationExecution,
+    request = ++generationExecutionRequest.current
+  ): Promise<void> {
+    if (!id) return;
+    setGenerationExecutionBusy(true);
+    setGenerationOriginalRetryAllowed(false);
+    try {
+      const value = await readGenerationAttemptByKey({
+        projectId: id,
+        runId: operation.run_id,
+        chapterId: operation.chapter_id,
+        operationKey: operation.operation_key,
+        contextChecksum: operation.payload.expected_context_checksum,
+        capabilityChecksum: operation.payload.expected_capability_checksum,
+      });
+      if (request !== generationExecutionRequest.current) return;
+      await acceptGenerationAttempt(value, operation);
+    } catch (cause) {
+      if (request !== generationExecutionRequest.current) return;
+      const safeMissing = cause instanceof ApiError
+        && cause.status === 404
+        && cause.code === "GENERATION_ATTEMPT_NOT_FOUND"
+        && cause.retryable
+        && cause.recommendedAction === "retry_original_execute";
+      setGenerationOriginalRetryAllowed(safeMissing);
+      setGenerationExecutionError(safeMissing
+        ? "服务端明确未找到原生成尝试。如需继续，必须显式使用原编号和原载荷重试。"
+        : `${errorMessage(cause)} 结果仍不确定；可能已被服务商受理并产生费用，系统不会自动重复调用。`);
+    } finally {
+      if (request === generationExecutionRequest.current) setGenerationExecutionBusy(false);
+    }
+  }
+
+  async function executeSavedGeneration(operation: PendingGenerationExecution) {
+    if (!id) return;
+    const request = ++generationExecutionRequest.current;
+    setGenerationExecutionBusy(true);
+    setGenerationOriginalRetryAllowed(false);
+    setGenerationExecutionError("");
+    try {
+      const value = await requestGenerationAttempt(id, operation.run_id, operation.chapter_id, operation.payload);
+      if (request !== generationExecutionRequest.current) return;
+      await acceptGenerationAttempt(value, operation);
+    } catch {
+      if (request !== generationExecutionRequest.current) return;
+      await reconcileGenerationExecution(operation, request);
+    } finally {
+      if (request === generationExecutionRequest.current) setGenerationExecutionBusy(false);
+    }
+  }
+
+  async function openGenerationConfirmation() {
+    if (!id || !generationRun || generationExecutionDisabledReason || generationExecutionBusy) return;
+    const expectedRunId = generationRun.id;
+    const expectedChapterId = generationRun.planning_chapter_id;
+    const request = ++generationExecutionRequest.current;
+    setGenerationExecutionBusy(true);
+    setGenerationExecutionError("");
+    try {
+      const value = await readGenerationCapability(id);
+      if (
+        request !== generationExecutionRequest.current
+        || generationRun?.id !== expectedRunId
+        || selectionRef.current.kind !== "chapter"
+        || selectionRef.current.id !== expectedChapterId
+      ) return;
+      setGenerationCapability(value);
+      setGenerationConfirmationIdentity({
+        runId: generationRun.id,
+        chapterId: generationRun.planning_chapter_id,
+        contextChecksum: generationRun.context_checksum,
+        structureVersion: generationRun.structure_version,
+        assignmentVersion: generationRun.assignment_version,
+        chapterLockVersion: generationRun.chapter_lock_version,
+        operationKey: null,
+      });
+      setGenerationConfirmationKind("new_attempt");
+      setGenerationConfirmationOpen(true);
+    } catch (cause) {
+      if (request !== generationExecutionRequest.current) return;
+      setGenerationCapability(null);
+      setGenerationConfirmationIdentity(null);
+      setGenerationConfirmationKind(null);
+      setGenerationConfirmationOpen(false);
+      setGenerationExecutionError(errorMessage(cause));
+    } finally {
+      if (request === generationExecutionRequest.current) setGenerationExecutionBusy(false);
+    }
+  }
+
+  function cancelGenerationConfirmation() {
+    if (generationExecutionBusy) return;
+    setGenerationConfirmationOpen(false);
+    setGenerationConfirmationKind(null);
+    setGenerationConfirmationIdentity(null);
+  }
+
+  async function confirmGenerationExecution() {
+    const retryingOriginal = generationConfirmationKind === "original_retry"
+      && generationExecutionPending
+      && generationOriginalRetryAllowed
+      && generationConfirmationIdentity?.operationKey === generationExecutionPending.operation_key
+      ? generationExecutionPending
+      : null;
+    const replacingFailed = generationExecutionPending
+      && generationConfirmationKind === "new_attempt"
+      && generationAttempt?.status === "failed"
+      ? generationExecutionPending
+      : null;
+    if (
+      !id || !user || !generationRun || !generationCapability || !generationConfirmationIdentity
+      || !generationConfirmationOpen || !generationConfirmationKind
+      || (generationExecutionPending && !replacingFailed && !retryingOriginal)
+      || generationExecutionBusy || selectionRef.current.kind !== "chapter"
+      || selectionRef.current.id !== generationRun.planning_chapter_id
+    ) return;
+    if (
+      generationStale
+      || !!generationDisabledReason
+      || generationConfirmationIdentity.runId !== generationRun.id
+      || generationConfirmationIdentity.chapterId !== generationRun.planning_chapter_id
+      || generationConfirmationIdentity.contextChecksum !== generationRun.context_checksum
+      || generationConfirmationIdentity.structureVersion !== generationRun.structure_version
+      || generationConfirmationIdentity.assignmentVersion !== generationRun.assignment_version
+      || generationConfirmationIdentity.chapterLockVersion !== generationRun.chapter_lock_version
+      || (retryingOriginal && generationCapability.capability_checksum !== retryingOriginal.payload.expected_capability_checksum)
+    ) {
+      setGenerationConfirmationOpen(false);
+      setGenerationConfirmationIdentity(null);
+      setGenerationConfirmationKind(null);
+      setGenerationExecutionError("确认期间规划、设定分配或章节版本已变化；本次模型请求未发送，请重新检查上下文。");
+      return;
+    }
+    if (retryingOriginal) {
+      setGenerationConfirmationOpen(false);
+      setGenerationConfirmationIdentity(null);
+      setGenerationConfirmationKind(null);
+      await executeSavedGeneration(retryingOriginal);
+      return;
+    }
+    const operationKey = createGenerationExecutionKey();
+    const payload = {
+      operation_key: operationKey,
+      expected_context_checksum: generationRun.context_checksum,
+      expected_capability_checksum: generationCapability.capability_checksum,
+      confirm_model_call: true as const,
+    };
+    const operation: PendingGenerationExecution = {
+      schema_version: 3,
+      workspace: "generation_execution",
+      user_id: user.id,
+      project_id: id,
+      chapter_id: generationRun.planning_chapter_id,
+      run_id: generationRun.id,
+      operation_key: operationKey,
+      payload,
+      created_at: new Date().toISOString(),
+    };
+    const pendingSaved = replacingFailed
+      ? replaceFailedGenerationPending(replacingFailed, operation)
+      : savePendingGenerationExecution(operation);
+    if (!pendingSaved) {
+      setPendingStorageIssue("unavailable");
+      setGenerationExecutionError("浏览器无法原子保存新生成恢复信息；原失败线索保持不变，本次模型请求未发送。");
+      return;
+    }
+    generationExecutionPendingRef.current = operation;
+    setGenerationExecutionPending(operation);
+    setGenerationAttempt(null);
+    setGenerationCandidate(null);
+    setGenerationExecutionRequiresNewPreflight(false);
+    setGenerationConfirmationOpen(false);
+    setGenerationConfirmationIdentity(null);
+    setGenerationConfirmationKind(null);
+    await executeSavedGeneration(operation);
+  }
+
+  async function retryOriginalGenerationExecution() {
+    if (!id || !generationExecutionPending || !generationOriginalRetryAllowed || generationExecutionBusy) return;
+    if (!generationRun) {
+      setGenerationExecutionError("原章节或上下文检查记录当前不可用，无法安全确认付费重试；本次请求未发送。请恢复章节后重新检查上下文。");
+      return;
+    }
+    const operation = generationExecutionPending;
+    const request = ++generationExecutionRequest.current;
+    setGenerationExecutionBusy(true);
+    setGenerationExecutionError("");
+    try {
+      const value = await readGenerationCapability(id);
+      if (
+        request !== generationExecutionRequest.current
+        || generationExecutionPendingRef.current?.operation_key !== operation.operation_key
+        || generationRun.id !== operation.run_id
+        || generationRun.context_checksum !== operation.payload.expected_context_checksum
+      ) return;
+      if (value.capability_checksum !== operation.payload.expected_capability_checksum) {
+        if (user && clearPendingGenerationExecution(user.id, id, operation.operation_key)) {
+          generationExecutionPendingRef.current = null;
+          setGenerationExecutionPending(null);
+          setGenerationAttempt(null);
+          setGenerationOriginalRetryAllowed(false);
+          setGenerationExecutionRequiresNewPreflight(true);
+          setGenerationExecutionError("模型能力信息已变化，原确认已失效；本次请求未发送。请重新检查最新上下文后再确认生成。");
+        } else {
+          setGenerationExecutionError("模型能力信息已变化，且原恢复线索无法安全清除；本次请求未发送。请刷新后核对。");
+        }
+        return;
+      }
+      setGenerationCapability(value);
+      setGenerationConfirmationIdentity({
+        runId: generationRun.id,
+        chapterId: generationRun.planning_chapter_id,
+        contextChecksum: generationRun.context_checksum,
+        structureVersion: generationRun.structure_version,
+        assignmentVersion: generationRun.assignment_version,
+        chapterLockVersion: generationRun.chapter_lock_version,
+        operationKey: operation.operation_key,
+      });
+      setGenerationConfirmationKind("original_retry");
+      setGenerationConfirmationOpen(true);
+    } catch (cause) {
+      if (request === generationExecutionRequest.current) setGenerationExecutionError(`${errorMessage(cause)} 原编号请求未发送。`);
+    } finally {
+      if (request === generationExecutionRequest.current) setGenerationExecutionBusy(false);
+    }
+  }
+
+  async function checkGenerationExecution() {
+    if (!generationExecutionPending || generationExecutionBusy) return;
+    await reconcileGenerationExecution(generationExecutionPending);
+  }
+
+  async function startNewGenerationAfterFailure() {
+    if (
+      !id || !user || !generationRun || !generationExecutionPending
+      || generationAttempt?.status !== "failed" || generationExecutionBusy
+      || generationStale || located.chapter?.status !== "active" || located.part?.status !== "active"
+    ) return;
+    const expectedRun = generationRun;
+    const request = ++generationExecutionRequest.current;
+    setGenerationExecutionBusy(true);
+    setGenerationExecutionError("");
+    try {
+      const value = await readGenerationCapability(id);
+      if (
+        request !== generationExecutionRequest.current
+        || generationStale
+        || generationRun?.id !== expectedRun.id
+        || selectionRef.current.kind !== "chapter"
+        || selectionRef.current.id !== expectedRun.planning_chapter_id
+      ) {
+        setGenerationExecutionError("重新确认前上下文已变化；本次模型请求未发送。");
+        return;
+      }
+      setGenerationCapability(value);
+      setGenerationConfirmationIdentity({
+        runId: expectedRun.id,
+        chapterId: expectedRun.planning_chapter_id,
+        contextChecksum: expectedRun.context_checksum,
+        structureVersion: expectedRun.structure_version,
+        assignmentVersion: expectedRun.assignment_version,
+        chapterLockVersion: expectedRun.chapter_lock_version,
+        operationKey: null,
+      });
+      setGenerationConfirmationKind("new_attempt");
+      setGenerationConfirmationOpen(true);
+    } catch (cause) {
+      if (request === generationExecutionRequest.current) setGenerationExecutionError(errorMessage(cause));
+    } finally {
+      if (request === generationExecutionRequest.current) setGenerationExecutionBusy(false);
+    }
+  }
+
+  async function rereadGenerationCandidate() {
+    if (!generationExecutionPending || !generationAttempt || !generationRun) return;
+    await readCandidateForAttempt(generationAttempt, generationExecutionPending, generationRun);
   }
 
   function returnToPendingGenerationChapter() {
@@ -1301,7 +1871,8 @@ export default function ChapterPlanningPage() {
       )}
       {assignmentConflict && <div ref={assignmentConflictRef} className="planning-notice is-error" role="alert" tabIndex={-1}><span>{assignmentError || "分配状态已更新，请核对服务器最新结果。"}</span><button className="btn btn-secondary" onClick={() => { setAssignmentConflict(false); setAssignmentError(""); setNotice("已核对服务器最新分配，可以继续操作。"); }}>已核对最新分配</button></div>}
       {maintenance && <div className="planning-notice" role="status">项目资料正在维护；已保留当前只读内容并暂停写入。</div>}
-      {foreignForeshadowPending && <div className="planning-notice" role="alert"><span>伏笔管理中还有结果未确认的写入；章节规划写入已暂停。</span><Link className="btn btn-secondary" to={`/project/${id}/plan/foreshadows`}>前往伏笔管理核对</Link></div>}
+      {foreignPending?.workspace === "foreshadow" && <div className="planning-notice" role="alert"><span>伏笔管理中还有结果未确认的写入；章节规划写入已暂停。</span><Link className="btn btn-secondary" to={`/project/${id}/plan/foreshadows`}>前往伏笔管理核对</Link></div>}
+      {foreignPending?.workspace === "generation_execution" && <div className="planning-notice" role="alert"><span>生成候选中还有结果未确认的模型调用；章节规划写入已暂停，且不会自动重复生成。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${id}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${id}/plan/chapters`}>返回发起章节核对生成</Link></div>}
       {pending && pending.action !== "generation_prepare" && (
         <div className="planning-notice" role="alert">
           <span>检测到结果尚未确认的操作，已暂停新的写入。</span>
@@ -1329,6 +1900,15 @@ export default function ChapterPlanningPage() {
           {(selection.kind !== "chapter" || selection.id !== pending.target_id) && plan && locate(plan, { kind: "chapter", id: pending.target_id! }).chapter && (
             <button className="btn btn-secondary" onClick={returnToPendingGenerationChapter}>返回发起章节核对</button>
           )}
+        </div>
+      )}
+      {generationExecutionPending && (!located.chapter || !located.part) && (
+        <div className="planning-notice is-error" role="alert">
+          <span><strong>生成恢复章节当前不可用</strong><small className="planning-notice__hint">{generationExecutionError || "已保留原操作编号。只允许继续核对服务端状态，不会创建新尝试。"}</small></span>
+          <span className="planning-notice__actions">
+            <button className="btn btn-secondary" disabled={generationExecutionBusy} onClick={() => void checkGenerationExecution()}>按原编号核对生成状态</button>
+            {generationOriginalRetryAllowed && <small className="planning-notice__hint">服务端确认未找到原尝试，但原章节不可用，不能安全完成付费重试确认；请先恢复章节并重新检查上下文。</small>}
+          </span>
         </div>
       )}
 
@@ -1384,7 +1964,8 @@ export default function ChapterPlanningPage() {
                   }}
                   onMove={(targetPartId) => moveChapterTo(located.chapter!, targetPartId)}
                 />
-                {located.chapter.status === "active" && located.part.status === "active" && (
+                {(located.chapter.status === "active" && located.part.status === "active"
+                  || !!generationExecutionPending || !!generationAttempt || !!generationCandidate) && (
                   <PlanningGenerationPreflight
                     plan={plan}
                     part={located.part}
@@ -1401,6 +1982,18 @@ export default function ChapterPlanningPage() {
                     focusResultToken={generationFocusToken}
                     focusFeedbackToken={generationFeedbackFocusToken}
                     hasPendingRecovery={pending?.action === "generation_prepare"}
+                    capability={generationCapability}
+                    attempt={generationAttempt}
+                    candidate={generationCandidate}
+                    executionBusy={generationExecutionBusy}
+                    candidateLoading={generationCandidateLoading}
+                    executionError={generationExecutionError}
+                    executionDisabledReason={generationExecutionDisabledReason}
+                    runActionsDisabledReason={generationRunActionsDisabledReason}
+                    confirmationOpen={generationConfirmationOpen}
+                    confirmationUsesOriginalRequest={generationConfirmationKind === "original_retry"}
+                    originalRetryAllowed={generationOriginalRetryAllowed}
+                    newAttemptDisabled={generationStale || located.chapter.status !== "active" || located.part.status !== "active" || busy || generationBusy || generationExecutionBusy}
                     onPrepare={() => void executeGenerationPrepare()}
                     onCheckPending={() => {
                       if (pending?.action === "generation_prepare") void reconcileGenerationPending(pending as unknown as PendingPlanningOperation<GenerationRunPrepareInput>, requestGeneration.current, true);
@@ -1409,6 +2002,13 @@ export default function ChapterPlanningPage() {
                     onFocusAssignments={focusPlanningAssignments}
                     onClearSavedPointer={clearGenerationRunPointer}
                     onAbandonPending={abandonGenerationPending}
+                    onOpenGenerationConfirmation={() => void openGenerationConfirmation()}
+                    onCancelGenerationConfirmation={cancelGenerationConfirmation}
+                    onConfirmGeneration={() => void confirmGenerationExecution()}
+                    onCheckGenerationAttempt={() => void checkGenerationExecution()}
+                    onReadGenerationCandidate={() => void rereadGenerationCandidate()}
+                    onRetryOriginalGeneration={() => void retryOriginalGenerationExecution()}
+                    onStartNewAfterFailure={() => void startNewGenerationAfterFailure()}
                   />
                 )}
               </>

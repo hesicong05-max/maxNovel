@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef } from "react";
-import type { GenerationRunResponse } from "@/types/generation";
+import type {
+  GenerationAttemptResponse,
+  GenerationCandidateResponse,
+  GenerationCapabilityResponse,
+  GenerationRunResponse,
+} from "@/types/generation";
 import type { NovelPlan, PlanningChapter, PlanningPart } from "@/types/planning";
 
 export type GenerationRecoveryState =
@@ -26,12 +31,31 @@ interface Props {
   focusResultToken: number;
   focusFeedbackToken: number;
   hasPendingRecovery: boolean;
+  capability: GenerationCapabilityResponse | null;
+  attempt: GenerationAttemptResponse | null;
+  candidate: GenerationCandidateResponse | null;
+  executionBusy: boolean;
+  candidateLoading: boolean;
+  executionError: string;
+  executionDisabledReason: string;
+  runActionsDisabledReason: string;
+  confirmationOpen: boolean;
+  confirmationUsesOriginalRequest: boolean;
+  originalRetryAllowed: boolean;
+  newAttemptDisabled: boolean;
   onPrepare: () => void;
   onCheckPending: () => void;
   onRetryOriginal: () => void;
   onFocusAssignments: () => void;
   onClearSavedPointer: () => void;
   onAbandonPending: () => void;
+  onOpenGenerationConfirmation: () => void;
+  onCancelGenerationConfirmation: () => void;
+  onConfirmGeneration: () => void;
+  onCheckGenerationAttempt: () => void;
+  onReadGenerationCandidate: () => void;
+  onRetryOriginalGeneration: () => void;
+  onStartNewAfterFailure: () => void;
 }
 
 const warningText: Record<string, string> = {
@@ -43,6 +67,14 @@ function scopeLabel(scopeType: "novel" | "part" | "chapter", title: string): str
   if (scopeType === "novel") return "继承自整部小说";
   if (scopeType === "part") return `继承自篇章《${title}》`;
   return "本章节直接分配";
+}
+
+function providerLabel(providerName: string): string {
+  const known: Record<string, string> = {
+    openai: "OpenAI 兼容服务",
+    deepseek: "DeepSeek",
+  };
+  return known[providerName.toLowerCase()] ?? "已配置的模型服务";
 }
 
 function JsonSnapshot({ value }: { value: Record<string, unknown> }) {
@@ -76,21 +108,95 @@ export default function PlanningGenerationPreflight({
   focusResultToken,
   focusFeedbackToken,
   hasPendingRecovery,
+  capability,
+  attempt,
+  candidate,
+  executionBusy,
+  candidateLoading,
+  executionError,
+  executionDisabledReason,
+  runActionsDisabledReason,
+  confirmationOpen,
+  confirmationUsesOriginalRequest,
+  originalRetryAllowed,
+  newAttemptDisabled,
   onPrepare,
   onCheckPending,
   onRetryOriginal,
   onFocusAssignments,
   onClearSavedPointer,
   onAbandonPending,
+  onOpenGenerationConfirmation,
+  onCancelGenerationConfirmation,
+  onConfirmGeneration,
+  onCheckGenerationAttempt,
+  onReadGenerationCandidate,
+  onRetryOriginalGeneration,
+  onStartNewAfterFailure,
 }: Props) {
   const resultHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const feedbackRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const confirmationTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const cancelConfirmationRef = useRef<HTMLButtonElement | null>(null);
+  const executionAlertRef = useRef<HTMLDivElement | null>(null);
+  const candidateHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const previousCandidateId = useRef<string | null>(null);
+  const previousTerminalKey = useRef<string | null>(null);
   useEffect(() => {
     if (focusResultToken > 0) resultHeadingRef.current?.focus();
   }, [focusResultToken]);
   useEffect(() => {
     if (focusFeedbackToken > 0) feedbackRef.current?.focus();
   }, [focusFeedbackToken]);
+  useEffect(() => {
+    if (!confirmationOpen) return;
+    const returnTarget = confirmationTriggerRef.current;
+    window.setTimeout(() => cancelConfirmationRef.current?.focus(), 0);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCancelGenerationConfirmation();
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"
+      ));
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      window.setTimeout(() => returnTarget?.focus(), 0);
+    };
+  }, [confirmationOpen, onCancelGenerationConfirmation]);
+  useEffect(() => {
+    if (candidate && candidate.id !== previousCandidateId.current) {
+      previousCandidateId.current = candidate.id;
+      window.setTimeout(() => candidateHeadingRef.current?.focus(), 0);
+    }
+  }, [candidate?.id]);
+  useEffect(() => {
+    const terminalKey = executionError
+      ? `error:${executionError}`
+      : attempt && (attempt.status === "failed" || attempt.status === "outcome_unknown")
+        ? `${attempt.id}:${attempt.status}:${attempt.lock_version}`
+        : null;
+    if (terminalKey && terminalKey !== previousTerminalKey.current) {
+      previousTerminalKey.current = terminalKey;
+      window.setTimeout(() => executionAlertRef.current?.focus(), 0);
+    }
+  }, [executionError, attempt?.id, attempt?.status, attempt?.lock_version]);
 
   const elementNames = useMemo(() => new Map(
     run?.context_manifest.elements.map((item) => [item.element_id, item.version.name]) ?? []
@@ -100,10 +206,10 @@ export default function PlanningGenerationPreflight({
     <section className="planning-generation" aria-busy={busy || loadingSaved}>
       <header className="planning-generation__heading">
         <div>
-          <h3>生成前上下文检查</h3>
-          <p>这里只检查并保存本章将使用的上下文。本操作不调用 AI、不产生模型费用，也不会创建或修改章节正文。</p>
+          <h3>第一步：生成前上下文检查</h3>
+          <p>第一步只检查并保存本章将使用的上下文，不调用 AI、不产生模型费用，也不会创建或修改章节正文。下方“生成候选正文”是另一个需要单独付费确认的步骤。</p>
         </div>
-        <span className="planning-generation__zero-cost">零 AI · 零费用</span>
+        <span className="planning-generation__zero-cost">上下文检查：零 AI · 零费用</span>
       </header>
 
       <div className="planning-generation__chapter">
@@ -158,15 +264,14 @@ export default function PlanningGenerationPreflight({
             {stale && <strong className="planning-generation__stale">基于旧版本</strong>}
           </header>
 
-          <div className="planning-generation__guarantees" aria-label="本次检查边界">
-            <span>AI 未调用</span><span>模型费用：无</span><span>正文：未创建或修改</span><span>状态：仅检查</span>
+          <div className="planning-generation__guarantees" aria-label="本次上下文检查收据边界">
+            <span>本次检查：AI 未调用</span><span>本次检查费用：无</span><span>本次检查：正文未修改</span><span>状态：仅检查</span>
           </div>
           {stale && <div className="planning-generation__warning" role="status">当前规划、章节或设定分配已经变化；此处保留历史快照供核对，请按最新资料重新检查。</div>}
 
           <dl className="planning-generation__receipt">
             <div><dt>记录编号</dt><dd>{run.id}</dd></div>
             <div><dt>记录时间</dt><dd>{new Date(run.created_at).toLocaleString()}</dd></div>
-            <div><dt>上下文校验值</dt><dd>{run.context_checksum}</dd></div>
             <div><dt>上下文大小</dt><dd>{run.context_size_bytes.toLocaleString()} / 65,536 字节</dd></div>
             <div><dt>结构 / 分配 / 章节版本</dt><dd>{run.structure_version} / {run.assignment_version} / {run.chapter_lock_version}</dd></div>
           </dl>
@@ -204,10 +309,80 @@ export default function PlanningGenerationPreflight({
           </details>
 
           <p className="planning-generation__boundary">若后续另行启动生成，这些内容才会成为生成上下文；当前记录本身不是正文，也不是生成任务。本次不安排伏笔埋入、强化或回收。</p>
+          <section className="planning-generation__execution" aria-labelledby={`generation-execution-${run.id}`} aria-busy={executionBusy || candidateLoading}>
+            <header>
+              <div>
+                <h5 id={`generation-execution-${run.id}`}>生成候选正文</h5>
+                <p>生成结果只保存为独立候选，不会覆盖现有原稿，也不会自动确认任何伏笔状态。</p>
+              </div>
+              <span className="planning-generation__possible-cost">可能调用模型并产生费用</span>
+            </header>
+
+            {executionError && <div ref={executionAlertRef} tabIndex={-1} className="planning-generation__error" role="alert"><strong>生成状态需要处理</strong><span>{executionError}</span></div>}
+            {originalRetryAllowed && <div className="planning-generation__warning" role="alert"><span>只能使用原操作编号和完全相同的确认载荷重试；系统不会自动发送。</span><button className="btn btn-secondary" disabled={executionBusy} onClick={onRetryOriginalGeneration}>使用原编号和原载荷重试</button></div>}
+            {(executionBusy || candidateLoading) && <p className="planning-generation__status" role="status">{candidateLoading ? "正在校验并读取生成候选…" : "正在核对生成执行状态…"}</p>}
+
+            {!attempt && !candidate && (
+              <div className="planning-generation__actions">
+                <button ref={confirmationTriggerRef} className="btn btn-primary" disabled={!!executionDisabledReason || executionBusy} onClick={onOpenGenerationConfirmation}>查看模型信息并确认生成</button>
+                {executionDisabledReason && <p role="status">{executionDisabledReason}</p>}
+              </div>
+            )}
+
+            {attempt && !candidate && (
+              <div className="planning-generation__attempt">
+                <dl className="planning-generation__receipt">
+                  <div><dt>执行状态</dt><dd>{attempt.status === "reserved" ? "已预留，尚未确认结果" : attempt.status === "calling" ? "模型调用中" : attempt.status === "failed" ? "本次生成失败" : attempt.status === "outcome_unknown" ? "调用结果未知" : "候选已生成，等待读取"}</dd></div>
+                  <div><dt>模型</dt><dd>{providerLabel(attempt.capability.provider_name)} / {attempt.model_name}</dd></div>
+                  <div><dt>费用影响</dt><dd>{attempt.billing_effect === "possible" ? "可能已产生模型费用" : "未调用模型、无模型费用"}</dd></div>
+                  <div><dt>用量</dt><dd>{attempt.usage.status === "reported" ? `输入 ${attempt.usage.input_tokens} / 输出 ${attempt.usage.output_tokens} / 合计 ${attempt.usage.total_tokens} tokens` : attempt.usage.status === "unknown" ? "暂时未知，不能按 0 展示" : "服务商未返回，不能按 0 展示"}</dd></div>
+                </dl>
+                {attempt.error && <div ref={executionAlertRef} tabIndex={-1} className="planning-generation__error" role="alert"><strong>{attempt.status === "outcome_unknown" ? "服务端无法确认生成结果" : "生成尝试失败"}</strong><span>{attempt.error.message}</span></div>}
+                {(attempt.status === "reserved" || attempt.status === "calling" || attempt.status === "outcome_unknown") && <div className="planning-generation__warning" role={attempt.status === "outcome_unknown" ? "alert" : "status"}><span>{attempt.status === "outcome_unknown" ? "本次调用可能已被服务商受理并产生费用，但服务端暂时无法确认是否完成。系统不会再次发送生成请求，以避免重复生成或重复扣费。" : "系统只会按原操作编号读取状态，不会再次发送生成请求。"}</span><button className="btn btn-secondary" disabled={executionBusy} onClick={onCheckGenerationAttempt}>按原编号核对状态</button></div>}
+                {attempt.status === "failed" && <div className="planning-generation__actions"><button className="btn btn-secondary" disabled={executionBusy || newAttemptDisabled} onClick={onStartNewAfterFailure}>重新获取模型信息并确认新尝试</button><p>{attempt.ai_invoked ? "本次已进入模型调用，可能产生费用。" : "本次在模型调用前失败，没有模型费用。"} 新尝试会使用新的操作编号；不会复用失败请求。{newAttemptDisabled ? " 当前章节或上下文不允许开始新尝试。" : ""}</p></div>}
+                {attempt.status === "succeeded" && <div className="planning-generation__warning" role="alert"><span>服务端已生成候选，但候选内容尚未完成严格校验。只允许重新读取候选，不会再次请求模型。</span><button className="btn btn-secondary" disabled={candidateLoading} onClick={onReadGenerationCandidate}>重新读取生成候选</button></div>}
+              </div>
+            )}
+
+            {candidate && (
+              <article className="planning-generation__candidate">
+                <header><div><h6 ref={candidateHeadingRef} tabIndex={-1}>候选正文已就绪：{candidate.title}</h6><span>独立候选版本 {candidate.version_no} · {candidate.word_count} 字词</span></div><strong>未覆盖原稿</strong></header>
+                <pre tabIndex={0} aria-label="候选正文内容">{candidate.content}</pre>
+                <dl className="planning-generation__receipt">
+                  <div><dt>候选编号</dt><dd>{candidate.id}</dd></div>
+                  <div><dt>模型用量</dt><dd>{!attempt ? "请以生成时的执行收据为准" : attempt.usage.status === "reported" ? `输入 ${attempt.usage.input_tokens} / 输出 ${attempt.usage.output_tokens} / 合计 ${attempt.usage.total_tokens} tokens` : attempt.usage.status === "unknown" ? "用量未知" : "服务商未返回用量"}</dd></div>
+                </dl>
+              </article>
+            )}
+          </section>
           <div className="planning-generation__actions">
-            <button className="btn btn-primary" disabled={busy || disabled} onClick={onPrepare}>{busy ? "正在检查…" : stale ? "重新检查当前上下文" : "再次检查当前上下文"}</button>
-            <button className="btn btn-secondary" disabled={busy} onClick={hasPendingRecovery ? onAbandonPending : onClearSavedPointer}>{hasPendingRecovery ? "处理未清除的恢复线索" : "关闭这条记录"}</button>
-            {disabledReason && <p role="status">{disabledReason}</p>}
+            <button className="btn btn-primary" disabled={busy || disabled || !!runActionsDisabledReason} onClick={onPrepare}>{busy ? "正在检查…" : stale ? "重新检查当前上下文" : "再次检查当前上下文"}</button>
+            <button className="btn btn-secondary" disabled={busy || !!runActionsDisabledReason} onClick={hasPendingRecovery ? onAbandonPending : onClearSavedPointer}>{hasPendingRecovery ? "处理未清除的恢复线索" : "关闭这条记录"}</button>
+            {(runActionsDisabledReason || disabledReason) && <p role="status">{runActionsDisabledReason || disabledReason}</p>}
+          </div>
+        </div>
+      )}
+
+      {confirmationOpen && capability && (
+        <div className="planning-generation-confirm-overlay" role="presentation">
+          <div ref={dialogRef} className="planning-generation-confirm" role="alertdialog" aria-modal="true" aria-labelledby="generation-confirm-title" aria-describedby="generation-confirm-description">
+            <h4 id="generation-confirm-title">确认调用模型生成候选</h4>
+            <p id="generation-confirm-description">{confirmationUsesOriginalRequest ? "再次确认后才会使用原操作编号和原载荷重试一次模型请求。" : "确认后将发送一次模型请求。"} 请求可能产生费用；网络中断时系统只核对原操作编号，不会自动重复调用。</p>
+            <dl className="planning-generation__receipt">
+              <div><dt>服务商 / 模型</dt><dd>{providerLabel(capability.provider_name)} / {capability.model_name}</dd></div>
+              <div><dt>最大输出</dt><dd>{capability.max_output_tokens.toLocaleString()} tokens</dd></div>
+              <div><dt>输入上限</dt><dd>服务商未提供，当前不可核实</dd></div>
+              <div><dt>价格</dt><dd>当前不可核实；不能承诺具体金额，最终以服务商账单为准</dd></div>
+            </dl>
+            <ul>
+              <li>结果保存为独立候选，不覆盖任何现有正文。</li>
+              <li>不会自动新增或确认伏笔、世界观事实和人物状态。</li>
+              <li>结果仍需人工审阅；模型调用可能产生费用。</li>
+            </ul>
+            <div className="planning-generation__actions">
+              <button ref={cancelConfirmationRef} className="btn btn-secondary" disabled={executionBusy} onClick={onCancelGenerationConfirmation}>取消，暂不生成</button>
+              <button className="btn btn-primary" disabled={executionBusy} onClick={onConfirmGeneration}>{executionBusy ? "正在提交…" : confirmationUsesOriginalRequest ? "确认并使用原编号重试" : "确认并生成一次候选"}</button>
+            </div>
           </div>
         </div>
       )}

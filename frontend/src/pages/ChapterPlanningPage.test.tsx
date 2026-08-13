@@ -178,6 +178,30 @@ describe("ChapterPlanningPage", () => {
     expect(screen.getByRole("link", { name: "前往伏笔管理核对" })).toHaveAttribute("href", "/project/project-1/plan/foreshadows");
   });
 
+  it("fails closed instead of treating a malformed generation execution as foreshadow work", async () => {
+    sessionStorage.setItem("novel_pending_planning_operation_v1:user-1:project-1", JSON.stringify({
+      schema_version: 3,
+      workspace: "generation_execution",
+      user_id: "user-1",
+      project_id: "project-1",
+      chapter_id: "c".repeat(32),
+      run_id: "r".repeat(32),
+      operation_key: "generation:execute:pending123",
+      payload: {
+        operation_key: "generation:execute:pending123",
+        expected_context_checksum: "a".repeat(64),
+        expected_capability_checksum: "b".repeat(64),
+        confirm_model_call: true,
+      },
+      created_at: "2026-08-13T08:00:00Z",
+    }));
+    renderPage();
+    expect(await screen.findByText(/损坏或身份不匹配的浏览器恢复记录/)).toBeInTheDocument();
+    expect(screen.queryByText(/伏笔管理中还有结果未确认/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "确认清除损坏恢复记录" })).toBeInTheDocument();
+  });
+
   it("keeps historical planning projects on the safe compatibility exit", async () => {
     renderPage({ getPlanning: vi.fn().mockRejectedValue(new ApiError(409, {
       detail: "检测到历史章节资料。",
