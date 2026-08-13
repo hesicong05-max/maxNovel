@@ -27,7 +27,7 @@ export interface PendingForeshadowOperation<T extends ForeshadowWritePayload = F
 export type PendingForeshadowLoad =
   | { status: "missing" }
   | { status: "available"; operation: PendingForeshadowOperation }
-  | { status: "foreign"; workspace: "planning" }
+  | { status: "foreign"; workspace: "planning" | "generation_execution" }
   | { status: "corrupt" }
   | { status: "unavailable" };
 
@@ -132,18 +132,13 @@ export function createForeshadowOperationKey(type: ForeshadowOperationType): str
 }
 
 export function savePendingForeshadowOperation<T extends ForeshadowWritePayload>(operation: PendingForeshadowOperation<T>): boolean {
+  if (!isPendingForeshadowOperation(operation, operation.user_id, operation.project_id)) return false;
   try {
     const key = pendingProjectOperationKey(operation.user_id, operation.project_id);
+    const serialized = JSON.stringify(operation);
     const existing = sessionStorage.getItem(key);
-    if (existing) {
-      try {
-        const parsed = JSON.parse(existing) as { operation_key?: unknown };
-        if (parsed.operation_key !== operation.operation_key) return false;
-      } catch {
-        return false;
-      }
-    }
-    sessionStorage.setItem(key, JSON.stringify(operation));
+    if (existing !== null) return existing === serialized;
+    sessionStorage.setItem(key, serialized);
     return true;
   } catch {
     return false;
@@ -161,6 +156,9 @@ export function loadPendingForeshadowOperation(userId: string, projectId: string
   try {
     const value = JSON.parse(raw) as { schema_version?: unknown; workspace?: unknown };
     if (value.schema_version === 1 && value.workspace === undefined) return { status: "foreign", workspace: "planning" };
+    if (value.schema_version === 3 && value.workspace === "generation_execution") {
+      return { status: "foreign", workspace: "generation_execution" };
+    }
     if (!isPendingForeshadowOperation(value, userId, projectId)) return { status: "corrupt" };
     return { status: "available", operation: value };
   } catch {

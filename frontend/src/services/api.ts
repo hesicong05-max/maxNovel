@@ -67,6 +67,7 @@ import type {
   LoreTypesResponse,
 } from "@/types/lore";
 import type {
+  GenerationAttemptExecuteInput,
   GenerationRunPrepareInput,
   GenerationRunResponse,
 } from "@/types/generation";
@@ -657,6 +658,35 @@ export const api = {
     signal?: AbortSignal
   ) => fetchJSON<GenerationRunResponse>(
     `/projects/${encodeURIComponent(projectId)}/planning/generation-runs/${encodeURIComponent(runId)}`,
+    { signal }
+  ),
+  getGenerationCapability: (projectId: string, signal?: AbortSignal) =>
+    fetchJSON<unknown>(
+      `/projects/${encodeURIComponent(projectId)}/planning/generation-capabilities/current`,
+      { signal }
+    ),
+  executeGenerationAttempt: (
+    projectId: string,
+    runId: string,
+    data: GenerationAttemptExecuteInput
+  ) => fetchJSON<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/planning/generation-runs/${encodeURIComponent(runId)}/attempts`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
+  getGenerationAttemptByKey: (
+    projectId: string,
+    operationKey: string,
+    signal?: AbortSignal
+  ) => fetchJSON<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/planning/generation-attempts/by-key/${encodeURIComponent(operationKey)}`,
+    { signal }
+  ),
+  getGenerationCandidate: (
+    projectId: string,
+    candidateId: string,
+    signal?: AbortSignal
+  ) => fetchJSON<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/planning/generation-candidates/${encodeURIComponent(candidateId)}`,
     { signal }
   ),
   createPlanningPart: (projectId: string, data: PlanningPartCreateInput) =>

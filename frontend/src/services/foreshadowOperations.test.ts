@@ -58,6 +58,30 @@ describe("foreshadow pending operations", () => {
     expect(loadPendingForeshadowOperation("user-1", "project-1")).toEqual({ status: "missing" });
   });
 
+  it("recognizes generation v3 as foreign and never overwrites it", () => {
+    const key = "novel_pending_planning_operation_v1:user-1:project-1";
+    const generation = {
+      schema_version: 3,
+      workspace: "generation_execution",
+      operation_key: "generation:execute:12345678",
+    };
+    sessionStorage.setItem(key, JSON.stringify(generation));
+    expect(loadPendingForeshadowOperation("user-1", "project-1")).toEqual({
+      status: "foreign",
+      workspace: "generation_execution",
+    });
+    expect(savePendingForeshadowOperation(pending())).toBe(false);
+    expect(JSON.parse(sessionStorage.getItem(key)!)).toEqual(generation);
+
+    const planning = {
+      schema_version: 1,
+      operation_key: "planning:write:12345678",
+    };
+    sessionStorage.setItem(key, JSON.stringify(planning));
+    expect(savePendingForeshadowOperation(pending())).toBe(false);
+    expect(JSON.parse(sessionStorage.getItem(key)!)).toEqual(planning);
+  });
+
   it("reports unavailable storage and requires secure random keys", () => {
     vi.spyOn(Object.getPrototypeOf(sessionStorage) as Storage, "getItem").mockImplementation(() => { throw new Error("blocked"); });
     expect(loadPendingForeshadowOperation("user-1", "project-1")).toEqual({ status: "unavailable" });
