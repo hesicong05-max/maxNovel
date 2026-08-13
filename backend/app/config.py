@@ -2,6 +2,7 @@ import os
 import re
 import warnings
 from pathlib import Path
+from typing import Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -10,7 +11,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     # App
     APP_NAME: str = "满分小说 AI 小说创作平台"
+    APP_ENVIRONMENT: Literal["production", "development", "test", "demo"] = (
+        "production"
+    )
     DEBUG: bool = False
+    DEMO_FIXTURE_ENABLED: bool = False
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 

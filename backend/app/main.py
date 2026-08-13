@@ -16,6 +16,7 @@ from app.api import (
     auth,
     chapters,
     community,
+    demo,
     export,
     foreshadows,
     generation,
@@ -227,6 +228,7 @@ async def value_error_handler(request: Request, exc: ValueError):
 # ---- Routers ----
 
 app.include_router(auth.router)
+app.include_router(demo.router)
 app.include_router(projects.router)
 app.include_router(worldview.router)
 app.include_router(lore.router)
