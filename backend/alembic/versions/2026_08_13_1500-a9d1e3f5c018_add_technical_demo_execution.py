@@ -146,7 +146,7 @@ def upgrade() -> None:
             ["project_id", "source_technical_demo_execution_id"],
         )
         batch_op.create_index(
-            "ix_chapter_generation_candidates_source_technical_demo_execution_id",
+            "ix_gen_candidates_demo_source",
             ["source_technical_demo_execution_id"],
         )
 
@@ -168,9 +168,7 @@ def downgrade() -> None:
         )
 
     with op.batch_alter_table("chapter_generation_candidates") as batch_op:
-        batch_op.drop_index(
-            "ix_chapter_generation_candidates_source_technical_demo_execution_id"
-        )
+        batch_op.drop_index("ix_gen_candidates_demo_source")
         batch_op.drop_constraint(
             "uq_generation_candidate_technical_demo_execution", type_="unique"
         )

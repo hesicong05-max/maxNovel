@@ -473,6 +473,10 @@ class ChapterGenerationCandidate(Base):
             "created_at",
             "id",
         ),
+        Index(
+            "ix_gen_candidates_demo_source",
+            "source_technical_demo_execution_id",
+        ),
     )
 
     id = Column(String(32), primary_key=True, default=gen_id)
@@ -484,7 +488,7 @@ class ChapterGenerationCandidate(Base):
     )
     run_id = Column(String(32), nullable=False, index=True)
     source_attempt_id = Column(String(32), nullable=True, index=True)
-    source_technical_demo_execution_id = Column(String(32), nullable=True, index=True)
+    source_technical_demo_execution_id = Column(String(32), nullable=True)
     parent_candidate_id = Column(String(32), nullable=True, index=True)
     version_no = Column(Integer, nullable=False)
     origin_kind = Column(String(20), nullable=False)
