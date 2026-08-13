@@ -128,9 +128,16 @@ jobs:
           tests/test_planning_assignments.py
           tests/test_generation_preflight.py
           tests/test_generation_execution.py
-          tests/test_demo_generation.py
           tests/test_foreshadow_lifecycle.py
           -v --tb=short
+
+      - name: Run technical demo tests on PostgreSQL
+        timeout-minutes: 3
+        run: >-
+          timeout --signal=TERM --kill-after=10s 120s
+          python -u -m pytest
+          tests/test_demo_generation.py
+          -vv --tb=short
 
   docker-build:
     needs: [backend-test, frontend-test, postgres-lore]

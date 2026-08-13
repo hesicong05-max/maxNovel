@@ -12,6 +12,7 @@ import pytest
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
+from app.api import projects as projects_api
 from app.config import settings
 from app.core import demo_fixture
 from app.core import demo_generation
@@ -523,6 +524,84 @@ async def test_second_user_cannot_read_technical_demo_identity(
     assert created["candidate_id"] not in serialized
 
 
+async def test_formal_project_delete_removes_complete_fixture_only(
+    client, auth_headers, second_auth_headers, monkeypatch
+):
+    ids, run = await _prepare(client, auth_headers)
+    created, _capability = await _execute_once(
+        client, auth_headers, ids, run, "technical-demo-formal-delete-v1"
+    )
+    second_fixture = await client.post(
+        "/api/demo/v1/bootstrap",
+        headers=second_auth_headers,
+        json=_BOOTSTRAP,
+    )
+    assert second_fixture.status_code == 200
+    monkeypatch.setattr(projects_api, "archive_project_files", lambda _id: None)
+    monkeypatch.setattr(
+        projects_api, "finalize_project_file_delete", lambda _archive: None
+    )
+
+    deleted = await client.delete(
+        f'/api/projects/{ids["project_id"]}', headers=auth_headers
+    )
+
+    assert deleted.status_code == 200
+    assert deleted.json() == {"message": "项目已删除"}
+    assert (
+        await client.get(f'/api/projects/{ids["project_id"]}', headers=auth_headers)
+    ).status_code == 404
+    assert (
+        await client.get(
+            f'/api/projects/{second_fixture.json()["project_id"]}',
+            headers=second_auth_headers,
+        )
+    ).status_code == 200
+    assert await _count(Project) == 1
+    assert await _count(ChapterTechnicalDemoExecution) == 0
+    assert await _count(ChapterGenerationCandidate) == 0
+    assert created["execution_id"] not in deleted.text
+
+
+async def test_formal_project_delete_cleanup_failure_rolls_back_complete_fixture(
+    client, auth_headers, monkeypatch
+):
+    ids, run = await _prepare(client, auth_headers)
+    created, _capability = await _execute_once(
+        client, auth_headers, ids, run, "technical-demo-delete-rollback-v1"
+    )
+    real_cleanup = projects_api.delete_project_relational_dependents
+
+    async def fail_after_cleanup(db, project_id):
+        await real_cleanup(db, project_id)
+        raise RuntimeError("injected project dependent cleanup failure")
+
+    monkeypatch.setattr(
+        projects_api, "delete_project_relational_dependents", fail_after_cleanup
+    )
+    monkeypatch.setattr(projects_api, "archive_project_files", lambda _id: None)
+
+    deleted = await client.delete(
+        f'/api/projects/{ids["project_id"]}', headers=auth_headers
+    )
+
+    assert deleted.status_code == 500
+    assert deleted.json()["detail"] == "删除未完成，项目仍保留，请重试"
+    assert (
+        await client.get(f'/api/projects/{ids["project_id"]}', headers=auth_headers)
+    ).status_code == 200
+    assert (
+        await client.get(
+            f'/api/demo/v1/projects/{ids["project_id"]}/planning/'
+            f'technical-demo-executions/by-key/{created["operation_key"]}',
+            headers=auth_headers,
+        )
+    ).status_code == 200
+    assert (await client.get("/api/demo/v1/fixture", headers=auth_headers)).json()[
+        "state"
+    ] == "ready"
+
+
 async def test_postgres_concurrent_same_key_runs_fixed_adapter_once(
     client, auth_headers
 ):
@@ -574,12 +653,30 @@ async def test_postgres_concurrent_same_key_runs_fixed_adapter_once(
 
 
 async def test_postgres_delete_lock_first_prevents_technical_execution(
-    client, auth_headers
+    client, auth_headers, monkeypatch
 ):
     if TEST_DATABASE_BACKEND != "postgresql":
         pytest.skip("requires PostgreSQL project row locks")
     ids, run = await _prepare(client, auth_headers)
     adapter = CountingTechnicalAdapter()
+    real_cleanup = projects_api.delete_project_relational_dependents
+    lock_acquired = asyncio.Event()
+    release_delete = asyncio.Event()
+    delete_task = None
+    execute_task = None
+
+    async def paused_cleanup(db, project_id):
+        lock_acquired.set()
+        await release_delete.wait()
+        await real_cleanup(db, project_id)
+
+    monkeypatch.setattr(
+        projects_api, "delete_project_relational_dependents", paused_cleanup
+    )
+    monkeypatch.setattr(projects_api, "archive_project_files", lambda _id: None)
+    monkeypatch.setattr(
+        projects_api, "finalize_project_file_delete", lambda _archive: None
+    )
     app.dependency_overrides[get_technical_demo_adapter] = lambda: adapter
     try:
         capability = (
@@ -588,34 +685,47 @@ async def test_postgres_delete_lock_first_prevents_technical_execution(
                 headers=auth_headers,
             )
         ).json()
-        async with TestSessionLocal() as delete_session:
-            project = await delete_session.scalar(
-                select(Project).where(Project.id == ids["project_id"]).with_for_update()
+        delete_task = asyncio.create_task(
+            client.delete(
+                f'/api/projects/{ids["project_id"]}', headers=auth_headers
             )
-            execute_task = asyncio.create_task(
-                client.post(
-                    _execute_path(ids["project_id"], run["id"]),
-                    headers=auth_headers,
-                    json={
-                        "operation_key": "technical-demo-delete-first-v1",
-                        "expected_context_checksum": run["context_checksum"],
-                        "expected_capability_checksum": capability[
-                            "capability_checksum"
-                        ],
-                        "fixture_version": 1,
-                        "confirm_technical_demo": True,
-                    },
-                )
+        )
+        await asyncio.wait_for(lock_acquired.wait(), timeout=10)
+        execute_task = asyncio.create_task(
+            client.post(
+                _execute_path(ids["project_id"], run["id"]),
+                headers=auth_headers,
+                json={
+                    "operation_key": "technical-demo-delete-first-v1",
+                    "expected_context_checksum": run["context_checksum"],
+                    "expected_capability_checksum": capability[
+                        "capability_checksum"
+                    ],
+                    "fixture_version": 1,
+                    "confirm_technical_demo": True,
+                },
             )
-            await asyncio.sleep(0.1)
-            assert adapter.call_count == 0
-            await delete_session.delete(project)
-            await delete_session.commit()
-        response = await asyncio.wait_for(execute_task, timeout=20)
+        )
+        await asyncio.sleep(0.1)
+        assert adapter.call_count == 0
+        release_delete.set()
+        deleted, response = await asyncio.wait_for(
+            asyncio.gather(delete_task, execute_task), timeout=20
+        )
     finally:
+        release_delete.set()
+        pending_tasks = [
+            task for task in (delete_task, execute_task) if task and not task.done()
+        ]
+        for task in pending_tasks:
+            task.cancel()
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
         app.dependency_overrides.pop(get_technical_demo_adapter, None)
+    assert deleted.status_code == 200
     assert response.status_code == 404
     assert adapter.call_count == 0
+    assert await _count(Project) == 0
     assert await _count(ChapterTechnicalDemoExecution) == 0
     assert await _count(ChapterGenerationCandidate) == 0
 
