@@ -71,6 +71,7 @@ import type {
   GenerationRunPrepareInput,
   GenerationRunResponse,
 } from "@/types/generation";
+import type { TechnicalDemoExecuteInput } from "@/types/demo";
 import type {
   ForeshadowBindInput,
   ForeshadowFactCreateInput,
@@ -319,6 +320,19 @@ export const api = {
     }),
 
   getMe: () => fetchJSON<AuthUser>("/auth/me"),
+
+  getDemoFixture: (signal?: AbortSignal) =>
+    fetchJSON<unknown>("/demo/v1/fixture", { signal }),
+  bootstrapDemoFixture: (data: { fixture_version: 1; operation_key: "demo:v1:bootstrap" }) =>
+    fetchJSON<unknown>("/demo/v1/bootstrap", { method: "POST", body: JSON.stringify(data) }),
+  getTechnicalDemoCapability: (projectId: string, runId: string, signal?: AbortSignal) =>
+    fetchJSON<unknown>(`/demo/v1/projects/${encodeURIComponent(projectId)}/planning/generation-runs/${encodeURIComponent(runId)}/technical-generation-capability`, { signal }),
+  executeTechnicalDemo: (projectId: string, runId: string, data: TechnicalDemoExecuteInput) =>
+    fetchJSON<unknown>(`/demo/v1/projects/${encodeURIComponent(projectId)}/planning/generation-runs/${encodeURIComponent(runId)}/technical-demo-executions`, { method: "POST", body: JSON.stringify(data) }),
+  getTechnicalDemoExecutionByKey: (projectId: string, operationKey: string, signal?: AbortSignal) =>
+    fetchJSON<unknown>(`/demo/v1/projects/${encodeURIComponent(projectId)}/planning/technical-demo-executions/by-key/${encodeURIComponent(operationKey)}`, { signal }),
+  getTechnicalDemoCandidate: (projectId: string, candidateId: string, signal?: AbortSignal) =>
+    fetchJSON<unknown>(`/demo/v1/projects/${encodeURIComponent(projectId)}/planning/technical-demo-candidates/${encodeURIComponent(candidateId)}`, { signal }),
 
   // Projects
   listProjects: () => fetchJSON<Project[]>("/projects"),

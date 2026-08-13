@@ -5,8 +5,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "@/services/api";
 import { ApiError } from "@/services/api";
 import { savePendingPlanningOperation } from "@/services/planningOperations";
+import { pendingProjectOperationKey } from "@/services/pendingProjectOperations";
 import { loadPendingGenerationExecution, savePendingGenerationExecution, type PendingGenerationExecution } from "@/services/generationExecution";
+import { savePendingTechnicalDemoExecution, type PendingTechnicalDemoExecution } from "@/services/technicalDemoExecution";
 import type { GenerationAttemptResponse, GenerationCandidateAuditResponse, GenerationCandidateResponse, GenerationCapabilityResponse, GenerationRunPrepareInput, GenerationRunResponse } from "@/types/generation";
+import type { TechnicalDemoCandidateResponse, TechnicalDemoExecutionResponse } from "@/types/demo";
 import type { NovelPlan } from "@/types/planning";
 import ChapterPlanningPage from "./ChapterPlanningPage";
 
@@ -21,6 +24,8 @@ const elementId = id("element");
 const typeId = id("type");
 const now = "2026-08-11T05:00:00Z";
 const userId = "useruseruseruseruseruseruseruser";
+const demoMissing = { schema_version: 1, fixture_version: 1, mode: "technical_demo_fixture", environment: "non_production", state: "missing", can_bootstrap: true, preserved: false, project_id: null, plan_id: null, part_id: null, chapter_id: null, element_id: null, assignment_id: null, second_chapter_id: null, foreshadow_element_id: null, foreshadow_lifecycle_id: null, counts: null, next_path: null, recommended_action: "bootstrap_fixture" } as const;
+const demoReady = { ...demoMissing, state: "ready", can_bootstrap: false, project_id: projectId, plan_id: planId, part_id: partId, chapter_id: chapterId, element_id: elementId, assignment_id: id("assignment"), second_chapter_id: id("chaptertwo"), foreshadow_element_id: id("foreshadow"), foreshadow_lifecycle_id: id("lifecycle"), counts: { setting_type_count: 6, element_count: 7, source_count: 7, relation_count: 3, part_count: 1, chapter_count: 2, assignment_count: 7, foreshadow_lifecycle_count: 1, foreshadow_plan_count: 2, foreshadow_fact_count: 0 }, next_path: `/project/${projectId}/lore`, recommended_action: "open_fixture" } as const;
 
 const plan: NovelPlan = {
   id: planId, project_id: projectId, status: "active", structure_version: 3, assignment_version: 2, created_at: now, updated_at: now,
@@ -143,6 +148,31 @@ function auditResponse(candidate: GenerationCandidateResponse): GenerationCandid
   };
 }
 
+async function technicalCandidateResponse(executionId: string): Promise<TechnicalDemoCandidateResponse> {
+  const content = "固定技术模拟候选正文";
+  const bytes = new TextEncoder().encode(content);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  const checksum = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return {
+    schema_version: 1, id: id("technicalcandidate"), project_id: projectId, run_id: id("run"), planning_chapter_id: chapterId,
+    source_technical_demo_execution_id: executionId, parent_candidate_id: null, version_no: 1, origin_kind: "technical_demo", title: "第一章",
+    content, content_format: "plain_text", content_checksum: checksum, content_size_bytes: bytes.byteLength,
+    word_count: content.match(/[A-Za-z0-9]+|[\u3400-\u4dbf\u4e00-\u9fff]/g)?.length ?? 0,
+    created_by: userId, ai_invoked: false, billing_effect: "none", usage_status: "not_applicable", created_at: now,
+  };
+}
+
+function technicalAuditResponse(candidate: TechnicalDemoCandidateResponse): GenerationCandidateAuditResponse {
+  return {
+    schema_version: 1, ruleset_version: 1, project_id: projectId, run_id: candidate.run_id, planning_chapter_id: chapterId,
+    candidate_id: candidate.id, candidate_version: candidate.version_no, candidate_checksum: candidate.content_checksum, context_checksum: "c".repeat(64), status: "review",
+    integrity: { status: "pass", content_size_bytes: candidate.content_size_bytes, word_count: candidate.word_count, storage_limit_bytes: 262144, storage_limit_reached: false },
+    target_length: { status: "review", actual_word_count: candidate.word_count, target_word_count: 2000, minimum_word_count: 1400, maximum_word_count: 2600 },
+    preparation: { status: "pass", warnings: [] }, unrecognized_explicit_terms: { status: "pass", items: [], truncated: false },
+    context_summary: { element_count: 1, relation_count: 0, warning_count: 0, elements: [{ element_id: elementId, type_key: "character", type_display_name: "角色", name: "沈星", version_no: 1 }], foreshadow_actions_supported: false, foreshadow_action_count: 0 },
+  };
+}
+
 function LocationProbe() { return <output data-testid="location">{useLocation().search}</output>; }
 
 function deferred<T>() {
@@ -178,6 +208,7 @@ function renderPage(
 ) {
   const api = {
     ...apiModule.api,
+    getDemoFixture: vi.fn().mockResolvedValue(demoMissing),
     getPlanning: vi.fn().mockResolvedValue(plan),
     getPlanningLoreAssignments: vi.fn().mockResolvedValue(assignments),
     getPlanningOperation: vi.fn().mockRejectedValue(new ApiError(404, { detail: "not found" })),
@@ -192,15 +223,136 @@ function renderPage(
     getGenerationAttemptByKey: vi.fn().mockRejectedValue(new ApiError(404, { detail: "not found" })),
     getGenerationCandidate: vi.fn().mockRejectedValue(new ApiError(404, { detail: "candidate not found" })),
     getGenerationCandidateAudit: vi.fn().mockRejectedValue(new ApiError(503, { detail: "audit unavailable" })),
+    getTechnicalDemoCapability: vi.fn().mockRejectedValue(new ApiError(404, { detail: "not found" })),
+    executeTechnicalDemo: vi.fn().mockRejectedValue(new Error("must not execute on startup")),
+    getTechnicalDemoExecutionByKey: vi.fn().mockRejectedValue(new ApiError(404, { detail: "not found", code: "TECHNICAL_DEMO_EXECUTION_NOT_FOUND", retryable: true, recommended_action: "retry_original_technical_demo" })),
+    getTechnicalDemoCandidate: vi.fn().mockRejectedValue(new ApiError(404, { detail: "candidate not found" })),
     ...overrides,
   };
   vi.spyOn(apiModule, "api", "get").mockReturnValue(api as typeof apiModule.api);
-  render(<MemoryRouter initialEntries={[initialEntry]}><LocationProbe /><Routes><Route path="/project/:id/plan/chapters" element={<ChapterPlanningPage />} /></Routes></MemoryRouter>);
-  return api;
+  const rendered = render(<MemoryRouter initialEntries={[initialEntry]}><LocationProbe /><Routes><Route path="/project/:id/plan/chapters" element={<ChapterPlanningPage />} /></Routes></MemoryRouter>);
+  return Object.assign(api, { unmount: rendered.unmount });
 }
 
 describe("ChapterPlanningPage generation preflight", () => {
-  beforeEach(() => { vi.restoreAllMocks(); sessionStorage.clear(); });
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    sessionStorage.clear();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+  });
+
+  it("marks the stable preflight anchor as demo step five before any run exists", async () => {
+    renderPage({ getDemoFixture: vi.fn().mockResolvedValue(demoReady) }, `/project/${projectId}/plan/chapters?scope=chapter&target=${chapterId}#demo-technical-generation`);
+    expect(await screen.findByRole("link", { name: /5\s+技术模拟/ })).toHaveAttribute("aria-current", "step");
+    expect(screen.getByRole("button", { name: "检查生成上下文" })).toBeInTheDocument();
+    expect(document.querySelectorAll("#demo-technical-generation")).toHaveLength(1);
+    await waitFor(() => expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledTimes(1));
+    expect(document.getElementById("demo-technical-generation")).toHaveFocus();
+  });
+
+  it("waits for async chapter content before focusing the exact step-five anchor once", async () => {
+    const planning = deferred<NovelPlan>();
+    renderPage({ getDemoFixture: vi.fn().mockResolvedValue(demoReady), getPlanning: vi.fn().mockReturnValue(planning.promise) }, `/project/${projectId}/plan/chapters?scope=chapter&target=${chapterId}#demo-technical-generation`);
+    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+    planning.resolve(plan);
+    const target = await waitFor(() => {
+      const value = document.getElementById("demo-technical-generation");
+      expect(value).not.toBeNull();
+      return value!;
+    });
+    await waitFor(() => expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledTimes(1));
+    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({ block: "start", behavior: "auto" });
+    expect(target).toHaveFocus();
+  });
+
+  it("does not focus step five for planning hash, another chapter, or an unmounted late plan", async () => {
+    renderPage({ getDemoFixture: vi.fn().mockResolvedValue(demoReady) }, `/project/${projectId}/plan/chapters?scope=chapter&target=${chapterId}#demo-planning`);
+    await screen.findByRole("link", { name: /3\s+章节规划/ });
+    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+
+    const { secondChapterId, plan: secondPlan } = planWithSecondChapter();
+    renderPage({ getDemoFixture: vi.fn().mockResolvedValue(demoReady), getPlanning: vi.fn().mockResolvedValue(secondPlan) }, `/project/${projectId}/plan/chapters?scope=chapter&target=${secondChapterId}#demo-technical-generation`);
+    await screen.findAllByRole("link", { name: /5\s+技术模拟/ });
+    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+
+    const late = deferred<NovelPlan>();
+    const page = renderPage({ getDemoFixture: vi.fn().mockResolvedValue(demoReady), getPlanning: vi.fn().mockReturnValue(late.promise) }, `/project/${projectId}/plan/chapters?scope=chapter&target=${chapterId}#demo-technical-generation`);
+    page.unmount();
+    late.resolve(plan);
+    await Promise.resolve(); await Promise.resolve();
+    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("deep-links a v4 refresh to its original chapter/run and recovers by key with zero POST", async () => {
+    const operationKey = "technical-demo:execute:recover-page";
+    const operation: PendingTechnicalDemoExecution = { schema_version: 4, workspace: "technical_demo_execution", user_id: userId, project_id: projectId, chapter_id: chapterId, run_id: id("run"), operation_key: operationKey, payload: { operation_key: operationKey, expected_context_checksum: "c".repeat(64), expected_capability_checksum: "b".repeat(64), fixture_version: 1, confirm_technical_demo: true }, created_at: now };
+    expect(savePendingTechnicalDemoExecution(operation)).toBe(true);
+    const savedRun = response({ operation_key: "planning:generation_prepare:technical", expected_structure_version: 3, expected_assignment_version: 2, expected_chapter_lock_version: 4 });
+    const api = renderPage({ getDemoFixture: vi.fn().mockResolvedValue(demoReady), getGenerationRun: vi.fn().mockResolvedValue(savedRun) }, `/project/${projectId}/plan/chapters`);
+    expect(await screen.findByRole("button", { name: "重新核对并确认原请求" })).toBeInTheDocument();
+    expect(screen.getByTestId("location")).toHaveTextContent(`scope=chapter`);
+    expect(screen.getByTestId("location")).toHaveTextContent(`target=${chapterId}`);
+    expect(screen.getByTestId("location")).toHaveTextContent(`generation_run=${id("run")}`);
+    expect(api.getGenerationRun).toHaveBeenCalledWith(projectId, id("run"), expect.any(AbortSignal));
+    expect(api.getTechnicalDemoExecutionByKey).toHaveBeenCalledWith(projectId, operationKey, undefined);
+    expect(api.executeTechnicalDemo).not.toHaveBeenCalled();
+    expect(api.executeGenerationAttempt).not.toHaveBeenCalled();
+  });
+
+  it("returns from another selected chapter to the v4 originating chapter without POST", async () => {
+    const { plan: twoChapterPlan, secondChapterId } = planWithSecondChapter();
+    const operationKey = "technical-demo:execute:cross-page";
+    expect(savePendingTechnicalDemoExecution({ schema_version: 4, workspace: "technical_demo_execution", user_id: userId, project_id: projectId, chapter_id: chapterId, run_id: id("run"), operation_key: operationKey, payload: { operation_key: operationKey, expected_context_checksum: "c".repeat(64), expected_capability_checksum: "b".repeat(64), fixture_version: 1, confirm_technical_demo: true }, created_at: now })).toBe(true);
+    const api = renderPage({ getDemoFixture: vi.fn().mockResolvedValue(demoReady), getPlanning: vi.fn().mockResolvedValue(twoChapterPlan), getGenerationRun: vi.fn().mockResolvedValue(response({ operation_key: "planning:generation_prepare:cross-tech", expected_structure_version: 3, expected_assignment_version: 2, expected_chapter_lock_version: 4 })) }, `/project/${projectId}/plan/chapters?scope=chapter&target=${secondChapterId}`);
+    await screen.findByRole("button", { name: "重新核对并确认原请求" });
+    expect(screen.getByTestId("location")).toHaveTextContent(`target=${chapterId}`);
+    expect(api.getTechnicalDemoExecutionByKey).toHaveBeenCalledTimes(1);
+    expect(api.executeTechnicalDemo).not.toHaveBeenCalled();
+  });
+
+  it("removes the v4 recovery banner and unlocks planning only after strict recovered candidate validation", async () => {
+    const operationKey = "technical-demo:execute:recover-success";
+    expect(savePendingTechnicalDemoExecution({ schema_version: 4, workspace: "technical_demo_execution", user_id: userId, project_id: projectId, chapter_id: chapterId, run_id: id("run"), operation_key: operationKey, payload: { operation_key: operationKey, expected_context_checksum: "c".repeat(64), expected_capability_checksum: "b".repeat(64), fixture_version: 1, confirm_technical_demo: true }, created_at: now })).toBe(true);
+    const executionId = id("technicalexecution");
+    const candidate = await technicalCandidateResponse(executionId);
+    const receipt: TechnicalDemoExecutionResponse = {
+      schema_version: 1, execution_mode: "technical_demo", fixture_version: 1, adapter_schema_version: 1, content_spec_version: 1,
+      project_id: projectId, planning_chapter_id: chapterId, run_id: id("run"), operation_key: operationKey,
+      context_checksum: "c".repeat(64), capability_checksum: "b".repeat(64), execution_id: executionId, candidate_id: candidate.id,
+      status: "succeeded", replayed: true, ai_invoked: false, billing_effect: "none", usage_status: "not_applicable", created_at: now, completed_at: now,
+    };
+    const api = renderPage({
+      getDemoFixture: vi.fn().mockResolvedValue(demoReady),
+      getGenerationRun: vi.fn().mockResolvedValue(response({ operation_key: "planning:generation_prepare:technical-success", expected_structure_version: 3, expected_assignment_version: 2, expected_chapter_lock_version: 4 })),
+      getTechnicalDemoExecutionByKey: vi.fn().mockResolvedValue(receipt),
+      getTechnicalDemoCandidate: vi.fn().mockResolvedValue(candidate),
+      getGenerationCandidateAudit: vi.fn().mockResolvedValue(technicalAuditResponse(candidate)),
+    });
+    expect(await screen.findByRole("heading", { name: /固定技术模拟候选已就绪/ })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/技术模拟中还有结果未确认/)).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeEnabled();
+    expect(sessionStorage.getItem(pendingProjectOperationKey(userId, projectId))).toBeNull();
+    expect(api.executeTechnicalDemo).not.toHaveBeenCalled();
+    expect(api.executeGenerationAttempt).not.toHaveBeenCalled();
+  });
+
+  it("keeps a corrupt v4 record locked until explicit browser-only clearing succeeds", async () => {
+    sessionStorage.setItem(pendingProjectOperationKey(userId, projectId), JSON.stringify({
+      schema_version: 4, workspace: "technical_demo_execution", user_id: userId, project_id: projectId,
+      chapter_id: chapterId, run_id: id("run"), operation_key: "technical-demo:execute:corrupt",
+      payload: { operation_key: "technical-demo:execute:corrupt" }, created_at: now,
+    }));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const api = renderPage({ getDemoFixture: vi.fn().mockResolvedValue(demoReady) });
+    const clear = await screen.findByRole("button", { name: "确认清除损坏恢复记录" });
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeDisabled();
+    expect(api.getTechnicalDemoExecutionByKey).not.toHaveBeenCalled();
+    await userEvent.click(clear);
+    expect(await screen.findByText(/损坏的本地恢复记录已清除/)).toBeInTheDocument();
+    expect(sessionStorage.getItem(pendingProjectOperationKey(userId, projectId))).toBeNull();
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeEnabled();
+    expect(api.executeTechnicalDemo).not.toHaveBeenCalled();
+  });
 
   it("prepares with authoritative versions, persists a URL pointer, and shows no generation claim", async () => {
     const api = renderPage();

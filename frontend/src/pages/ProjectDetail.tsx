@@ -5,6 +5,9 @@ import type { Project } from "@/types";
 import WorldviewEditor from "@/components/WorldviewEditor";
 import ChapterWriter from "@/components/ChapterWriter";
 import ProgressPanel from "@/components/ProgressPanel";
+import DemoGuide from "@/components/DemoGuide";
+import { readDemoFixture } from "@/services/demoFixture";
+import type { DemoFixtureCurrentResponse } from "@/types/demo";
 
 type Step = "worldview" | "writing";
 
@@ -37,10 +40,18 @@ export default function ProjectDetail() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeStep, setActiveStep] = useState<Step>("worldview");
+  const [demoFixture, setDemoFixture] = useState<DemoFixtureCurrentResponse | null>(null);
 
   useEffect(() => {
     if (id) loadProject(id);
   }, [id, migrationFix]);
+
+  useEffect(() => {
+    if (!id) return;
+    const controller = new AbortController();
+    void readDemoFixture(controller.signal).then((value) => setDemoFixture(value.state === "ready" && value.project_id === id ? value : null)).catch(() => setDemoFixture(null));
+    return () => controller.abort();
+  }, [id]);
 
   // Sync project status when tab becomes visible again (handles refresh / tab switch)
   useEffect(() => {
@@ -123,6 +134,7 @@ export default function ProjectDetail() {
           打开章节规划
         </Link>
       </div>
+      {demoFixture?.state === "ready" && <DemoGuide projectId={project.id} current={1} chapterId={demoFixture.chapter_id} elementId={demoFixture.element_id} foreshadowLifecycleId={demoFixture.foreshadow_lifecycle_id} />}
 
       {/* Workflow steps */}
       <div className="workflow-steps">

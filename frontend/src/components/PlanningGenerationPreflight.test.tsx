@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import PlanningGenerationPreflight from "./PlanningGenerationPreflight";
 import type { GenerationAttemptResponse, GenerationCandidateAuditResponse, GenerationCandidateResponse, GenerationCapabilityResponse, GenerationRunResponse } from "@/types/generation";
 import type { NovelPlan, PlanningChapter, PlanningPart } from "@/types/planning";
@@ -96,6 +97,21 @@ function props(overrides: Record<string, unknown> = {}) {
 }
 
 describe("PlanningGenerationPreflight", () => {
+  it("removes the real paid entry for ready technical-demo and hidden descriptor modes", () => {
+    const { rerender } = render(<MemoryRouter><PlanningGenerationPreflight {...props({ executionMode: "technical", technicalDemoUserId: id("user") })} /></MemoryRouter>);
+    expect(screen.getByRole("button", { name: "查看边界并确认技术模拟" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "查看模型信息并确认生成" })).not.toBeInTheDocument();
+    expect(screen.queryByText("可能调用模型并产生费用")).not.toBeInTheDocument();
+    expect(screen.getByText(/固定内容技术模拟/)).toHaveTextContent("不调用 AI");
+    expect(screen.getByRole("heading", { name: "技术模拟前：冻结《第一章》上下文" })).toBeInTheDocument();
+    expect(screen.queryByText(run.id)).not.toBeInTheDocument();
+    expect(screen.queryByText(id("沈星-source"))).not.toBeInTheDocument();
+    rerender(<MemoryRouter><PlanningGenerationPreflight {...props({ executionMode: "hidden" })} /></MemoryRouter>);
+    expect(screen.queryByRole("button", { name: "查看边界并确认技术模拟" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "查看模型信息并确认生成" })).not.toBeInTheDocument();
+    expect(screen.getByText(/这里仅检查并保存本章/)).toBeInTheDocument();
+    expect(screen.queryByText(/固定内容技术模拟/)).not.toBeInTheDocument();
+  });
   it("limits the zero-cost claim to preflight while separating the paid generation step", () => {
     render(<PlanningGenerationPreflight {...props()} />);
     expect(screen.getByText("检查记录已保存")).toBeInTheDocument();

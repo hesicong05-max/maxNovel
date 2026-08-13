@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/components/AuthContext";
 import { ApiError, api } from "@/services/api";
 import {
@@ -17,8 +17,12 @@ import {
   type PendingForeshadowOperation,
 } from "@/services/foreshadowOperations";
 import { loadPendingGenerationExecution } from "@/services/generationExecution";
+import { loadPendingTechnicalDemoExecution } from "@/services/technicalDemoExecution";
 import { clearPendingProjectOperationRecord } from "@/services/pendingProjectOperations";
 import type { LoreElementListItem } from "@/types/lore";
+import DemoGuide from "@/components/DemoGuide";
+import { readDemoFixture } from "@/services/demoFixture";
+import type { DemoFixtureCurrentResponse } from "@/types/demo";
 import type {
   ForeshadowBindInput,
   ForeshadowFact,
@@ -123,6 +127,7 @@ function findTarget(plan: NovelPlan, type: "part" | "chapter", targetId: string)
 
 export default function ForeshadowPlanningPage() {
   const { id: projectId } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const [plan, setPlan] = useState<NovelPlan | null>(null);
   const [status, setStatus] = useState<ForeshadowLifecycleStatus>("active");
@@ -150,8 +155,9 @@ export default function ForeshadowPlanningPage() {
   const [conflict, setConflict] = useState(false);
   const [refreshRequired, setRefreshRequired] = useState(false);
   const [pending, setPending] = useState<PendingForeshadowOperation | null>(null);
-  const [foreignPending, setForeignPending] = useState<{ workspace: "planning" | "generation_execution"; chapterId: string | null } | null>(null);
+  const [foreignPending, setForeignPending] = useState<{ workspace: "planning" | "generation_execution" | "technical_demo_execution"; chapterId: string | null } | null>(null);
   const [storageIssue, setStorageIssue] = useState<"corrupt" | "unavailable" | null>(null);
+  const [demoFixture, setDemoFixture] = useState<DemoFixtureCurrentResponse | null>(null);
   const [recoveryState, setRecoveryState] = useState<RecoveryState>("idle");
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const [committedAction, setCommittedAction] = useState<CommittedForeshadowAction | null>(null);
@@ -172,6 +178,13 @@ export default function ForeshadowPlanningPage() {
 
   const writesDisabled = busy || maintenance || conflict || refreshRequired || !!pending || !!foreignPending || !!storageIssue || !plan;
   const currentCounts = list?.counts ?? { unplanted: 0, planted: 0, pending_resolution: 0, resolved: 0 };
+
+  useEffect(() => {
+    if (!projectId) return;
+    const controller = new AbortController();
+    void readDemoFixture(controller.signal).then((value) => setDemoFixture(value.state === "ready" && value.project_id === projectId ? value : null)).catch(() => setDemoFixture(null));
+    return () => controller.abort();
+  }, [projectId]);
 
   const loadPlan = useCallback(async (generation = requestGeneration.current): Promise<boolean> => {
     if (!projectId) return false;
@@ -210,9 +223,14 @@ export default function ForeshadowPlanningPage() {
         ...parsed,
         items: [...previous.items, ...parsed.items.filter((item) => !previous.items.some((old) => old.id === item.id))],
       } : parsed);
-      if (!append && !selectedId && parsed.items[0]) {
-        selectedLifecycleRef.current = parsed.items[0].id;
-        setSelectedId(parsed.items[0].id);
+      if (!append && !selectedId) {
+        const anchoredLifecycle = searchParams.get("lifecycle");
+        const nextId = anchoredLifecycle && /^[A-Za-z0-9]{32}$/.test(anchoredLifecycle) ? anchoredLifecycle : parsed.items[0]?.id;
+        if (nextId) {
+          selectedLifecycleRef.current = nextId;
+          setSelectedId(nextId);
+          if (anchoredLifecycle) setMobileDetail(true);
+        }
       }
       return true;
     } catch (cause) {
@@ -395,9 +413,13 @@ export default function ForeshadowPlanningPage() {
       const generationPending = loaded.workspace === "generation_execution"
         ? loadPendingGenerationExecution(user.id, projectId)
         : null;
+      const technicalPending = loaded.workspace === "technical_demo_execution"
+        ? loadPendingTechnicalDemoExecution(user.id, projectId)
+        : null;
       setForeignPending({
         workspace: loaded.workspace,
-        chapterId: generationPending?.status === "available" ? generationPending.operation.chapter_id : null,
+        chapterId: generationPending?.status === "available" ? generationPending.operation.chapter_id
+          : technicalPending?.status === "available" ? technicalPending.operation.chapter_id : null,
       });
       return;
     }
@@ -603,6 +625,7 @@ export default function ForeshadowPlanningPage() {
         <div><h1>伏笔管理</h1><p>安排未来位置，并单独记录作者已经确认的正文事实。</p></div>
         <Link className="btn btn-secondary" to={`/project/${projectId}/lore?type=foreshadow`}>打开设定仓库</Link>
       </header>
+      {demoFixture?.state === "ready" && <div id="demo-foreshadow"><DemoGuide projectId={projectId!} current={4} chapterId={demoFixture.chapter_id} elementId={demoFixture.element_id} foreshadowLifecycleId={demoFixture.foreshadow_lifecycle_id} /></div>}
 
       <section className="foreshadow-boundary" aria-label="伏笔事实边界">
         <strong>计划表示作者未来安排，不代表正文已经发生。</strong>
@@ -614,6 +637,7 @@ export default function ForeshadowPlanningPage() {
       {maintenance && <div className="planning-notice" role="status">项目正在维护；只读内容和原表单已保留，新写入已暂停。</div>}
       {foreignPending?.workspace === "planning" && <div className="planning-notice" role="alert"><span>章节规划中还有结果未确认的写入；伏笔写入已暂停。</span><Link className="btn btn-secondary" to={`/project/${projectId}/plan/chapters`}>返回章节规划核对</Link></div>}
       {foreignPending?.workspace === "generation_execution" && <div className="planning-notice" role="alert"><span>生成候选中还有结果未确认的模型调用；伏笔写入已暂停，且不会自动确认埋入或回收。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${projectId}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${projectId}/plan/chapters`}>返回发起章节核对生成</Link></div>}
+      {foreignPending?.workspace === "technical_demo_execution" && <div className="planning-notice" role="alert"><span>技术模拟中还有结果未确认的固定内容请求；伏笔写入已暂停，且不会自动确认埋入或回收。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${projectId}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${projectId}/plan/chapters`}>返回技术模拟发起章节核对</Link></div>}
       {pending && <div className="planning-notice" role="status"><span>上次伏笔操作仍等待确认；已冻结新写入，避免重复记录。</span><span className="planning-notice__actions"><button className="btn btn-secondary" disabled={busy} onClick={() => void reconcilePending(pending)}>{recoveryState === "checking" ? "正在核对…" : "核对原操作结果"}</button>{recoveryState === "not_found" && <button className="btn btn-secondary" disabled={busy} onClick={() => void retryPending()}>使用原编号和内容重试</button>}</span></div>}
 
       <section className="foreshadow-overview" aria-label="伏笔状态概况">
