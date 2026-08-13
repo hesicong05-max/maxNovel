@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import func, select, update
-from sqlalchemy.engine import make_url
-
 from app.config import settings
 from app.core import demo_fixture
 from app.core.demo_fixture import bootstrap_demo_fixture, fixture_ids
@@ -23,8 +20,10 @@ from app.models.planning import (
 )
 from app.models.project import Project
 from app.models.user import User
-from tests.conftest import TestSessionLocal
+from sqlalchemy import func, select, update
+from sqlalchemy.engine import make_url
 
+from tests.conftest import TestSessionLocal
 
 pytestmark = pytest.mark.usefixtures("clean_db")
 
@@ -49,7 +48,9 @@ async def _user_id(email: str = "testuser@example.com") -> str:
 
 
 async def test_bootstrap_creates_real_fixture_once_and_replays(client, auth_headers):
-    first = await client.post("/api/demo/v1/bootstrap", headers=auth_headers, json=_COMMAND)
+    first = await client.post(
+        "/api/demo/v1/bootstrap", headers=auth_headers, json=_COMMAND
+    )
     assert first.status_code == 200, first.text
     body = first.json()
     assert body == {
@@ -67,9 +68,17 @@ async def test_bootstrap_creates_real_fixture_once_and_replays(client, auth_head
         "assignment_id": body["assignment_id"],
         "next_path": f'/project/{body["project_id"]}/lore',
     }
-    assert all(len(body[key]) == 32 for key in (
-        "project_id", "plan_id", "part_id", "chapter_id", "element_id", "assignment_id"
-    ))
+    assert all(
+        len(body[key]) == 32
+        for key in (
+            "project_id",
+            "plan_id",
+            "part_id",
+            "chapter_id",
+            "element_id",
+            "assignment_id",
+        )
+    )
 
     async with TestSessionLocal() as session:
         before = {
@@ -88,19 +97,21 @@ async def test_bootstrap_creates_real_fixture_once_and_replays(client, auth_head
         }
         assert before == {
             Project: 1,
-            SettingType: 1,
-            SettingElement: 1,
-            ElementSource: 1,
-            ElementVersion: 1,
+            SettingType: 6,
+            SettingElement: 7,
+            ElementSource: 7,
+            ElementVersion: 7,
             NovelPlan: 1,
             PlanningPart: 1,
-            PlanningChapter: 1,
-            PlanningLoreAssignment: 1,
+            PlanningChapter: 2,
+            PlanningLoreAssignment: 7,
         }
         assert await _count(session, ChapterGenerationAttempt) == 0
         assert await _count(session, ChapterGenerationCandidate) == 0
 
-    second = await client.post("/api/demo/v1/bootstrap", headers=auth_headers, json=_COMMAND)
+    second = await client.post(
+        "/api/demo/v1/bootstrap", headers=auth_headers, json=_COMMAND
+    )
     assert second.status_code == 200, second.text
     assert second.json() == body | {"replayed": True}
 
@@ -124,6 +135,21 @@ async def test_bootstrap_creates_real_fixture_once_and_replays(client, auth_head
         "chapter_id": body["chapter_id"],
         "element_id": body["element_id"],
         "assignment_id": body["assignment_id"],
+        "second_chapter_id": current.json()["second_chapter_id"],
+        "foreshadow_element_id": current.json()["foreshadow_element_id"],
+        "foreshadow_lifecycle_id": current.json()["foreshadow_lifecycle_id"],
+        "counts": {
+            "setting_type_count": 6,
+            "element_count": 7,
+            "source_count": 7,
+            "relation_count": 3,
+            "part_count": 1,
+            "chapter_count": 2,
+            "assignment_count": 7,
+            "foreshadow_lifecycle_count": 1,
+            "foreshadow_plan_count": 2,
+            "foreshadow_fact_count": 0,
+        },
         "next_path": body["next_path"],
         "recommended_action": "open_fixture",
     }
@@ -146,6 +172,10 @@ async def test_current_descriptor_reports_missing_without_writing(client, auth_h
         "chapter_id": None,
         "element_id": None,
         "assignment_id": None,
+        "second_chapter_id": None,
+        "foreshadow_element_id": None,
+        "foreshadow_lifecycle_id": None,
+        "counts": None,
         "next_path": None,
         "recommended_action": "bootstrap_fixture",
     }
@@ -166,9 +196,9 @@ async def test_fixture_is_readable_through_existing_lore_and_planning_apis(
         f'/api/projects/{body["project_id"]}/lore/elements', headers=auth_headers
     )
     assert lore.status_code == 200, lore.text
-    assert [(item["id"], item["name"]) for item in lore.json()["items"]] == [
-        (body["element_id"], "沈星")
-    ]
+    lore_items = [(item["id"], item["name"]) for item in lore.json()["items"]]
+    assert len(lore_items) == 7
+    assert (body["element_id"], "沈星") in lore_items
 
     planning = await client.get(
         f'/api/projects/{body["project_id"]}/planning', headers=auth_headers
@@ -177,6 +207,7 @@ async def test_fixture_is_readable_through_existing_lore_and_planning_apis(
     assert planning.json()["id"] == body["plan_id"]
     assert planning.json()["parts"][0]["id"] == body["part_id"]
     assert planning.json()["parts"][0]["chapters"][0]["id"] == body["chapter_id"]
+    assert len(planning.json()["parts"][0]["chapters"]) == 2
 
     prepared = await client.post(
         f'/api/projects/{body["project_id"]}/planning/chapters/'
@@ -190,6 +221,8 @@ async def test_fixture_is_readable_through_existing_lore_and_planning_apis(
         },
     )
     assert prepared.status_code == 200, prepared.text
+    assert len(prepared.json()["context_manifest"]["elements"]) == 7
+    assert len(prepared.json()["context_manifest"]["relations"]) == 3
     async with TestSessionLocal() as session:
         assert await _count(session, ChapterGenerationRun) == 1
         assert await _count(session, ChapterGenerationAttempt) == 0
@@ -353,7 +386,9 @@ async def test_changed_fixture_is_reported_without_overwrite(client, auth_header
     project_id = created.json()["project_id"]
     async with TestSessionLocal() as session:
         await session.execute(
-            update(Project).where(Project.id == project_id).values(title="作者修改后的标题")
+            update(Project)
+            .where(Project.id == project_id)
+            .values(title="作者修改后的标题")
         )
         await session.commit()
 
@@ -363,8 +398,7 @@ async def test_changed_fixture_is_reported_without_overwrite(client, auth_header
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "DEMO_FIXTURE_DIVERGED"
     assert (
-        response.json()["detail"]["recommended_action"]
-        == "preserve_existing_fixture"
+        response.json()["detail"]["recommended_action"] == "preserve_existing_fixture"
     )
     current = await client.get("/api/demo/v1/fixture", headers=auth_headers)
     assert current.status_code == 200
@@ -432,13 +466,13 @@ async def test_partial_deterministic_identity_fails_closed(client, auth_headers)
 async def test_exception_rolls_back_every_fixture_row(auth_headers, monkeypatch):
     del auth_headers  # registration only; the service receives the resolved owner id below
     user_id = await _user_id()
-    original = demo_fixture._add_fixture_rows
+    original = demo_fixture.add_fixture_rows
 
-    async def add_then_fail(db, owner_id, ids):
-        await original(db, owner_id, ids)
+    async def add_then_fail(db, owner_id):
+        await original(db, owner_id)
         raise RuntimeError("injected failure")
 
-    monkeypatch.setattr(demo_fixture, "_add_fixture_rows", add_then_fail)
+    monkeypatch.setattr(demo_fixture, "add_fixture_rows", add_then_fail)
     async with TestSessionLocal() as session:
         with pytest.raises(RuntimeError, match="injected failure"):
             await bootstrap_demo_fixture(session, user_id)
