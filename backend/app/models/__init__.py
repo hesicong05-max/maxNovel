@@ -53,6 +53,7 @@ from app.models.generation import (  # noqa: F401
     ChapterGenerationAttempt,
     ChapterGenerationCandidate,
     ChapterGenerationRun,
+    ChapterTechnicalDemoExecution,
 )
 from app.models.foreshadow import (  # noqa: F401
     ForeshadowFact,

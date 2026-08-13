@@ -21,7 +21,6 @@ from app.core.generation_preflight import (
 from app.models.generation import ChapterGenerationCandidate, ChapterGenerationRun
 from app.schemas.generation import GenerationCandidateAuditResponse
 
-
 AUDIT_RULESET_VERSION = 1
 TARGET_WORD_COUNT_MIN_PERCENT = 70
 TARGET_WORD_COUNT_MAX_PERCENT = 130
@@ -80,9 +79,22 @@ async def generation_candidate_audit_response(
 ) -> dict[str, Any]:
     """Validate the authoritative candidate and derive a stable audit report."""
 
-    candidate_snapshot = await generation_candidate_response(
-        db, candidate, user_id=user_id
-    )
+    if candidate.origin_kind == "technical_demo":
+        from app.core.demo_generation import (
+            TechnicalDemoError,
+            technical_demo_candidate_response,
+        )
+
+        try:
+            candidate_snapshot = await technical_demo_candidate_response(
+                db, candidate, user_id=user_id
+            )
+        except TechnicalDemoError as exc:
+            raise _audit_corrupt() from exc
+    else:
+        candidate_snapshot = await generation_candidate_response(
+            db, candidate, user_id=user_id
+        )
     run = await db.scalar(
         select(ChapterGenerationRun).where(
             ChapterGenerationRun.project_id == candidate.project_id,

@@ -12,6 +12,7 @@ from app.core.maintenance import (
     ensure_project_writes_available,
     require_project_writes_available,
 )
+from app.core.project_delete import delete_project_relational_dependents
 from app.core.project_files import (
     ProjectFileArchiveError,
     archive_project_files,
@@ -165,6 +166,7 @@ async def delete_project(
         ) from exc
 
     try:
+        await delete_project_relational_dependents(db, project_id)
         await db.delete(project)
         await db.commit()
     except Exception as exc:

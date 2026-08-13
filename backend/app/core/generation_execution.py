@@ -712,7 +712,11 @@ async def generation_candidate_response(
     ):
         raise _corrupt()
     if candidate.origin_kind == "generated":
-        if candidate.source_attempt_id is None or candidate.parent_candidate_id is not None:
+        if (
+            candidate.source_attempt_id is None
+            or candidate.source_technical_demo_execution_id is not None
+            or candidate.parent_candidate_id is not None
+        ):
             raise _corrupt()
         attempt = await db.scalar(
             select(ChapterGenerationAttempt).where(
@@ -730,7 +734,11 @@ async def generation_candidate_response(
         if attempt_response["candidate_id"] != candidate.id:
             raise _corrupt()
     elif candidate.origin_kind == "manual_edit":
-        if candidate.source_attempt_id is not None or candidate.parent_candidate_id is None:
+        if (
+            candidate.source_attempt_id is not None
+            or candidate.source_technical_demo_execution_id is not None
+            or candidate.parent_candidate_id is None
+        ):
             raise _corrupt()
         parent = await db.scalar(
             select(ChapterGenerationCandidate).where(

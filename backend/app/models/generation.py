@@ -47,12 +47,8 @@ class ChapterGenerationRun(Base):
             "operation_key",
             name="uq_generation_run_operation_key",
         ),
-        UniqueConstraint(
-            "project_id", "id", name="uq_generation_run_project_id_id"
-        ),
-        CheckConstraint(
-            "status IN ('prepared')", name="ck_generation_run_status"
-        ),
+        UniqueConstraint("project_id", "id", name="uq_generation_run_project_id_id"),
+        CheckConstraint("status IN ('prepared')", name="ck_generation_run_status"),
         CheckConstraint(
             "execution_mode = 'preflight_only' AND ai_invoked IS FALSE "
             "AND billing_effect = 'none'",
@@ -280,6 +276,87 @@ class ChapterGenerationAttempt(Base):
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
 
 
+class ChapterTechnicalDemoExecution(Base):
+    """Terminal, zero-LLM receipt for one fixed technical-demo execution."""
+
+    __tablename__ = "chapter_technical_demo_executions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "run_id"],
+            ["chapter_generation_runs.project_id", "chapter_generation_runs.id"],
+            name="fk_technical_demo_execution_run",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "requested_by",
+            "operation_key",
+            name="uq_technical_demo_execution_operation_key",
+        ),
+        UniqueConstraint(
+            "project_id", "id", name="uq_technical_demo_execution_project_id_id"
+        ),
+        UniqueConstraint(
+            "project_id",
+            "id",
+            "run_id",
+            name="uq_technical_demo_execution_identity",
+        ),
+        CheckConstraint(
+            "status = 'succeeded' AND execution_mode = 'technical_demo' "
+            "AND ai_invoked IS FALSE AND billing_effect = 'none' "
+            "AND usage_status = 'not_applicable'",
+            name="ck_technical_demo_execution_shape",
+        ),
+        CheckConstraint(
+            "fixture_version = 1 AND adapter_schema_version = 1 "
+            "AND content_spec_version = 1",
+            name="ck_technical_demo_execution_versions",
+        ),
+        CheckConstraint(
+            "length(request_fingerprint) = 64 "
+            "AND length(context_checksum) = 64 "
+            "AND length(capability_checksum) = 64",
+            name="ck_technical_demo_execution_checksums",
+        ),
+        Index(
+            "ix_technical_demo_executions_run_created",
+            "run_id",
+            "created_at",
+            "id",
+        ),
+    )
+
+    id = Column(String(32), primary_key=True, default=gen_id)
+    project_id = Column(
+        String(32),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    run_id = Column(String(32), nullable=False, index=True)
+    requested_by = Column(
+        String(32),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    operation_key = Column(String(128), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    status = Column(String(24), nullable=False, default="succeeded")
+    execution_mode = Column(String(30), nullable=False, default="technical_demo")
+    ai_invoked = Column(Boolean, nullable=False, default=False)
+    billing_effect = Column(String(20), nullable=False, default="none")
+    usage_status = Column(String(20), nullable=False, default="not_applicable")
+    fixture_version = Column(Integer, nullable=False, default=1)
+    adapter_schema_version = Column(Integer, nullable=False, default=1)
+    content_spec_version = Column(Integer, nullable=False, default=1)
+    context_checksum = Column(String(64), nullable=False)
+    capability_checksum = Column(String(64), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    completed_at = Column(DateTime, nullable=False, default=_utcnow)
+
+
 class ChapterGenerationCandidate(Base):
     """Immutable generated or manually-derived planning chapter draft."""
 
@@ -289,6 +366,20 @@ class ChapterGenerationCandidate(Base):
             ["project_id", "run_id"],
             ["chapter_generation_runs.project_id", "chapter_generation_runs.id"],
             name="fk_generation_candidate_run",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            [
+                "project_id",
+                "source_technical_demo_execution_id",
+                "run_id",
+            ],
+            [
+                "chapter_technical_demo_executions.project_id",
+                "chapter_technical_demo_executions.id",
+                "chapter_technical_demo_executions.run_id",
+            ],
+            name="fk_generation_candidate_technical_demo_execution",
             ondelete="CASCADE",
         ),
         ForeignKeyConstraint(
@@ -335,18 +426,28 @@ class ChapterGenerationCandidate(Base):
         ),
         UniqueConstraint(
             "project_id",
+            "source_technical_demo_execution_id",
+            name="uq_generation_candidate_technical_demo_execution",
+        ),
+        UniqueConstraint(
+            "project_id",
             "run_id",
             "version_no",
             name="uq_generation_candidate_run_version",
         ),
         CheckConstraint(
-            "origin_kind IN ('generated', 'manual_edit')",
+            "origin_kind IN ('generated', 'manual_edit', 'technical_demo')",
             name="ck_generation_candidate_origin",
         ),
         CheckConstraint(
             "(origin_kind = 'generated' AND source_attempt_id IS NOT NULL "
+            "AND source_technical_demo_execution_id IS NULL "
+            "AND parent_candidate_id IS NULL) OR "
+            "(origin_kind = 'technical_demo' AND source_attempt_id IS NULL "
+            "AND source_technical_demo_execution_id IS NOT NULL "
             "AND parent_candidate_id IS NULL) OR "
             "(origin_kind = 'manual_edit' AND source_attempt_id IS NULL "
+            "AND source_technical_demo_execution_id IS NULL "
             "AND parent_candidate_id IS NOT NULL)",
             name="ck_generation_candidate_origin_shape",
         ),
@@ -372,6 +473,10 @@ class ChapterGenerationCandidate(Base):
             "created_at",
             "id",
         ),
+        Index(
+            "ix_gen_candidates_demo_source",
+            "source_technical_demo_execution_id",
+        ),
     )
 
     id = Column(String(32), primary_key=True, default=gen_id)
@@ -383,6 +488,7 @@ class ChapterGenerationCandidate(Base):
     )
     run_id = Column(String(32), nullable=False, index=True)
     source_attempt_id = Column(String(32), nullable=True, index=True)
+    source_technical_demo_execution_id = Column(String(32), nullable=True)
     parent_candidate_id = Column(String(32), nullable=True, index=True)
     version_no = Column(Integer, nullable=False)
     origin_kind = Column(String(20), nullable=False)
