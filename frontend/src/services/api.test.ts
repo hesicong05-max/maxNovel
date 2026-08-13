@@ -1166,5 +1166,10 @@ describe("API - durable generation execution", () => {
       "/api/projects/project%2Fone/planning/generation-candidates/candidate%2Fone",
       expect.any(Object)
     );
+    await api.getGenerationCandidateAudit(project, candidate);
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "/api/projects/project%2Fone/planning/generation-candidates/candidate%2Fone/audit",
+      expect.any(Object)
+    );
   });
 });

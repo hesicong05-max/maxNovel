@@ -4269,3 +4269,69 @@ input, select, textarea { font-family: inherit; }
   .cursor-blink { animation: none; }
   .card-hover:hover { transform: none; }
 }
+
+.planning-generation__audit {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+
+.planning-generation__audit > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.planning-generation__audit h6,
+.planning-generation__audit p {
+  margin: 0;
+}
+
+.planning-generation__audit details,
+.planning-generation__audit .planning-generation__warning {
+  margin-top: 0.75rem;
+}
+
+.planning-generation__audit summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.planning-generation__audit li,
+.planning-generation__audit li strong,
+.planning-generation__audit header > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.planning-generation__audit blockquote {
+  margin: 0.375rem 0 0;
+  padding: 0.625rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-left: 3px solid var(--border-strong);
+  background: var(--surface);
+}
+
+.planning-generation__audit summary:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 3px;
+}
+
+@media (max-width: 390px) {
+  .planning-generation__audit > header {
+    flex-direction: column;
+  }
+
+  .planning-generation__audit .btn {
+    min-height: 44px;
+    width: 100%;
+  }
+}

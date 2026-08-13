@@ -689,6 +689,14 @@ export const api = {
     `/projects/${encodeURIComponent(projectId)}/planning/generation-candidates/${encodeURIComponent(candidateId)}`,
     { signal }
   ),
+  getGenerationCandidateAudit: (
+    projectId: string,
+    candidateId: string,
+    signal?: AbortSignal
+  ) => fetchJSON<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/planning/generation-candidates/${encodeURIComponent(candidateId)}/audit`,
+    { signal }
+  ),
   createPlanningPart: (projectId: string, data: PlanningPartCreateInput) =>
     fetchJSON<PlanningMutationReceipt>(
       `/projects/${encodeURIComponent(projectId)}/planning/parts`,

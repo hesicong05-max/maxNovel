@@ -6,7 +6,7 @@ import * as apiModule from "@/services/api";
 import { ApiError } from "@/services/api";
 import { savePendingPlanningOperation } from "@/services/planningOperations";
 import { loadPendingGenerationExecution, savePendingGenerationExecution, type PendingGenerationExecution } from "@/services/generationExecution";
-import type { GenerationAttemptResponse, GenerationCandidateResponse, GenerationCapabilityResponse, GenerationRunPrepareInput, GenerationRunResponse } from "@/types/generation";
+import type { GenerationAttemptResponse, GenerationCandidateAuditResponse, GenerationCandidateResponse, GenerationCapabilityResponse, GenerationRunPrepareInput, GenerationRunResponse } from "@/types/generation";
 import type { NovelPlan } from "@/types/planning";
 import ChapterPlanningPage from "./ChapterPlanningPage";
 
@@ -123,7 +123,54 @@ async function candidateResponse(operation: PendingGenerationExecution, attemptI
   };
 }
 
+function auditResponse(candidate: GenerationCandidateResponse): GenerationCandidateAuditResponse {
+  return {
+    schema_version: 1,
+    ruleset_version: 1,
+    project_id: projectId,
+    run_id: candidate.run_id,
+    planning_chapter_id: chapterId,
+    candidate_id: candidate.id,
+    candidate_version: candidate.version_no,
+    candidate_checksum: candidate.content_checksum,
+    context_checksum: "c".repeat(64),
+    status: "review",
+    integrity: { status: "pass", content_size_bytes: candidate.content_size_bytes, word_count: candidate.word_count, storage_limit_bytes: 262144, storage_limit_reached: false },
+    target_length: { status: "review", actual_word_count: candidate.word_count, target_word_count: 2000, minimum_word_count: 1400, maximum_word_count: 2600 },
+    preparation: { status: "pass", warnings: [] },
+    unrecognized_explicit_terms: { status: "pass", items: [], truncated: false },
+    context_summary: { element_count: 1, relation_count: 0, warning_count: 0, elements: [{ element_id: elementId, type_key: "character", type_display_name: "角色", name: "沈星", version_no: 1 }], foreshadow_actions_supported: false, foreshadow_action_count: 0 },
+  };
+}
+
 function LocationProbe() { return <output data-testid="location">{useLocation().search}</output>; }
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function planWithSecondChapter(): { plan: NovelPlan; secondChapterId: string } {
+  const secondChapterId = id("chapter-two");
+  return {
+    secondChapterId,
+    plan: {
+      ...plan,
+      parts: plan.parts.map((partItem) => ({
+        ...partItem,
+        chapters: [
+          ...partItem.chapters,
+          { ...partItem.chapters[0], id: secondChapterId, title: "第二章", position: 2 },
+        ],
+      })),
+    },
+  };
+}
 
 function renderPage(
   overrides: Record<string, unknown> = {},
@@ -144,6 +191,7 @@ function renderPage(
     }),
     getGenerationAttemptByKey: vi.fn().mockRejectedValue(new ApiError(404, { detail: "not found" })),
     getGenerationCandidate: vi.fn().mockRejectedValue(new ApiError(404, { detail: "candidate not found" })),
+    getGenerationCandidateAudit: vi.fn().mockRejectedValue(new ApiError(503, { detail: "audit unavailable" })),
     ...overrides,
   };
   vi.spyOn(apiModule, "api", "get").mockReturnValue(api as typeof apiModule.api);
@@ -542,6 +590,119 @@ describe("ChapterPlanningPage generation preflight", () => {
     expect(sessionStorage.length).toBe(0);
     expect(api.executeGenerationAttempt).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "关闭这条记录" })).toBeEnabled();
+  });
+
+  it("reads the deterministic audit only after candidate validation and never adds a POST", async () => {
+    const operation = executionOperation();
+    const succeeded = { ...executionAttempt(operation, "succeeded"), ai_invoked: true, billing_effect: "possible" as const };
+    const candidate = await candidateResponse(operation, succeeded.id);
+    const audit = auditResponse(candidate);
+    const executeGenerationAttempt = vi.fn().mockImplementation((_project: string, _run: string, input: { operation_key: string }) => Promise.resolve({ ...succeeded, operation_key: input.operation_key }));
+    const getGenerationCandidateAudit = vi.fn().mockResolvedValue(audit);
+    const api = renderPage({
+      executeGenerationAttempt,
+      getGenerationCandidate: vi.fn().mockResolvedValue(candidate),
+      getGenerationCandidateAudit,
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "检查生成上下文" }));
+    await screen.findByText("检查记录已保存");
+    await userEvent.click(screen.getByRole("button", { name: "查看模型信息并确认生成" }));
+    await userEvent.click(await screen.findByRole("button", { name: "确认并生成一次候选" }));
+    expect(await screen.findByRole("heading", { name: "确定性检查" })).toBeInTheDocument();
+    expect(screen.getByText("需要人工核对")).toBeInTheDocument();
+    expect(getGenerationCandidateAudit).toHaveBeenCalledWith(projectId, candidate.id, expect.any(AbortSignal));
+    expect(api.getGenerationCandidate).toHaveBeenCalledTimes(1);
+    expect(executeGenerationAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the candidate and retries only audit GET after audit failure", async () => {
+    const operation = executionOperation();
+    const attempt = executionAttempt(operation, "succeeded");
+    const candidate = await candidateResponse(operation, attempt.id);
+    const getGenerationCandidateAudit = vi.fn()
+      .mockRejectedValueOnce(new Error("audit offline"))
+      .mockResolvedValue(auditResponse(candidate));
+    const api = renderPage({
+      getGenerationRun: vi.fn().mockResolvedValue(response({ operation_key: "planning:generation_prepare:audit-read", expected_structure_version: 3, expected_assignment_version: 2, expected_chapter_lock_version: 4 })),
+      getGenerationCandidate: vi.fn().mockResolvedValue(candidate),
+      getGenerationCandidateAudit,
+    }, `/project/${projectId}/plan/chapters?scope=chapter&target=${chapterId}&generation_run=${operation.run_id}&generation_attempt=${attempt.id}&generation_candidate=${candidate.id}`);
+    expect(await screen.findByText(candidate.content)).toBeInTheDocument();
+    expect(await screen.findByText(/audit offline/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "重新读取检查" }));
+    expect(await screen.findByText("需要人工核对")).toBeInTheDocument();
+    expect(getGenerationCandidateAudit).toHaveBeenCalledTimes(2);
+    expect(api.getGenerationCandidate).toHaveBeenCalledTimes(1);
+    expect(api.executeGenerationAttempt).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("候选正文内容")).toHaveTextContent(candidate.content);
+  });
+
+  it("drops a delayed chapter A candidate after switching to chapter B", async () => {
+    const operation = executionOperation();
+    const attempt = executionAttempt(operation, "succeeded");
+    const candidate = await candidateResponse(operation, attempt.id);
+    const candidateRead = deferred<GenerationCandidateResponse>();
+    const twoChapter = planWithSecondChapter();
+    const api = renderPage({
+      getPlanning: vi.fn().mockResolvedValue(twoChapter.plan),
+      getGenerationRun: vi.fn().mockResolvedValue(response({ operation_key: "planning:generation_prepare:delayed-candidate", expected_structure_version: 3, expected_assignment_version: 2, expected_chapter_lock_version: 4 })),
+      getGenerationCandidate: vi.fn().mockReturnValue(candidateRead.promise),
+    }, `/project/${projectId}/plan/chapters?scope=chapter&target=${chapterId}&generation_run=${operation.run_id}&generation_attempt=${attempt.id}&generation_candidate=${candidate.id}`);
+    await waitFor(() => expect(api.getGenerationCandidate).toHaveBeenCalledOnce());
+    await userEvent.click(screen.getByRole("button", { name: "第二章" }));
+    candidateRead.resolve(candidate);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "第二章", level: 2 })).toBeInTheDocument());
+    expect(screen.queryByText(candidate.content)).not.toBeInTheDocument();
+    expect(api.getGenerationCandidateAudit).not.toHaveBeenCalled();
+    expect(api.executeGenerationAttempt).not.toHaveBeenCalled();
+  });
+
+  it("drops a delayed automatic chapter A audit after switching to chapter B", async () => {
+    const operation = executionOperation();
+    const attempt = executionAttempt(operation, "succeeded");
+    const candidate = await candidateResponse(operation, attempt.id);
+    const auditRead = deferred<GenerationCandidateAuditResponse>();
+    const twoChapter = planWithSecondChapter();
+    const api = renderPage({
+      getPlanning: vi.fn().mockResolvedValue(twoChapter.plan),
+      getGenerationRun: vi.fn().mockResolvedValue(response({ operation_key: "planning:generation_prepare:delayed-audit", expected_structure_version: 3, expected_assignment_version: 2, expected_chapter_lock_version: 4 })),
+      getGenerationCandidate: vi.fn().mockResolvedValue(candidate),
+      getGenerationCandidateAudit: vi.fn().mockReturnValue(auditRead.promise),
+    }, `/project/${projectId}/plan/chapters?scope=chapter&target=${chapterId}&generation_run=${operation.run_id}&generation_attempt=${attempt.id}&generation_candidate=${candidate.id}`);
+    expect(await screen.findByText(candidate.content)).toBeInTheDocument();
+    await waitFor(() => expect(api.getGenerationCandidateAudit).toHaveBeenCalledOnce());
+    await userEvent.click(screen.getByRole("button", { name: "第二章" }));
+    auditRead.resolve(auditResponse(candidate));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "第二章", level: 2 })).toBeInTheDocument());
+    expect(screen.queryByText(candidate.content)).not.toBeInTheDocument();
+    expect(screen.queryByText("需要人工核对")).not.toBeInTheDocument();
+    expect(api.executeGenerationAttempt).not.toHaveBeenCalled();
+  });
+
+  it("drops a delayed manual chapter A audit retry after switching to chapter B", async () => {
+    const operation = executionOperation();
+    const attempt = executionAttempt(operation, "succeeded");
+    const candidate = await candidateResponse(operation, attempt.id);
+    const retryRead = deferred<GenerationCandidateAuditResponse>();
+    const getGenerationCandidateAudit = vi.fn()
+      .mockRejectedValueOnce(new Error("audit offline"))
+      .mockReturnValueOnce(retryRead.promise);
+    const twoChapter = planWithSecondChapter();
+    const api = renderPage({
+      getPlanning: vi.fn().mockResolvedValue(twoChapter.plan),
+      getGenerationRun: vi.fn().mockResolvedValue(response({ operation_key: "planning:generation_prepare:delayed-audit-retry", expected_structure_version: 3, expected_assignment_version: 2, expected_chapter_lock_version: 4 })),
+      getGenerationCandidate: vi.fn().mockResolvedValue(candidate),
+      getGenerationCandidateAudit,
+    }, `/project/${projectId}/plan/chapters?scope=chapter&target=${chapterId}&generation_run=${operation.run_id}&generation_attempt=${attempt.id}&generation_candidate=${candidate.id}`);
+    expect(await screen.findByText(/audit offline/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "重新读取检查" }));
+    await userEvent.click(screen.getByRole("button", { name: "第二章" }));
+    retryRead.resolve(auditResponse(candidate));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "第二章", level: 2 })).toBeInTheDocument());
+    expect(screen.queryByText(candidate.content)).not.toBeInTheDocument();
+    expect(screen.queryByText("需要人工核对")).not.toBeInTheDocument();
+    expect(getGenerationCandidateAudit).toHaveBeenCalledTimes(2);
+    expect(api.executeGenerationAttempt).not.toHaveBeenCalled();
   });
 
   it("keeps a failed pending receipt until a replacement is explicitly confirmed", async () => {
