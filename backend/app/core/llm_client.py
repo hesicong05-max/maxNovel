@@ -5,6 +5,7 @@ Includes retry logic for transient failures (429, 500, 502, 503, 504).
 """
 
 import asyncio
+from dataclasses import dataclass, field
 import json
 import logging
 from typing import AsyncGenerator
@@ -41,6 +42,17 @@ class LLMSingleCallError(RuntimeError):
         self.safe_message = message
         self.retryable = retryable
         self.outcome_unknown = outcome_unknown
+
+
+@dataclass(frozen=True)
+class LLMFrozenSingleCallConfig:
+    """Complete immutable provider inputs for one no-retry request."""
+
+    api_key: str = field(repr=False)
+    base_url: str = field(repr=False)
+    model: str
+    max_tokens: int
+    temperature: float
 
 
 class LLMClient:
@@ -117,6 +129,82 @@ class LLMClient:
             response = await client.post(
                 f"{self.base_url}/chat/completions",
                 headers=self._headers(),
+                json=payload,
+            )
+        except httpx.TimeoutException as exc:
+            raise LLMSingleCallError(
+                "LLM_OUTCOME_UNKNOWN",
+                "LLM 请求超时，结果状态无法确认",
+                outcome_unknown=True,
+            ) from exc
+        except httpx.TransportError as exc:
+            raise LLMSingleCallError(
+                "LLM_OUTCOME_UNKNOWN",
+                "LLM 连接中断，结果状态无法确认",
+                outcome_unknown=True,
+            ) from exc
+
+        if response.status_code != 200:
+            raise LLMSingleCallError(
+                "LLM_REQUEST_REJECTED",
+                f"LLM 请求未成功（HTTP {response.status_code}）",
+                retryable=response.status_code in _RETRY_STATUS_CODES,
+            )
+
+        try:
+            data = response.json()
+            choice = data["choices"][0]
+            content = choice["message"]["content"]
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise LLMSingleCallError(
+                "LLM_RESPONSE_INVALID",
+                "LLM 返回了无法读取的响应",
+            ) from exc
+        if choice.get("finish_reason") == "length":
+            raise LLMSingleCallError(
+                "LLM_RESPONSE_TRUNCATED",
+                "LLM 输出不完整，未保存任何候选",
+            )
+        if not isinstance(content, str):
+            raise LLMSingleCallError(
+                "LLM_RESPONSE_INVALID",
+                "LLM 返回了无法读取的响应",
+            )
+        return content
+
+    async def chat_once_frozen(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        config: LLMFrozenSingleCallConfig,
+    ) -> str:
+        """Call exactly once using only the supplied immutable configuration.
+
+        This paid-generation boundary intentionally never reloads settings, never
+        retries, and never falls back to mock content. Callers must validate and
+        freeze every config field before passing it here.
+        """
+
+        if not config.api_key:
+            raise LLMSingleCallError(
+                "LLM_NOT_CONFIGURED",
+                "LLM 尚未配置，未发起生成调用",
+            )
+
+        client = await self._get_client()
+        payload = {
+            "model": config.model,
+            "messages": messages,
+            "temperature": config.temperature,
+            "max_tokens": config.max_tokens,
+        }
+        try:
+            response = await client.post(
+                f"{config.base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {config.api_key}",
+                    "Content-Type": "application/json",
+                },
                 json=payload,
             )
         except httpx.TimeoutException as exc:

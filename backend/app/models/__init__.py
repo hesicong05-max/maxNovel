@@ -49,7 +49,11 @@ from app.models.planning import (  # noqa: F401
     PlanningMutationOperation,
     PlanningPart,
 )
-from app.models.generation import ChapterGenerationRun  # noqa: F401
+from app.models.generation import (  # noqa: F401
+    ChapterGenerationAttempt,
+    ChapterGenerationCandidate,
+    ChapterGenerationRun,
+)
 from app.models.foreshadow import (  # noqa: F401
     ForeshadowFact,
     ForeshadowLifecycle,

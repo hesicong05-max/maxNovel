@@ -19,6 +19,7 @@ from app.core.project_files import (
     restore_project_files,
 )
 from app.database import get_db
+from app.models.generation import ChapterGenerationAttempt
 from app.models.project import Chapter, Outline, Project, ProjectStatus, Worldview
 from app.schemas.models import ProjectCreate, ProjectResponse
 
@@ -114,7 +115,43 @@ async def delete_project(
     current_user: Annotated[User, Depends(get_current_user)],
     _write_gate: Annotated[None, Depends(require_project_writes_available)],
 ):
-    project = await get_project_for_owner(project_id, current_user, db)
+    await get_project_for_owner(project_id, current_user, db)
+    ensure_project_writes_available()
+
+    # Serialize project deletion with generation reservation. Generation takes a
+    # PostgreSQL KEY SHARE lock while it durably reserves an attempt; deletion
+    # takes UPDATE and, after acquiring it, must reject any reserved/calling
+    # attempt before supplementary files are moved out of their active path.
+    project = await db.scalar(
+        select(Project)
+        .where(
+            Project.id == project_id,
+            Project.owner_id == current_user.id,
+        )
+        .with_for_update()
+    )
+    if project is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    active_generation = await db.scalar(
+        select(ChapterGenerationAttempt)
+        .where(
+            ChapterGenerationAttempt.project_id == project_id,
+            ChapterGenerationAttempt.status.in_(("reserved", "calling")),
+        )
+        .order_by(ChapterGenerationAttempt.created_at, ChapterGenerationAttempt.id)
+        .limit(1)
+    )
+    if active_generation is not None:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "PROJECT_GENERATION_ACTIVE",
+                "message": "项目仍有生成请求正在预约或调用模型，暂时不能删除。",
+                "retryable": True,
+                "recommended_action": "wait_for_generation_result",
+            },
+        )
     ensure_project_writes_available()
 
     try:
