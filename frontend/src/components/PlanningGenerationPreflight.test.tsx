@@ -185,7 +185,7 @@ describe("PlanningGenerationPreflight", () => {
     expect(screen.getByText(/已进入模型调用，可能产生费用/)).toBeInTheDocument();
   });
 
-  it("moves focus to a newly validated candidate heading", async () => {
+  it("moves focus to the execution receipt while the version workspace owns candidate content", async () => {
     const candidate: GenerationCandidateResponse = {
       id: id("candidate"), project_id: projectId, run_id: run.id,
       planning_chapter_id: chapterId, source_attempt_id: id("attempt"), parent_candidate_id: null,
@@ -194,12 +194,13 @@ describe("PlanningGenerationPreflight", () => {
       word_count: 4, created_by: id("user"), created_at: now,
     };
     render(<PlanningGenerationPreflight {...props({ candidate })} />);
-    const heading = screen.getByRole("heading", { name: "候选正文已就绪：第一章" });
+    const heading = screen.getByRole("heading", { name: "模型生成执行已完成" });
     await waitFor(() => expect(heading).toHaveFocus());
-    expect(screen.getByLabelText("候选正文内容")).toHaveAttribute("tabindex", "0");
+    expect(screen.queryByLabelText("候选正文内容")).not.toBeInTheDocument();
+    expect(screen.getByText(/正文与确定性检查统一在下方候选版本工作区查看/)).toBeInTheDocument();
   });
 
-  it("shows deterministic review evidence without claiming semantic approval", async () => {
+  it("does not duplicate deterministic review evidence owned by the version workspace", async () => {
     const candidate: GenerationCandidateResponse = {
       id: id("candidate"), project_id: projectId, run_id: run.id,
       planning_chapter_id: chapterId, source_attempt_id: id("attempt"), parent_candidate_id: null,
@@ -219,21 +220,12 @@ describe("PlanningGenerationPreflight", () => {
       context_summary: { element_count: 2, relation_count: 1, warning_count: 1, elements: run.context_manifest.elements.map((item) => ({ element_id: item.element_id, type_key: item.type.key, type_display_name: item.type.display_name, name: item.version.name, version_no: item.version.version_no })), foreshadow_actions_supported: false, foreshadow_action_count: 0 },
     };
     render(<PlanningGenerationPreflight {...props({ candidate, candidateAudit: audit })} />);
-    expect(screen.getByRole("heading", { name: "确定性检查" })).toBeInTheDocument();
-    expect(screen.getByText("需要人工核对")).toBeInTheDocument();
-    expect(screen.getByText(/不判断情节、人物或世界规则的语义一致性/)).toBeInTheDocument();
-    expect(screen.getByText(/发现需要核对的《》标记名称/)).toBeInTheDocument();
-    expect(screen.getByText(/仅因《》标记且未出现在本次冻结清单中/)).toBeInTheDocument();
-    expect(screen.getByText("需要人工核对")).toHaveAttribute("role", "status");
-    expect(screen.getByText("查看本次冻结设定").closest("summary")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "确定性检查" })).not.toBeInTheDocument();
+    expect(screen.queryByText("《无名星门》")).not.toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/一致性通过|AI.*验证|违规设定|事实冲突/);
-    expect(screen.getByText("《无名星门》")).toBeInTheDocument();
-    const evidence = screen.getAllByText("提到了《无名星门》。").find((item) => item.tagName === "BLOCKQUOTE");
-    expect(evidence).toBeDefined();
-    expect(evidence).not.toHaveAttribute("tabindex");
   });
 
-  it("keeps candidate readable when audit fails and retries only the audit", () => {
+  it("does not expose a duplicate parent audit retry when the workspace owns audit", () => {
     const onReadGenerationCandidateAudit = vi.fn();
     const candidate: GenerationCandidateResponse = {
       id: id("candidate"), project_id: projectId, run_id: run.id,
@@ -243,9 +235,9 @@ describe("PlanningGenerationPreflight", () => {
       word_count: 4, created_by: id("user"), created_at: now,
     };
     render(<PlanningGenerationPreflight {...props({ candidate, auditError: "检查暂不可用。候选正文仍保留只读。", onReadGenerationCandidateAudit })} />);
-    expect(screen.getByLabelText("候选正文内容")).toHaveTextContent("候选正文");
-    fireEvent.click(screen.getByRole("button", { name: "重新读取检查" }));
-    expect(onReadGenerationCandidateAudit).toHaveBeenCalledOnce();
+    expect(screen.queryByLabelText("候选正文内容")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重新读取检查" })).not.toBeInTheDocument();
+    expect(onReadGenerationCandidateAudit).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /确认并生成/ })).not.toBeInTheDocument();
   });
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import CandidateVersionWorkspace from "@/components/CandidateVersionWorkspace";
 import { useSearchParams } from "react-router-dom";
 import { ApiError } from "@/services/api";
-import { readGenerationCandidateAudit } from "@/services/generationExecution";
 import { clearPendingProjectOperationRecord } from "@/services/pendingProjectOperations";
 import {
   clearPendingTechnicalDemoExecution,
@@ -15,7 +15,7 @@ import {
   type PendingTechnicalDemoExecution,
   type TechnicalIdentity,
 } from "@/services/technicalDemoExecution";
-import type { GenerationCandidateAuditResponse, GenerationRunResponse } from "@/types/generation";
+import type { GenerationRunResponse } from "@/types/generation";
 import type { TechnicalDemoCandidateResponse, TechnicalDemoCapabilityResponse, TechnicalDemoExecutionResponse } from "@/types/demo";
 
 interface Props {
@@ -26,6 +26,8 @@ interface Props {
   run: GenerationRunResponse;
   disabledReason?: string;
   onLockChange?: (locked: boolean) => void;
+  onCandidateVersionLockChange?: (locked: boolean) => void;
+  hideCandidateVersionWorkspace?: boolean;
 }
 
 type ConfirmKind = "new" | "original" | null;
@@ -47,19 +49,16 @@ function exactAdapterUnavailable(error: unknown): error is ApiError {
     && error.retryable && error.recommendedAction === "start_new_confirmed_technical_demo";
 }
 
-export default function TechnicalDemoExecution({ userId, projectId, chapterId, chapterTitle, run, disabledReason = "", onLockChange }: Props) {
+export default function TechnicalDemoExecution({ userId, projectId, chapterId, chapterTitle, run, disabledReason = "", onLockChange, onCandidateVersionLockChange, hideCandidateVersionWorkspace = false }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [pending, setPending] = useState<PendingTechnicalDemoExecution | null>(null);
   const [capability, setCapability] = useState<TechnicalDemoCapabilityResponse | null>(null);
   const [execution, setExecution] = useState<TechnicalDemoExecutionResponse | null>(null);
   const [candidate, setCandidate] = useState<TechnicalDemoCandidateResponse | null>(null);
-  const [audit, setAudit] = useState<GenerationCandidateAuditResponse | null>(null);
   const [confirmKind, setConfirmKind] = useState<ConfirmKind>(null);
   const [busy, setBusy] = useState(false);
   const [candidateBusy, setCandidateBusy] = useState(false);
-  const [auditBusy, setAuditBusy] = useState(false);
   const [error, setError] = useState("");
-  const [auditError, setAuditError] = useState("");
   const [originalRetryAllowed, setOriginalRetryAllowed] = useState(false);
   const [newAttemptAllowed, setNewAttemptAllowed] = useState(false);
   const [storageRecovery, setStorageRecovery] = useState<"corrupt" | "unavailable" | null>(null);
@@ -71,28 +70,6 @@ export default function TechnicalDemoExecution({ userId, projectId, chapterId, c
   const headingId = useId();
 
   const baseIdentity: TechnicalIdentity = { projectId, chapterId, runId: run.id, contextChecksum: run.context_checksum, userId, chapterTitle };
-
-  const readAudit = useCallback(async (value: TechnicalDemoCandidateResponse, request: number) => {
-    setAuditBusy(true); setAuditError("");
-    try {
-      const result = await readGenerationCandidateAudit({
-        projectId,
-        runId: run.id,
-        chapterId,
-        candidate: value,
-        contextChecksum: run.context_checksum,
-        targetWordCount: run.context_manifest.chapter.target_word_count,
-        elements: run.context_manifest.elements.map((item) => ({ elementId: item.element_id, typeKey: item.type.key, typeDisplayName: item.type.display_name, name: item.version.name, versionNo: item.version.version_no })),
-        relationCount: run.context_manifest.counts.relations,
-        warnings: run.context_manifest.warnings,
-      });
-      if (request === requestGeneration.current) setAudit(result);
-    } catch (cause) {
-      if (request === requestGeneration.current) setAuditError(`${errorMessage(cause)} 候选仍保留只读，不会重新执行技术模拟。`);
-    } finally {
-      if (request === requestGeneration.current) setAuditBusy(false);
-    }
-  }, [projectId, chapterId, run]);
 
   const readCandidate = useCallback(async (receipt: TechnicalDemoExecutionResponse, operation: PendingTechnicalDemoExecution | null, request: number) => {
     setCandidateBusy(true); setError("");
@@ -111,14 +88,13 @@ export default function TechnicalDemoExecution({ userId, projectId, chapterId, c
         setError("候选已严格校验，但本地恢复线索未能安全清除。请不要开始新操作。");
       }
       window.setTimeout(() => candidateHeadingRef.current?.focus(), 0);
-      void readAudit(value, request);
     } catch (cause) {
       if (request === requestGeneration.current) setError(`${errorMessage(cause)} 只允许重新读取候选，不会再次执行技术模拟。`);
     } finally {
       if (request === requestGeneration.current) setCandidateBusy(false);
     }
   // searchParams is intentionally captured to preserve unrelated URL state at the accepted response boundary.
-  }, [baseIdentity.projectId, baseIdentity.chapterId, baseIdentity.runId, baseIdentity.contextChecksum, baseIdentity.userId, baseIdentity.chapterTitle, userId, projectId, run.id, searchParams, setSearchParams, onLockChange, readAudit]);
+  }, [baseIdentity.projectId, baseIdentity.chapterId, baseIdentity.runId, baseIdentity.contextChecksum, baseIdentity.userId, baseIdentity.chapterTitle, userId, projectId, run.id, searchParams, setSearchParams, onLockChange]);
 
   const acceptExecution = useCallback((value: TechnicalDemoExecutionResponse, operation: PendingTechnicalDemoExecution | null, request: number) => {
     if (request !== requestGeneration.current || value.project_id !== projectId || value.planning_chapter_id !== chapterId || value.run_id !== run.id) return;
@@ -144,7 +120,7 @@ export default function TechnicalDemoExecution({ userId, projectId, chapterId, c
   useEffect(() => {
     const request = ++requestGeneration.current;
     const cleanup = () => { if (request === requestGeneration.current) requestGeneration.current += 1; };
-    setCandidate(null); setExecution(null); setAudit(null); setError(""); setAuditError("");
+    setCandidate(null); setExecution(null); setError("");
     const loaded = loadPendingTechnicalDemoExecution(userId, projectId);
     if (loaded.status === "available") {
       if (loaded.operation.chapter_id !== chapterId || loaded.operation.run_id !== run.id || loaded.operation.payload.expected_context_checksum !== run.context_checksum) {
@@ -171,7 +147,7 @@ export default function TechnicalDemoExecution({ userId, projectId, chapterId, c
       setCandidateBusy(true);
       void readTechnicalDemoCandidate({ ...baseIdentity, executionId: pointerExecution, candidateId: pointerCandidate }).then((value) => {
         if (request !== requestGeneration.current) return;
-        setCandidate(value); window.setTimeout(() => candidateHeadingRef.current?.focus(), 0); void readAudit(value, request);
+        setCandidate(value); window.setTimeout(() => candidateHeadingRef.current?.focus(), 0);
       }).catch((cause) => { if (request === requestGeneration.current) setError(`${errorMessage(cause)} 地址只用于只读恢复，不会触发技术模拟。`); }).finally(() => { if (request === requestGeneration.current) setCandidateBusy(false); });
     }
     return cleanup;
@@ -293,7 +269,8 @@ export default function TechnicalDemoExecution({ userId, projectId, chapterId, c
       {originalRetryAllowed && <div className="planning-generation__warning" role="alert"><span>只有再次核对能力并弹出确认框后，才能使用原编号、原载荷重试。</span><button className="btn btn-secondary" disabled={busy} onClick={(event) => void openOriginalConfirmation(event.currentTarget)}>重新核对并确认原请求</button></div>}
       {newAttemptAllowed && <div className="planning-generation__actions"><button className="btn btn-secondary" disabled={busy} onClick={(event) => void openNewConfirmation(event.currentTarget)}>使用新编号重新确认</button></div>}
       {execution && !candidate && <div className="planning-generation__warning" role="alert"><span>服务端已完成技术模拟，但候选尚未通过本地严格校验。只允许重新读取候选。</span><button className="btn btn-secondary" disabled={candidateBusy} onClick={() => { const request = ++requestGeneration.current; void readCandidate(execution, pending, request); }}>重新读取固定候选</button></div>}
-      {candidate && <article className="planning-generation__candidate technical-demo-candidate"><header><div><h6 ref={candidateHeadingRef} tabIndex={-1}>固定技术模拟候选已就绪：{candidate.title}</h6><span>独立候选版本 {candidate.version_no} · {candidate.word_count} 字词</span></div><strong>未覆盖原稿</strong></header><pre tabIndex={0} aria-label="固定技术模拟候选正文">{candidate.content}</pre><p>该内容由服务端固定适配器返回，不是 AI 生成，不产生模型费用，也没有自动确认伏笔。</p><section className="planning-generation__audit" aria-busy={auditBusy}><h6>确定性审计</h6><p>只核对内容完整性、目标字数、冻结设定和显式《》名称；不判断情节、人物或世界规则的语义一致性，仍需作者判断。</p>{auditBusy && <p role="status">正在读取审计…</p>}{auditError && <div role="alert"><span>{auditError}</span><button className="btn btn-secondary" onClick={() => void readAudit(candidate, requestGeneration.current)}>重新读取审计</button></div>}{audit && <><p role="status" aria-live="polite">{audit.status === "pass" ? "未发现确定性完整问题。" : "审计完成，需要作者人工核对。"} 伏笔动作为 0，仍未埋入。</p><dl className="planning-generation__receipt"><div><dt>目标字数</dt><dd>{audit.target_length.status === "not_applicable" ? "本章未设置目标字数" : `实际 ${audit.target_length.actual_word_count} 字词，建议范围 ${audit.target_length.minimum_word_count}–${audit.target_length.maximum_word_count}`}</dd></div><div><dt>冻结设定摘要</dt><dd>{audit.context_summary.element_count} 项设定 · {audit.context_summary.relation_count} 条关系</dd></div><div><dt>生成前提醒</dt><dd>{audit.preparation.warnings.length ? `${audit.preparation.warnings.length} 项需核对` : "无"}</dd></div></dl>{audit.context_summary.elements.length > 0 && <details><summary>查看本次冻结设定</summary><ul>{audit.context_summary.elements.map((item) => <li key={item.element_id}><strong>{item.name}</strong> · {item.type_display_name} · 内容版本 {item.version_no}</li>)}</ul></details>}{audit.preparation.warnings.length > 0 && <div className="planning-generation__warning"><strong>生成准备提醒</strong><ul>{audit.preparation.warnings.map((item, index) => <li key={`${item.code}-${item.element_id ?? index}`}>{item.code === "CHAPTER_SUMMARY_EMPTY" ? "本章摘要为空。" : "设定内容在分配后有更新。"}</li>)}</ul></div>}{audit.unrecognized_explicit_terms.items.length > 0 && <div className="planning-generation__warning"><strong>《》名称需人工核对</strong><p>以下名称未出现在本次冻结设定清单中，请判断是否需要纳入设定。</p><ul>{audit.unrecognized_explicit_terms.items.map((item) => <li key={`${item.start_offset}-${item.term}`}><strong>《{item.term}》</strong><blockquote>{item.excerpt}</blockquote></li>)}</ul></div>}</>}</section></article>}
+      {candidate && <article className="planning-generation__candidate technical-demo-candidate"><header><div><h6 ref={candidateHeadingRef} tabIndex={-1}>固定技术模拟执行已完成</h6><span>候选版本 {candidate.version_no} 已保存；正文与确定性审计统一在下方候选版本工作区查看。</span></div><strong>未覆盖原稿</strong></header><p>本次来源为服务端固定技术模拟，不调用 AI、不产生模型费用，也没有自动确认伏笔。</p></article>}
+      {candidate && !hideCandidateVersionWorkspace && <CandidateVersionWorkspace userId={userId} projectId={projectId} chapterId={chapterId} chapterTitle={chapterTitle} run={run} initialCandidateId={candidate.id} disabledReason={disabledReason} onLockChange={onCandidateVersionLockChange} />}
       {confirmKind && capability && <div className="planning-generation-confirm-overlay" role="presentation"><div ref={dialogRef} className="planning-generation-confirm" role="alertdialog" aria-modal="true" aria-labelledby="technical-confirm-title" aria-describedby="technical-confirm-description"><h4 id="technical-confirm-title">确认运行固定技术模拟</h4><p id="technical-confirm-description">{confirmKind === "original" ? "确认后仅使用原编号和原载荷重试一次。" : "确认后会先保存本地恢复线索，再提交一次固定技术模拟。"} 本流程不调用 AI，不产生模型费用。</p><ul><li>内容由固定技术适配器返回。</li><li>候选独立保存，不覆盖原稿。</li><li>不会自动埋入、强化或回收伏笔。</li></ul><div className="planning-generation__actions"><button ref={cancelRef} className="btn btn-secondary" disabled={busy} onClick={() => setConfirmKind(null)}>取消，不执行</button><button className="btn btn-primary" disabled={busy} onClick={confirm}>{confirmKind === "original" ? "确认原请求重试" : "确认运行技术模拟"}</button></div></div></div>}
     </section>
   );

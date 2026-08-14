@@ -27,7 +27,7 @@ export interface PendingForeshadowOperation<T extends ForeshadowWritePayload = F
 export type PendingForeshadowLoad =
   | { status: "missing" }
   | { status: "available"; operation: PendingForeshadowOperation }
-  | { status: "foreign"; workspace: "planning" | "generation_execution" | "technical_demo_execution" }
+  | { status: "foreign"; workspace: "planning" | "generation_execution" | "technical_demo_execution" | "candidate_manual_edit" }
   | { status: "corrupt" }
   | { status: "unavailable" };
 
@@ -161,6 +161,9 @@ export function loadPendingForeshadowOperation(userId: string, projectId: string
     }
     if (value.schema_version === 4 && value.workspace === "technical_demo_execution") {
       return { status: "foreign", workspace: "technical_demo_execution" };
+    }
+    if (value.schema_version === 5 && value.workspace === "candidate_manual_edit") {
+      return { status: "foreign", workspace: "candidate_manual_edit" };
     }
     if (!isPendingForeshadowOperation(value, userId, projectId)) return { status: "corrupt" };
     return { status: "available", operation: value };

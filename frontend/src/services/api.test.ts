@@ -1200,4 +1200,52 @@ describe("API - durable generation execution", () => {
       expect.any(Object)
     );
   });
+
+  it("uses encoded candidate version list/detail/manual-edit/by-key routes", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+    );
+    const signal = new AbortController().signal;
+    const body = {
+      operation_key: "candidate:key/one",
+      parent_candidate_id: "p".repeat(32),
+      expected_parent_version_no: 1,
+      expected_parent_checksum: "a".repeat(64),
+      expected_context_checksum: "b".repeat(64),
+      content: "修订候选。",
+    };
+    await api.listGenerationCandidateVersions("project/one", "run/one", {
+      limit: 20,
+      beforeVersionNo: 3,
+      signal,
+    });
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      1,
+      "/api/projects/project%2Fone/planning/generation-runs/run%2Fone/candidate-versions?limit=20&before_version_no=3",
+      expect.objectContaining({ signal })
+    );
+    await api.getGenerationCandidateVersion("project/one", "run/one", "candidate/one", signal);
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      2,
+      "/api/projects/project%2Fone/planning/generation-runs/run%2Fone/candidate-versions/candidate%2Fone",
+      expect.objectContaining({ signal })
+    );
+    await api.createGenerationCandidateManualEdit("project/one", "run/one", body);
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      3,
+      "/api/projects/project%2Fone/planning/generation-runs/run%2Fone/candidate-manual-edits",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(body) })
+    );
+    await api.getGenerationCandidateManualEditByKey(
+      "project/one", "run/one", "candidate:key/one", signal
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      4,
+      "/api/projects/project%2Fone/planning/generation-runs/run%2Fone/candidate-manual-edits/by-key/candidate%3Akey%2Fone",
+      expect.objectContaining({ signal })
+    );
+  });
 });

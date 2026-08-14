@@ -300,3 +300,64 @@ export interface GenerationCandidateAuditResponse {
   unrecognized_explicit_terms: GenerationCandidateAuditTerms;
   context_summary: GenerationCandidateAuditContextSummary;
 }
+
+export type GenerationCandidateVersionOrigin =
+  | "generated"
+  | "technical_demo"
+  | "manual_edit";
+
+export interface GenerationCandidateManualEditInput {
+  operation_key: string;
+  parent_candidate_id: string;
+  expected_parent_version_no: number;
+  expected_parent_checksum: string;
+  expected_context_checksum: string;
+  content: string;
+}
+
+export interface GenerationCandidateVersionListItem {
+  id: string;
+  version_no: number;
+  origin_kind: GenerationCandidateVersionOrigin;
+  parent_candidate_id: string | null;
+  parent_version_no: number | null;
+  root_candidate_id: string;
+  root_origin_kind: "generated" | "technical_demo";
+  ai_invoked_for_this_version: boolean;
+  billing_effect_for_this_version: "none" | "possible";
+  usage_status_for_this_version: "reported" | "unavailable" | "not_applicable";
+  title: string;
+  content_checksum: string;
+  content_size_bytes: number;
+  word_count: number;
+  created_by: string;
+  created_at: string;
+}
+
+export interface GenerationCandidateVersionDetail
+  extends GenerationCandidateVersionListItem {
+  project_id: string;
+  run_id: string;
+  planning_chapter_id: string;
+  content: string;
+  content_format: "plain_text";
+}
+
+export interface GenerationCandidateVersionListResponse {
+  schema_version: 1;
+  project_id: string;
+  run_id: string;
+  planning_chapter_id: string;
+  items: GenerationCandidateVersionListItem[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+export interface GenerationCandidateManualEditResponse {
+  schema_version: 1;
+  replayed: boolean;
+  ai_invoked: false;
+  billing_effect: "none";
+  usage_status: "not_applicable";
+  candidate: GenerationCandidateVersionDetail;
+}
