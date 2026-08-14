@@ -175,13 +175,70 @@ describe("ForeshadowPlanningPage", () => {
     expect(screen.getByRole("button", { name: "加入已有伏笔" })).toBeDisabled();
   });
 
+  it("fails closed when a candidate selection v6 record is corrupt", async () => {
+    sessionStorage.setItem(
+      `novel_pending_planning_operation_v1:user-1:${projectId}`,
+      JSON.stringify({ schema_version: 6, workspace: "candidate_selection" })
+    );
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const bindForeshadow = vi.fn();
+    renderPage({ bindForeshadow });
+    await screen.findByText("黑羽");
+    expect(screen.getByRole("alert")).toHaveTextContent(/候选采用恢复记录损坏|身份不匹配/);
+    expect(screen.getByRole("button", { name: "加入已有伏笔" })).toBeDisabled();
+    expect(bindForeshadow).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "清除本机损坏线索" }));
+    expect(sessionStorage.getItem(`novel_pending_planning_operation_v1:user-1:${projectId}`)).toBeNull();
+    expect(await screen.findByText(/重新读取服务器最新规划与伏笔资料/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "加入已有伏笔" })).toBeDisabled();
+  });
+
+  it("does not clear or unlock when a corrupt v6 slot is replaced by a v5 record", async () => {
+    const key = `novel_pending_planning_operation_v1:user-1:${projectId}`;
+    sessionStorage.setItem(key, JSON.stringify({ schema_version: 6, workspace: "candidate_selection" }));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const bindForeshadow = vi.fn();
+    renderPage({ bindForeshadow });
+    const clear = await screen.findByRole("button", { name: "清除本机损坏线索" });
+    const replacement = JSON.stringify({
+      schema_version: 5, workspace: "candidate_manual_edit", user_id: id("user"),
+      project_id: projectId, chapter_id: chapterOne, run_id: id("run"),
+      operation_key: "candidate:manual-edit:replacement",
+      payload: { operation_key: "candidate:manual-edit:replacement" }, created_at: now,
+    });
+    sessionStorage.setItem(key, replacement);
+    await userEvent.click(clear);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/恢复记录已变化|未清除也未解除写入锁/);
+    await waitFor(() => expect(alert).toHaveFocus());
+    expect(sessionStorage.getItem(key)).toBe(replacement);
+    expect(screen.getByRole("button", { name: "加入已有伏笔" })).toBeDisabled();
+    expect(bindForeshadow).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when candidate selection recovery storage is unavailable", async () => {
+    vi.spyOn(Object.getPrototypeOf(sessionStorage) as Storage, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    const bindForeshadow = vi.fn();
+
+    renderPage({ bindForeshadow });
+
+    await screen.findByText("黑羽");
+    expect(screen.getByRole("alert")).toHaveTextContent(/浏览器会话存储不可用|已安全停止全部伏笔写入/);
+    expect(screen.getByRole("button", { name: "加入已有伏笔" })).toBeDisabled();
+    expect(bindForeshadow).not.toHaveBeenCalled();
+  });
+
   it("distinguishes generation execution pending state and links back without implying a planning write", async () => {
-    sessionStorage.setItem(`novel_pending_planning_operation_v1:user-1:${projectId}`, JSON.stringify({
+    authState.userId = id("user");
+    const recoveryChapterId = "c".repeat(32);
+    sessionStorage.setItem(`novel_pending_planning_operation_v1:${authState.userId}:${projectId}`, JSON.stringify({
       schema_version: 3,
       workspace: "generation_execution",
-      user_id: "user-1",
+      user_id: authState.userId,
       project_id: projectId,
-      chapter_id: "c".repeat(32),
+      chapter_id: recoveryChapterId,
       run_id: "r".repeat(32),
       operation_key: "generation:execute:pending123",
       payload: {
@@ -196,7 +253,7 @@ describe("ForeshadowPlanningPage", () => {
     expect(await screen.findByText(/生成候选中还有结果未确认的模型调用/)).toBeInTheDocument();
     expect(screen.queryByText(/章节规划中还有结果未确认的写入/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "加入已有伏笔" })).toBeDisabled();
-    expect(screen.getByRole("link", { name: "返回发起章节核对生成" })).toHaveAttribute("href", `/project/${projectId}/plan/chapters`);
+    expect(screen.getByRole("link", { name: "返回发起章节核对生成" })).toHaveAttribute("href", `/project/${projectId}/plan/chapters?scope=chapter&target=${recoveryChapterId}`);
   });
 
   it("deep-links a v5 candidate edit recovery to its exact chapter, run, and parent version", async () => {
@@ -226,6 +283,79 @@ describe("ForeshadowPlanningPage", () => {
     renderPage();
 
     const link = await screen.findByRole("link", { name: "返回原章节核对候选版本" });
+    expect(link).toHaveAttribute("href", `/project/${projectId}/plan/chapters?scope=chapter&target=${recoveryChapterId}&generation_run=${runId}&candidate_version=${candidateId}`);
+    expect(screen.getByRole("button", { name: "加入已有伏笔" })).toBeDisabled();
+  });
+
+  it("identifies and explicitly clears a corrupt v5 candidate workspace without calling it v6", async () => {
+    const key = `novel_pending_planning_operation_v1:user-1:${projectId}`;
+    sessionStorage.setItem(key, JSON.stringify({
+      schema_version: 5,
+      workspace: "candidate_manual_edit",
+      user_id: "user-1",
+      project_id: projectId,
+      chapter_id: chapterOne,
+      run_id: id("run"),
+    }));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderPage();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/候选版本恢复记录损坏|身份不匹配/);
+    expect(alert).not.toHaveTextContent(/候选采用/);
+    expect(screen.getByRole("button", { name: "加入已有伏笔" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "清除本机损坏线索" }));
+    expect(sessionStorage.getItem(key)).toBeNull();
+    expect(await screen.findByText(/重新读取服务器最新规划与伏笔资料/)).toBeInTheDocument();
+  });
+
+  it("deep-links a strict v6 candidate selection to its exact chapter, run, and target", async () => {
+    authState.userId = id("user");
+    const recoveryChapterId = id("recoverychapter");
+    const runId = id("run");
+    const candidateId = id("candidate");
+    const target = {
+      id: candidateId,
+      version_no: 2,
+      origin_kind: "generated",
+      parent_candidate_id: null,
+      parent_version_no: null,
+      root_candidate_id: candidateId,
+      root_origin_kind: "generated",
+      ai_invoked_for_this_version: true,
+      billing_effect_for_this_version: "possible",
+      usage_status_for_this_version: "unavailable",
+      title: "旧章名",
+      content_checksum: "a".repeat(64),
+      content_size_bytes: 12,
+      word_count: 6,
+      created_by: authState.userId,
+      created_at: now,
+    };
+    sessionStorage.setItem(`novel_pending_planning_operation_v1:${authState.userId}:${projectId}`, JSON.stringify({
+      schema_version: 6,
+      workspace: "candidate_selection",
+      user_id: authState.userId,
+      project_id: projectId,
+      chapter_id: recoveryChapterId,
+      run_id: runId,
+      operation_key: "candidate:select:pending123",
+      payload: {
+        operation_key: "candidate:select:pending123",
+        expected_selection_version: 0,
+        target_run_id: runId,
+        target_candidate_id: candidateId,
+        expected_candidate_version_no: 2,
+        expected_candidate_checksum: "a".repeat(64),
+        expected_context_checksum: "b".repeat(64),
+      },
+      expected_previous: { state: "none", selection_version: 0, run_id: null, context_checksum: null, candidate: null },
+      expected_target: target,
+      created_at: now,
+    }));
+
+    renderPage();
+
+    const link = await screen.findByRole("link", { name: "返回原章核对采用状态" });
     expect(link).toHaveAttribute("href", `/project/${projectId}/plan/chapters?scope=chapter&target=${recoveryChapterId}&generation_run=${runId}&candidate_version=${candidateId}`);
     expect(screen.getByRole("button", { name: "加入已有伏笔" })).toBeDisabled();
   });
@@ -345,12 +475,13 @@ describe("ForeshadowPlanningPage", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("keeps the original pending key when the server reports a corrupt or reused operation", async () => {
+  it("explicitly abandons a server-rejected pending operation by full identity and reloads without retry", async () => {
     const createForeshadowPlan = vi.fn().mockRejectedValue(new ApiError(409, {
       detail: "operation key reused",
       code: "FORESHADOW_OPERATION_KEY_REUSED",
       recommended_action: "contact_support",
     }));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     renderPage({ createForeshadowPlan });
     await screen.findByRole("heading", { name: "未来计划" });
     await userEvent.selectOptions(screen.getByLabelText("目标位置"), chapterOne);
@@ -358,6 +489,33 @@ describe("ForeshadowPlanningPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("operation key reused");
     expect(sessionStorage.length).toBe(1);
     expect(screen.getByRole("button", { name: "加入已有伏笔" })).toBeDisabled();
+    expect(createForeshadowPlan).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "放弃被服务端拒绝的本地恢复线索" }));
+    expect(sessionStorage.length).toBe(0);
+    expect(await screen.findByText(/重新读取权威规划与伏笔状态/)).toBeInTheDocument();
+    expect(createForeshadowPlan).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not clear a replaced foreshadow record when abandoning a server-rejected clue", async () => {
+    const createForeshadowPlan = vi.fn().mockRejectedValue(new ApiError(409, {
+      detail: "operation corrupt",
+      code: "FORESHADOW_OPERATION_CORRUPT",
+      recommended_action: "contact_support",
+    }));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderPage({ createForeshadowPlan });
+    await screen.findByRole("heading", { name: "未来计划" });
+    await userEvent.selectOptions(screen.getByLabelText("目标位置"), chapterOne);
+    await userEvent.click(screen.getByRole("button", { name: "保存未来计划" }));
+    const abandon = await screen.findByRole("button", { name: "放弃被服务端拒绝的本地恢复线索" });
+    const key = `novel_pending_planning_operation_v1:user-1:${projectId}`;
+    const replacement = JSON.parse(sessionStorage.getItem(key)!);
+    replacement.operation_key = "foreshadow_plan_create:replacement123";
+    replacement.payload.operation_key = replacement.operation_key;
+    sessionStorage.setItem(key, JSON.stringify(replacement));
+    await userEvent.click(abandon);
+    expect(sessionStorage.getItem(key)).toContain("replacement123");
+    expect(await screen.findByRole("alert")).toHaveTextContent(/完整身份清除|继续保持禁写/);
     expect(createForeshadowPlan).toHaveBeenCalledTimes(1);
   });
 

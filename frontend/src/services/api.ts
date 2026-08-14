@@ -69,6 +69,7 @@ import type {
 import type {
   GenerationAttemptExecuteInput,
   GenerationCandidateManualEditInput,
+  GenerationCandidateSelectionInput,
   GenerationRunPrepareInput,
   GenerationRunResponse,
 } from "@/types/generation";
@@ -752,6 +753,32 @@ export const api = {
     signal?: AbortSignal
   ) => fetchJSON<unknown>(
     `/projects/${encodeURIComponent(projectId)}/planning/generation-runs/${encodeURIComponent(runId)}/candidate-manual-edits/by-key/${encodeURIComponent(operationKey)}`,
+    { signal }
+  ),
+  getGenerationCandidateSelection: (
+    projectId: string,
+    chapterId: string,
+    signal?: AbortSignal
+  ) => fetchJSON<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/planning/chapters/${encodeURIComponent(chapterId)}/candidate-selection`,
+    { signal }
+  ),
+  selectGenerationCandidate: (
+    projectId: string,
+    chapterId: string,
+    data: GenerationCandidateSelectionInput,
+    signal?: AbortSignal
+  ) => fetchJSON<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/planning/chapters/${encodeURIComponent(chapterId)}/candidate-selection-operations`,
+    { method: "POST", body: JSON.stringify(data), signal }
+  ),
+  getGenerationCandidateSelectionByKey: (
+    projectId: string,
+    chapterId: string,
+    operationKey: string,
+    signal?: AbortSignal
+  ) => fetchJSON<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/planning/chapters/${encodeURIComponent(chapterId)}/candidate-selection-operations/by-key/${encodeURIComponent(operationKey)}`,
     { signal }
   ),
   createPlanningPart: (projectId: string, data: PlanningPartCreateInput) =>

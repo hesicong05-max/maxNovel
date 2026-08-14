@@ -49,4 +49,13 @@ describe("technical demo execution contracts", () => {
     expect(clearPendingTechnicalDemoExecution(userId, projectId, operation.operation_key)).toBe(true);
     expect(loadPendingTechnicalDemoExecution(userId, projectId)).toEqual({ status: "missing" });
   });
+  it("recognizes candidate selection v6 as foreign", () => {
+    sessionStorage.setItem(
+      pendingProjectOperationKey(userId, projectId),
+      JSON.stringify({ schema_version: 6, workspace: "candidate_selection" })
+    );
+    expect(loadPendingTechnicalDemoExecution(userId, projectId)).toEqual({
+      status: "foreign", workspace: "candidate_selection",
+    });
+  });
 });

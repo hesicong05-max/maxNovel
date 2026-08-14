@@ -323,6 +323,16 @@ describe("shared pending candidate manual edit v5", () => {
     }
   });
 
+  it("recognizes candidate selection v6 as foreign", () => {
+    sessionStorage.setItem(
+      pendingProjectOperationKey(userId, projectId),
+      JSON.stringify({ schema_version: 6, workspace: "candidate_selection" })
+    );
+    expect(loadPendingCandidateManualEdit(userId, projectId)).toEqual({
+      status: "foreign", workspace: "candidate_selection",
+    });
+  });
+
   it("fails closed for corrupt or unavailable storage", () => {
     sessionStorage.setItem(
       pendingProjectOperationKey(userId, projectId),

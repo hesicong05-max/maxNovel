@@ -19,7 +19,8 @@ import {
 import { loadPendingGenerationExecution } from "@/services/generationExecution";
 import { loadPendingTechnicalDemoExecution } from "@/services/technicalDemoExecution";
 import { loadPendingCandidateManualEdit } from "@/services/candidateVersionOperations";
-import { clearPendingProjectOperationRecord } from "@/services/pendingProjectOperations";
+import { loadPendingCandidateSelection } from "@/services/candidateSelectionOperations";
+import { clearPendingProjectOperationRecord, pendingProjectOperationKey } from "@/services/pendingProjectOperations";
 import type { LoreElementListItem } from "@/types/lore";
 import DemoGuide from "@/components/DemoGuide";
 import { readDemoFixture } from "@/services/demoFixture";
@@ -156,7 +157,8 @@ export default function ForeshadowPlanningPage() {
   const [conflict, setConflict] = useState(false);
   const [refreshRequired, setRefreshRequired] = useState(false);
   const [pending, setPending] = useState<PendingForeshadowOperation | null>(null);
-  const [foreignPending, setForeignPending] = useState<{ workspace: "planning" | "generation_execution" | "technical_demo_execution" | "candidate_manual_edit"; chapterId: string | null; runId?: string; candidateId?: string } | null>(null);
+  const [serverRejectedPending, setServerRejectedPending] = useState<PendingForeshadowOperation | null>(null);
+  const [foreignPending, setForeignPending] = useState<{ workspace: "planning" | "generation_execution" | "technical_demo_execution" | "candidate_manual_edit" | "candidate_selection"; chapterId: string | null; runId?: string; candidateId?: string } | null>(null);
   const [storageIssue, setStorageIssue] = useState<"corrupt" | "unavailable" | null>(null);
   const [demoFixture, setDemoFixture] = useState<DemoFixtureCurrentResponse | null>(null);
   const [recoveryState, setRecoveryState] = useState<RecoveryState>("idle");
@@ -176,6 +178,7 @@ export default function ForeshadowPlanningPage() {
   const confirmDialogRef = useRef<HTMLElement | null>(null);
   const confirmReturnFocus = useRef<HTMLElement | null>(null);
   const commitSequence = useRef(0);
+  const corruptRecoverySnapshot = useRef<{ raw: string; workspace: "candidate_selection" | "candidate_manual_edit" | "generation_execution" | "technical_demo_execution" | "unknown" } | null>(null);
 
   const writesDisabled = busy || maintenance || conflict || refreshRequired || !!pending || !!foreignPending || !!storageIssue || !plan;
   const currentCounts = list?.counts ?? { unplanted: 0, planted: 0, pending_resolution: 0, resolved: 0 };
@@ -279,7 +282,7 @@ export default function ForeshadowPlanningPage() {
     selectedLifecycleRef.current = null;
     setPlan(null); setList(null); setSelectedId(null); setDetail(null); setHistory(null);
     setNotice(""); setError(""); setErrorHint(""); setMaintenance(false); setConflict(false);
-    setRefreshRequired(false); setPending(null); setForeignPending(null); setStorageIssue(null);
+    setRefreshRequired(false); setPending(null); setServerRejectedPending(null); setForeignPending(null); setStorageIssue(null);
     setRecoveryState("idle"); setBusy(false); setMobileDetail(false); setHasDraft(false); setCommittedAction(null);
     setStatus("active"); setState("all");
     void loadPlan(generation);
@@ -368,6 +371,7 @@ export default function ForeshadowPlanningPage() {
       return;
     }
     setPending(null);
+    setServerRejectedPending(null);
     setRecoveryState("idle");
     setDetail(receipt.lifecycle);
     setCommittedAction({ sequence: ++commitSequence.current, type: item.operation_type, lifecycleId: receipt.lifecycle_id, resourceId: item.resource_id });
@@ -410,6 +414,7 @@ export default function ForeshadowPlanningPage() {
     if (loaded.status === "missing") { setForeignPending(null); setStorageIssue(null); return; }
     if (loaded.status === "foreign") {
       setPending(null);
+      setServerRejectedPending(null);
       setStorageIssue(null);
       const generationPending = loaded.workspace === "generation_execution"
         ? loadPendingGenerationExecution(user.id, projectId)
@@ -420,17 +425,58 @@ export default function ForeshadowPlanningPage() {
       const candidatePending = loaded.workspace === "candidate_manual_edit"
         ? loadPendingCandidateManualEdit(user.id, projectId)
         : null;
+      const selectionPending = loaded.workspace === "candidate_selection"
+        ? loadPendingCandidateSelection(user.id, projectId)
+        : null;
+      if (selectionPending?.status === "corrupt" || selectionPending?.status === "unavailable") {
+        const raw = selectionPending.status === "corrupt"
+          ? sessionStorage.getItem(pendingProjectOperationKey(user.id, projectId))
+          : null;
+        corruptRecoverySnapshot.current = raw ? { raw, workspace: "candidate_selection" } : null;
+        setForeignPending(null);
+        setStorageIssue(selectionPending.status);
+        setError(selectionPending.status === "corrupt"
+          ? "候选采用恢复记录损坏或身份不匹配，已停止伏笔写入。"
+          : "浏览器恢复存储不可用，已停止伏笔写入。");
+        return;
+      }
+      const otherCorrupt = candidatePending?.status === "corrupt" || candidatePending?.status === "unavailable"
+        ? { status: candidatePending.status, workspace: "candidate_manual_edit" as const, label: "候选版本" }
+        : generationPending?.status === "corrupt" || generationPending?.status === "unavailable"
+          ? { status: generationPending.status, workspace: "generation_execution" as const, label: "生成执行" }
+          : technicalPending?.status === "corrupt" || technicalPending?.status === "unavailable"
+            ? { status: technicalPending.status, workspace: "technical_demo_execution" as const, label: "技术模拟" }
+            : null;
+      if (otherCorrupt) {
+        const raw = otherCorrupt.status === "corrupt"
+          ? sessionStorage.getItem(pendingProjectOperationKey(user.id, projectId))
+          : null;
+        corruptRecoverySnapshot.current = raw ? { raw, workspace: otherCorrupt.workspace } : null;
+        setForeignPending(null);
+        setStorageIssue(otherCorrupt.status);
+        setError(otherCorrupt.status === "corrupt"
+          ? `${otherCorrupt.label}恢复记录损坏或身份不匹配，已停止伏笔写入。`
+          : "浏览器恢复存储不可用，已停止伏笔写入。");
+        return;
+      }
       setForeignPending({
         workspace: loaded.workspace,
         chapterId: generationPending?.status === "available" ? generationPending.operation.chapter_id
           : technicalPending?.status === "available" ? technicalPending.operation.chapter_id
-            : candidatePending?.status === "available" ? candidatePending.operation.chapter_id : null,
-        runId: candidatePending?.status === "available" ? candidatePending.operation.run_id : undefined,
-        candidateId: candidatePending?.status === "available" ? candidatePending.operation.payload.parent_candidate_id : undefined,
+            : candidatePending?.status === "available" ? candidatePending.operation.chapter_id
+              : selectionPending?.status === "available" ? selectionPending.operation.chapter_id : null,
+        runId: candidatePending?.status === "available" ? candidatePending.operation.run_id
+          : selectionPending?.status === "available" ? selectionPending.operation.run_id : undefined,
+        candidateId: candidatePending?.status === "available" ? candidatePending.operation.payload.parent_candidate_id
+          : selectionPending?.status === "available" ? selectionPending.operation.expected_target.id : undefined,
       });
       return;
     }
     if (loaded.status === "corrupt" || loaded.status === "unavailable") {
+      const raw = loaded.status === "corrupt"
+        ? sessionStorage.getItem(pendingProjectOperationKey(user.id, projectId))
+        : null;
+      corruptRecoverySnapshot.current = raw ? { raw, workspace: "unknown" } : null;
       setStorageIssue(loaded.status);
       setError(loaded.status === "corrupt"
         ? "检测到损坏或不受支持的恢复记录；已安全停止全部伏笔写入。"
@@ -476,8 +522,10 @@ export default function ForeshadowPlanningPage() {
   async function handleWriteFailure(cause: unknown, item: PendingForeshadowOperation) {
     if (!projectId || !user) return;
     if (cause instanceof ApiError && (cause.code === "FORESHADOW_OPERATION_CORRUPT" || cause.code === "FORESHADOW_OPERATION_KEY_REUSED")) {
-      setRecoveryState("corrupt"); setStorageIssue("corrupt");
-      setError(message(cause)); setErrorHint(recommendedHint(cause));
+      setRecoveryState("corrupt");
+      setServerRejectedPending(item);
+      setError(`${message(cause)} 服务端已拒绝这条操作；不会重试。你可以明确放弃被拒绝的本地恢复线索，再只读重载权威状态。`);
+      setErrorHint(recommendedHint(cause));
       return;
     }
     if (cause instanceof ApiError && cause.status === 503) {
@@ -502,13 +550,86 @@ export default function ForeshadowPlanningPage() {
 
   function clearCorruptRecovery() {
     if (!projectId || !user || storageIssue !== "corrupt") return;
-    if (clearPendingProjectOperationRecord(user.id, projectId)) {
+    const failClosed = (text: string) => {
+      setError(text);
+      window.requestAnimationFrame(() => errorRef.current?.focus());
+    };
+    const corruptSnapshot = corruptRecoverySnapshot.current;
+    if (!corruptSnapshot) {
+      failClosed("无法确认损坏恢复记录的原始快照，未清除也未解除写入锁。");
+      return;
+    }
+    if (!window.confirm(corruptSnapshot.workspace === "candidate_selection"
+      ? "只清除这条损坏的候选采用浏览器恢复记录？不会修改服务器或伏笔数据。"
+      : "只清除这条损坏的浏览器恢复记录？不会修改服务器或伏笔数据。")) return;
+    let currentRaw: string | null;
+    try {
+      currentRaw = sessionStorage.getItem(pendingProjectOperationKey(user.id, projectId));
+    } catch {
+      setStorageIssue("unavailable");
+      failClosed("浏览器存储仍不可用，无法核对或清除损坏恢复线索；继续保持禁写。");
+      return;
+    }
+    const shared = loadPendingForeshadowOperation(user.id, projectId);
+    const stillExactWorkspace = corruptSnapshot.workspace === "candidate_selection"
+      ? shared.status === "foreign" && shared.workspace === "candidate_selection"
+        && loadPendingCandidateSelection(user.id, projectId).status === "corrupt"
+      : corruptSnapshot.workspace === "candidate_manual_edit"
+        ? shared.status === "foreign" && shared.workspace === "candidate_manual_edit"
+          && loadPendingCandidateManualEdit(user.id, projectId).status === "corrupt"
+        : corruptSnapshot.workspace === "generation_execution"
+          ? shared.status === "foreign" && shared.workspace === "generation_execution"
+            && loadPendingGenerationExecution(user.id, projectId).status === "corrupt"
+          : corruptSnapshot.workspace === "technical_demo_execution"
+            ? shared.status === "foreign" && shared.workspace === "technical_demo_execution"
+              && loadPendingTechnicalDemoExecution(user.id, projectId).status === "corrupt"
+            : shared.status === "corrupt";
+    if (currentRaw !== corruptSnapshot.raw || !stillExactWorkspace) {
+      failClosed(corruptSnapshot.workspace === "candidate_selection"
+        ? "恢复记录已变化或不再是损坏的候选采用记录，未清除也未解除写入锁。"
+        : "恢复记录已变化或不再是原先的损坏记录，未清除也未解除写入锁。");
+      return;
+    }
+    if (clearPendingProjectOperationRecord(user.id, projectId)
+      && loadPendingForeshadowOperation(user.id, projectId).status === "missing") {
+      corruptRecoverySnapshot.current = null;
       setStorageIssue(null); setError(""); setNotice("只清除了本机损坏的恢复线索；没有删除小说或服务器数据。安全起见，请重新载入页面后再写入。");
       setRefreshRequired(true);
       setError("本机恢复线索已清除。请重新读取服务器最新规划与伏笔资料后再继续写入。");
     } else {
       setStorageIssue("unavailable");
-      setError("浏览器存储仍不可用，无法清除损坏恢复线索；继续保持禁写。");
+      failClosed("浏览器存储仍不可用，无法清除损坏恢复线索；继续保持禁写。");
+    }
+  }
+
+  async function abandonServerRejectedPending() {
+    if (!projectId || !user || !pending || !serverRejectedPending
+      || JSON.stringify(pending) !== JSON.stringify(serverRejectedPending)
+      || !window.confirm("明确放弃这条已被服务端拒绝的本地恢复线索？不会重试原请求，也不会修改服务器伏笔数据。")) return;
+    const loaded = loadPendingForeshadowOperation(user.id, projectId);
+    if (loaded.status !== "available"
+      || JSON.stringify(loaded.operation) !== JSON.stringify(serverRejectedPending)
+      || !clearPendingForeshadowOperation(user.id, projectId, serverRejectedPending.operation_key)
+      || loadPendingForeshadowOperation(user.id, projectId).status !== "missing") {
+      setError("被拒绝的本地恢复线索已变化或无法按完整身份清除；继续保持禁写且不会重试。");
+      window.requestAnimationFrame(() => errorRef.current?.focus());
+      return;
+    }
+    setPending(null);
+    setServerRejectedPending(null);
+    setRecoveryState("idle");
+    setBusy(true);
+    const refreshed = await refreshAuthoritative(selectedId);
+    setBusy(false);
+    if (refreshed) {
+      setConflict(false);
+      setRefreshRequired(false);
+      setError("");
+      setErrorHint("");
+      setNotice("已放弃被服务端拒绝的本地恢复线索，并重新读取权威规划与伏笔状态；没有重试原请求。");
+    } else {
+      setRefreshRequired(true);
+      setError("本地恢复线索已放弃，但权威状态重读失败；继续保持禁写，请再次核对服务器最新状态。");
     }
   }
 
@@ -640,12 +761,13 @@ export default function ForeshadowPlanningPage() {
       </section>
 
       <div className="foreshadow-live" role="status" aria-live="polite">{notice}</div>
-      {error && <div className="planning-notice is-error" role="alert" tabIndex={-1} ref={errorRef}><span>{error}{errorHint && <small className="planning-notice__hint">{errorHint}</small>}</span><span className="planning-notice__actions">{storageIssue === "corrupt" && <button className="btn btn-secondary" onClick={clearCorruptRecovery}>清除本机损坏线索</button>}{(conflict || refreshRequired) && <button className="btn btn-secondary" onClick={() => void refreshAuthoritative(selectedId).then((ok) => { if (ok) { setConflict(false); setRefreshRequired(false); setError(""); setNotice("已核对服务器最新规划与伏笔资料。"); } })}>核对服务器最新状态</button>}</span></div>}
+      {error && <div className="planning-notice is-error" role="alert" tabIndex={-1} ref={errorRef}><span>{error}{errorHint && <small className="planning-notice__hint">{errorHint}</small>}</span><span className="planning-notice__actions">{storageIssue === "corrupt" && <button className="btn btn-secondary" onClick={clearCorruptRecovery}>清除本机损坏线索</button>}{serverRejectedPending && <button className="btn btn-secondary" onClick={() => void abandonServerRejectedPending()}>放弃被服务端拒绝的本地恢复线索</button>}{(conflict || refreshRequired) && <button className="btn btn-secondary" onClick={() => void refreshAuthoritative(selectedId).then((ok) => { if (ok) { setConflict(false); setRefreshRequired(false); setError(""); setNotice("已核对服务器最新规划与伏笔资料。"); } })}>核对服务器最新状态</button>}</span></div>}
       {maintenance && <div className="planning-notice" role="status">项目正在维护；只读内容和原表单已保留，新写入已暂停。</div>}
       {foreignPending?.workspace === "planning" && <div className="planning-notice" role="alert"><span>章节规划中还有结果未确认的写入；伏笔写入已暂停。</span><Link className="btn btn-secondary" to={`/project/${projectId}/plan/chapters`}>返回章节规划核对</Link></div>}
       {foreignPending?.workspace === "generation_execution" && <div className="planning-notice" role="alert"><span>生成候选中还有结果未确认的模型调用；伏笔写入已暂停，且不会自动确认埋入或回收。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${projectId}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${projectId}/plan/chapters`}>返回发起章节核对生成</Link></div>}
       {foreignPending?.workspace === "technical_demo_execution" && <div className="planning-notice" role="alert"><span>技术模拟中还有结果未确认的固定内容请求；伏笔写入已暂停，且不会自动确认埋入或回收。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${projectId}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${projectId}/plan/chapters`}>返回技术模拟发起章节核对</Link></div>}
       {foreignPending?.workspace === "candidate_manual_edit" && <div className="planning-notice" role="alert"><span>候选版本还有手工另存结果未确认；伏笔写入已暂停，且不会自动确认埋入或回收。</span><Link className="btn btn-secondary" to={foreignPending.chapterId && foreignPending.runId && foreignPending.candidateId ? `/project/${projectId}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}&generation_run=${encodeURIComponent(foreignPending.runId)}&candidate_version=${encodeURIComponent(foreignPending.candidateId)}` : `/project/${projectId}/plan/chapters`}>返回原章节核对候选版本</Link></div>}
+      {foreignPending?.workspace === "candidate_selection" && <div className="planning-notice" role="alert"><span>候选采用还有结果未确认；伏笔写入已暂停，且不会自动确认埋入或回收。</span><Link className="btn btn-secondary" to={foreignPending.chapterId && foreignPending.runId && foreignPending.candidateId ? `/project/${projectId}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}&generation_run=${encodeURIComponent(foreignPending.runId)}&candidate_version=${encodeURIComponent(foreignPending.candidateId)}` : `/project/${projectId}/plan/chapters`}>返回原章核对采用状态</Link></div>}
       {pending && <div className="planning-notice" role="status"><span>上次伏笔操作仍等待确认；已冻结新写入，避免重复记录。</span><span className="planning-notice__actions"><button className="btn btn-secondary" disabled={busy} onClick={() => void reconcilePending(pending)}>{recoveryState === "checking" ? "正在核对…" : "核对原操作结果"}</button>{recoveryState === "not_found" && <button className="btn btn-secondary" disabled={busy} onClick={() => void retryPending()}>使用原编号和内容重试</button>}</span></div>}
 
       <section className="foreshadow-overview" aria-label="伏笔状态概况">

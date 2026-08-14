@@ -211,4 +211,14 @@ describe("planning operation recovery", () => {
     expect(loadPendingPlanningOperation("u", "p")).toEqual({ status: "unavailable" });
     vi.unstubAllGlobals();
   });
+
+  it("recognizes candidate selection v6 as foreign", () => {
+    sessionStorage.setItem(
+      "novel_pending_planning_operation_v1:u:p",
+      JSON.stringify({ schema_version: 6, workspace: "candidate_selection" })
+    );
+    expect(loadPendingPlanningOperation("u", "p")).toEqual({
+      status: "foreign", workspace: "candidate_selection",
+    });
+  });
 });

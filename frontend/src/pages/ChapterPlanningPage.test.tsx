@@ -178,6 +178,19 @@ describe("ChapterPlanningPage", () => {
     expect(screen.getByRole("link", { name: "前往伏笔管理核对" })).toHaveAttribute("href", "/project/project-1/plan/foreshadows");
   });
 
+  it("keeps planning writes frozen when candidate selection v6 owns the shared slot", async () => {
+    sessionStorage.setItem(
+      "novel_pending_planning_operation_v1:user-1:project-1",
+      JSON.stringify({ schema_version: 6, workspace: "candidate_selection" })
+    );
+    const createPlanningPart = vi.fn();
+    renderPage({ createPlanningPart });
+    await screen.findByText("第一篇");
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "添加设定" })).toBeDisabled();
+    expect(createPlanningPart).not.toHaveBeenCalled();
+  });
+
   it("fails closed instead of treating a malformed generation execution as foreshadow work", async () => {
     sessionStorage.setItem("novel_pending_planning_operation_v1:user-1:project-1", JSON.stringify({
       schema_version: 3,

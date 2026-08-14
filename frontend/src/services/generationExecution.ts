@@ -660,7 +660,7 @@ export interface PendingGenerationExecution {
 export type PendingGenerationExecutionLoad =
   | { status: "missing" }
   | { status: "available"; operation: PendingGenerationExecution }
-  | { status: "foreign"; workspace: "planning" | "foreshadow" | "technical_demo_execution" | "candidate_manual_edit" }
+  | { status: "foreign"; workspace: "planning" | "foreshadow" | "technical_demo_execution" | "candidate_manual_edit" | "candidate_selection" }
   | { status: "corrupt" }
   | { status: "unavailable" };
 
@@ -741,6 +741,9 @@ export function loadPendingGenerationExecution(
     }
     if (value.schema_version === 5 && value.workspace === "candidate_manual_edit") {
       return { status: "foreign", workspace: "candidate_manual_edit" };
+    }
+    if (value.schema_version === 6 && value.workspace === "candidate_selection") {
+      return { status: "foreign", workspace: "candidate_selection" };
     }
     if (!isPendingGenerationExecution(value, userId, projectId)) {
       return { status: "corrupt" };
