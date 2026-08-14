@@ -345,7 +345,8 @@ describe("CandidateVersionWorkspace", () => {
       operation_key: "planning:blocked-by-existing-owner",
     }));
     fireEvent.click(screen.getByRole("button", { name: "保存为新候选版本" }));
-    expect(await screen.findByText(/已停止提交/)).toHaveFocus();
+    const storageError = await screen.findByText(/已停止提交/);
+    await waitFor(() => expect(storageError).toHaveFocus());
     expect(create).not.toHaveBeenCalled();
   });
 
