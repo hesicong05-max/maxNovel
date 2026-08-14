@@ -339,7 +339,9 @@ describe("CandidateVersionWorkspace", () => {
     renderWorkspace();
     await screen.findByText("第一章 · 候选版本 1");
     fireEvent.click(screen.getByRole("button", { name: "基于此候选编辑" }));
-    fireEvent.change(screen.getByLabelText("编辑副本"), { target: { value: editedContent } });
+    const editor = screen.getByLabelText("编辑副本");
+    await waitFor(() => expect(editor).toHaveFocus());
+    fireEvent.change(editor, { target: { value: editedContent } });
     sessionStorage.setItem(pendingProjectOperationKey(userId, projectId), JSON.stringify({
       schema_version: 1,
       operation_key: "planning:blocked-by-existing-owner",
