@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -44,6 +44,43 @@ function ProjectSwitcher() {
   return <button onClick={() => navigate("/project/project-2/plan/chapters")}>切换项目</button>;
 }
 
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+}
+
+async function digest(value: unknown): Promise<string> {
+  const result = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(value)));
+  return Array.from(new Uint8Array(result), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function reorderReceipt(body: { operation_key: string; expected_structure_version: number; parts: Array<{ part_id: string; chapter_ids: string[] }> }) {
+  return {
+    receipt_kind: "structure",
+    receipt_id: "receipt-1",
+    operation_key: body.operation_key,
+    operation_type: "structure_reorder",
+    replayed: false,
+    changed: true,
+    project_id: "project-1",
+    plan_id: "plan-1",
+    previous_structure_version: body.expected_structure_version,
+    new_structure_version: body.expected_structure_version + 1,
+    affected_node: null,
+    placement: null,
+    structure: {
+      digest: await digest(body.parts),
+      part_count: body.parts.length,
+      chapter_count: body.parts.reduce((total, part) => total + part.chapter_ids.length, 0),
+      changed_part_count: 0,
+      changed_chapter_count: 2,
+    },
+    created_at: "2026-08-17T00:00:00Z",
+  };
+}
+
 function renderPage(overrides: Record<string, unknown> = {}) {
   const mocked = {
     ...apiModule.api,
@@ -53,7 +90,7 @@ function renderPage(overrides: Record<string, unknown> = {}) {
       scope: { ...emptyAssignments.scope, scope_type: scopeType, scope_target_id: scopeTargetId, title: scopeType === "novel" ? "整部小说" : scopeTargetId },
     })),
     getPlanningOperation: vi.fn().mockRejectedValue(new ApiError(404, { detail: "not found" })),
-    reorderPlanningStructure: vi.fn().mockResolvedValue({ receipt_kind: "structure" }),
+    reorderPlanningStructure: vi.fn().mockImplementation((_projectId: string, body: Parameters<typeof reorderReceipt>[0]) => reorderReceipt(body)),
     ...overrides,
   };
   vi.spyOn(apiModule, "api", "get").mockReturnValue(mocked as typeof apiModule.api);
@@ -110,6 +147,270 @@ describe("ChapterPlanningPage", () => {
       ],
     }));
     expect(mocked.getPlanning).toHaveBeenCalledTimes(2);
+  });
+
+  it("submits one existing structure reorder after a valid chapter drop", async () => {
+    const mocked = renderPage();
+    await screen.findByRole("heading", { name: "章节规划" });
+    const source = screen.getByTestId("chapter-drag-handle-chapter-1");
+    const target = screen.getByRole("button", { name: "第二章" }).closest("li")!;
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
+      top: 0, bottom: 100, left: 0, right: 200, width: 200, height: 100, x: 0, y: 0, toJSON: () => ({}),
+    });
+    const dataTransfer = { effectAllowed: "none", dropEffect: "none", setData: vi.fn() };
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.dragOver(target, { dataTransfer, clientY: 75 });
+    fireEvent.drop(target, { dataTransfer, clientY: 75 });
+
+    await waitFor(() => expect(mocked.reorderPlanningStructure).toHaveBeenCalledTimes(1));
+    expect(mocked.reorderPlanningStructure).toHaveBeenCalledWith("project-1", expect.objectContaining({
+      expected_structure_version: 3,
+      parts: [
+        { part_id: "part-1", chapter_ids: ["chapter-2", "chapter-1"] },
+        { part_id: "part-2", chapter_ids: [] },
+      ],
+    }));
+    await waitFor(() => expect(mocked.getPlanning).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps a mismatched direct reorder receipt and freezes further writes", async () => {
+    const reorderPlanningStructure = vi.fn().mockImplementation(async (_projectId: string, body: Parameters<typeof reorderReceipt>[0]) => ({
+      ...await reorderReceipt(body),
+      structure: { ...((await reorderReceipt(body)).structure), digest: "0".repeat(64) },
+    }));
+    renderPage({ reorderPlanningStructure });
+    await screen.findByRole("heading", { name: "章节规划" });
+    await userEvent.click(screen.getByRole("button", { name: "下移章节 第一章" }));
+
+    expect(await screen.findByText(/排序收据与本地全量结构不一致/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeDisabled();
+    expect(sessionStorage.getItem("novel_pending_planning_operation_v1:user-1:project-1")).toContain("structure_reorder");
+    expect(reorderPlanningStructure).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks an unknown reorder by key before allowing one explicit original retry", async () => {
+    const payload = {
+      operation_key: "planning:structure_reorder:pending123",
+      expected_structure_version: 3,
+      parts: [
+        { part_id: "part-1", chapter_ids: ["chapter-2", "chapter-1"] },
+        { part_id: "part-2", chapter_ids: [] },
+      ],
+    };
+    savePendingPlanningOperation({
+      schema_version: 1,
+      user_id: "user-1",
+      project_id: "project-1",
+      operation_key: payload.operation_key,
+      action: "structure_reorder",
+      target_id: "chapter-1",
+      payload,
+      created_at: "2026-08-17T00:00:00Z",
+    });
+    const getPlanningOperation = vi.fn().mockRejectedValue(new ApiError(404, {
+      detail: "未找到该操作结果。",
+      code: "PLANNING_OPERATION_NOT_FOUND",
+      recommended_action: "retry_original_request",
+    }));
+    const reorderPlanningStructure = vi.fn().mockImplementation((_projectId: string, body: Parameters<typeof reorderReceipt>[0]) => reorderReceipt(body));
+    renderPage({ getPlanningOperation, reorderPlanningStructure });
+
+    const retry = await screen.findByRole("button", { name: "使用原编号与全量结构重试" });
+    expect(getPlanningOperation).toHaveBeenCalledTimes(1);
+    expect(reorderPlanningStructure).not.toHaveBeenCalled();
+    await userEvent.click(retry);
+    await waitFor(() => expect(reorderPlanningStructure).toHaveBeenCalledTimes(1));
+    expect(reorderPlanningStructure).toHaveBeenCalledWith("project-1", payload);
+  });
+
+  it("fails closed when a recovered reorder receipt has the wrong digest", async () => {
+    const payload = {
+      operation_key: "planning:structure_reorder:pending124",
+      expected_structure_version: 3,
+      parts: [
+        { part_id: "part-1", chapter_ids: ["chapter-2", "chapter-1"] },
+        { part_id: "part-2", chapter_ids: [] },
+      ],
+    };
+    savePendingPlanningOperation({
+      schema_version: 1,
+      user_id: "user-1",
+      project_id: "project-1",
+      operation_key: payload.operation_key,
+      action: "structure_reorder",
+      target_id: "chapter-1",
+      payload,
+      created_at: "2026-08-17T00:00:00Z",
+    });
+    const receipt = await reorderReceipt(payload);
+    const getPlanningOperation = vi.fn().mockResolvedValue({
+      ...receipt,
+      structure: { ...receipt.structure, chapter_count: 99 },
+    });
+    const reorderPlanningStructure = vi.fn();
+    renderPage({ getPlanningOperation, reorderPlanningStructure });
+
+    expect(await screen.findByText(/排序收据与本地全量结构不一致/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "使用原编号与全量结构重试" })).not.toBeInTheDocument();
+    expect(reorderPlanningStructure).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("novel_pending_planning_operation_v1:user-1:project-1")).toContain(payload.operation_key);
+  });
+
+  it("ignores a direct reorder receipt that arrives after switching projects", async () => {
+    let resolveReorder: ((value: Awaited<ReturnType<typeof reorderReceipt>>) => void) | undefined;
+    let submittedBody: Parameters<typeof reorderReceipt>[0] | undefined;
+    const delayedReorder = new Promise<Awaited<ReturnType<typeof reorderReceipt>>>((resolve) => { resolveReorder = resolve; });
+    const projectTwo = {
+      ...plan,
+      id: "plan-2",
+      project_id: "project-2",
+      parts: [{ ...plan.parts[0], project_id: "project-2", plan_id: "plan-2", title: "新项目篇章" }],
+    };
+    const mocked = {
+      ...apiModule.api,
+      getPlanning: vi.fn((projectId: string) => Promise.resolve(projectId === "project-1" ? plan : projectTwo)),
+      getPlanningLoreAssignments: vi.fn().mockResolvedValue(emptyAssignments),
+      getPlanningOperation: vi.fn().mockRejectedValue(new ApiError(404, { detail: "not found" })),
+      reorderPlanningStructure: vi.fn((_projectId: string, body: Parameters<typeof reorderReceipt>[0]) => {
+        submittedBody = body;
+        return delayedReorder;
+      }),
+    };
+    vi.spyOn(apiModule, "api", "get").mockReturnValue(mocked as unknown as typeof apiModule.api);
+    render(
+      <MemoryRouter initialEntries={["/project/project-1/plan/chapters"]}>
+        <ProjectSwitcher />
+        <Routes><Route path="/project/:id/plan/chapters" element={<ChapterPlanningPage />} /></Routes>
+      </MemoryRouter>
+    );
+
+    await screen.findByText("第一篇");
+    await userEvent.click(screen.getByRole("button", { name: "下移章节 第一章" }));
+    await waitFor(() => expect(mocked.reorderPlanningStructure).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("button", { name: "切换项目" }));
+    expect(await screen.findByText("新项目篇章")).toBeInTheDocument();
+    resolveReorder?.(await reorderReceipt(submittedBody!));
+
+    await waitFor(() => expect(screen.getByText("新项目篇章")).toBeInTheDocument());
+    expect(screen.queryByText(/排序收据与本地全量结构不一致/)).not.toBeInTheDocument();
+    expect(sessionStorage.getItem("novel_pending_planning_operation_v1:user-1:project-2")).toBeNull();
+    expect(sessionStorage.getItem("novel_pending_planning_operation_v1:user-1:project-1")).toContain("structure_reorder");
+  });
+
+  it("ignores an original-key reorder receipt that arrives after switching projects", async () => {
+    const payload = {
+      operation_key: "planning:structure_reorder:late-retry",
+      expected_structure_version: 3,
+      parts: [
+        { part_id: "part-1", chapter_ids: ["chapter-2", "chapter-1"] },
+        { part_id: "part-2", chapter_ids: [] },
+      ],
+    };
+    savePendingPlanningOperation({
+      schema_version: 1,
+      user_id: "user-1",
+      project_id: "project-1",
+      operation_key: payload.operation_key,
+      action: "structure_reorder",
+      target_id: "chapter-1",
+      payload,
+      created_at: "2026-08-17T00:00:00Z",
+    });
+    let resolveRetry: ((value: Awaited<ReturnType<typeof reorderReceipt>>) => void) | undefined;
+    const delayedRetry = new Promise<Awaited<ReturnType<typeof reorderReceipt>>>((resolve) => { resolveRetry = resolve; });
+    const projectTwo = {
+      ...plan,
+      id: "plan-2",
+      project_id: "project-2",
+      parts: [{ ...plan.parts[0], project_id: "project-2", plan_id: "plan-2", title: "新项目篇章" }],
+    };
+    const mocked = {
+      ...apiModule.api,
+      getPlanning: vi.fn((projectId: string) => Promise.resolve(projectId === "project-1" ? plan : projectTwo)),
+      getPlanningLoreAssignments: vi.fn().mockResolvedValue(emptyAssignments),
+      getPlanningOperation: vi.fn().mockRejectedValue(new ApiError(404, {
+        detail: "未找到该操作结果。",
+        code: "PLANNING_OPERATION_NOT_FOUND",
+        recommended_action: "retry_original_request",
+      })),
+      reorderPlanningStructure: vi.fn(() => delayedRetry),
+    };
+    vi.spyOn(apiModule, "api", "get").mockReturnValue(mocked as unknown as typeof apiModule.api);
+    render(
+      <MemoryRouter initialEntries={["/project/project-1/plan/chapters"]}>
+        <ProjectSwitcher />
+        <Routes><Route path="/project/:id/plan/chapters" element={<ChapterPlanningPage />} /></Routes>
+      </MemoryRouter>
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: "使用原编号与全量结构重试" }));
+    await waitFor(() => expect(mocked.reorderPlanningStructure).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("button", { name: "切换项目" }));
+    expect(await screen.findByText("新项目篇章")).toBeInTheDocument();
+    resolveRetry?.(await reorderReceipt(payload));
+
+    await waitFor(() => expect(screen.getByText("新项目篇章")).toBeInTheDocument());
+    expect(screen.queryByText(/排序收据与本地全量结构不一致/)).not.toBeInTheDocument();
+    expect(sessionStorage.getItem("novel_pending_planning_operation_v1:user-1:project-2")).toBeNull();
+    expect(sessionStorage.getItem("novel_pending_planning_operation_v1:user-1:project-1")).toContain(payload.operation_key);
+  });
+
+  it("ignores a recovered reorder receipt when the project changes during digest verification", async () => {
+    const payload = {
+      operation_key: "planning:structure_reorder:digest-switch",
+      expected_structure_version: 3,
+      parts: [
+        { part_id: "part-1", chapter_ids: ["chapter-2", "chapter-1"] },
+        { part_id: "part-2", chapter_ids: [] },
+      ],
+    };
+    savePendingPlanningOperation({
+      schema_version: 1,
+      user_id: "user-1",
+      project_id: "project-1",
+      operation_key: payload.operation_key,
+      action: "structure_reorder",
+      target_id: "chapter-1",
+      payload,
+      created_at: "2026-08-17T00:00:00Z",
+    });
+    const receipt = await reorderReceipt(payload);
+    const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+    let releaseDigest: (() => void) | undefined;
+    const digestGate = new Promise<void>((resolve) => { releaseDigest = resolve; });
+    const digestSpy = vi.spyOn(crypto.subtle, "digest").mockImplementation(async (algorithm, data) => {
+      await digestGate;
+      return originalDigest(algorithm, data);
+    });
+    const projectTwo = {
+      ...plan,
+      id: "plan-2",
+      project_id: "project-2",
+      parts: [{ ...plan.parts[0], project_id: "project-2", plan_id: "plan-2", title: "新项目篇章" }],
+    };
+    const mocked = {
+      ...apiModule.api,
+      getPlanning: vi.fn((projectId: string) => Promise.resolve(projectId === "project-1" ? plan : projectTwo)),
+      getPlanningLoreAssignments: vi.fn().mockResolvedValue(emptyAssignments),
+      getPlanningOperation: vi.fn().mockResolvedValue(receipt),
+    };
+    vi.spyOn(apiModule, "api", "get").mockReturnValue(mocked as unknown as typeof apiModule.api);
+    render(
+      <MemoryRouter initialEntries={["/project/project-1/plan/chapters"]}>
+        <ProjectSwitcher />
+        <Routes><Route path="/project/:id/plan/chapters" element={<ChapterPlanningPage />} /></Routes>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(digestSpy).toHaveBeenCalledTimes(1));
+    await userEvent.click(screen.getByRole("button", { name: "切换项目" }));
+    expect(await screen.findByText("新项目篇章")).toBeInTheDocument();
+    releaseDigest?.();
+
+    await waitFor(() => expect(screen.getByText("新项目篇章")).toBeInTheDocument());
+    expect(screen.queryByText(/排序收据与本地全量结构不一致/)).not.toBeInTheDocument();
+    expect(sessionStorage.getItem("novel_pending_planning_operation_v1:user-1:project-2")).toBeNull();
+    expect(sessionStorage.getItem("novel_pending_planning_operation_v1:user-1:project-1")).toContain(payload.operation_key);
   });
 
   it("routes relational migration requirements to the lore repository", async () => {
@@ -811,6 +1112,10 @@ describe("ChapterPlanningPage", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "第一章" }));
     await userEvent.selectOptions(screen.getByLabelText("移动至篇章"), "part-2");
+    expect(screen.getByTestId("chapter-drag-handle-chapter-1")).toHaveAttribute("draggable", "false");
+    expect(screen.getByRole("button", { name: "下移章节 第一章" })).toBeDisabled();
+    expect(screen.getByText("请先保存或放弃当前修改，再调整顺序。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "移动到目标篇章末尾" })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: "整部小说" }));
 
     expect(confirm).toHaveBeenCalledWith(expect.stringMatching(/尚未保存/));

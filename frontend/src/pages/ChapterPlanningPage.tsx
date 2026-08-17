@@ -119,16 +119,53 @@ function scopeIdentity(scopeType: PlanningScopeType, scopeTargetId: string): str
   return `${scopeType}:${scopeTargetId}`;
 }
 
-function receiptMatchesPending(
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function receiptMatchesPending(
   receipt: PlanningOperationReceipt,
   operation: PendingPlanningOperation,
-  projectId: string
-): boolean {
+  projectId: string,
+  planId?: string
+): Promise<boolean> {
   const assignment = operation.action.startsWith("assignment_");
-  return receipt.project_id === projectId
+  const baseMatches = receipt.project_id === projectId
     && receipt.operation_key === operation.operation_key
     && receipt.operation_type === operation.action
     && receipt.receipt_kind === (assignment ? "assignment" : "structure");
+  if (!baseMatches || operation.action !== "structure_reorder" || receipt.receipt_kind !== "structure") {
+    return baseMatches;
+  }
+  const payload = operation.payload as Partial<PlanningReorderInput>;
+  if (!planId || receipt.plan_id !== planId || !Number.isInteger(payload.expected_structure_version) || !Array.isArray(payload.parts)) {
+    return false;
+  }
+  const structure = receipt.structure;
+  if (!structure || typeof structure !== "object" || Array.isArray(structure)) return false;
+  const typed = structure as Record<string, unknown>;
+  const chapterCount = payload.parts.reduce((total, part) => total + part.chapter_ids.length, 0);
+  if (
+    receipt.changed !== true
+    || receipt.previous_structure_version !== payload.expected_structure_version
+    || receipt.new_structure_version !== payload.expected_structure_version + 1
+    || typed.part_count !== payload.parts.length
+    || typed.chapter_count !== chapterCount
+    || typeof typed.digest !== "string"
+  ) return false;
+  try {
+    return typed.digest === await sha256Hex(canonicalJson(payload.parts));
+  } catch {
+    return false;
+  }
 }
 
 function replaceFailedGenerationPending(
@@ -160,6 +197,7 @@ export default function ChapterPlanningPage() {
   const [busy, setBusy] = useState(false);
   const [maintenance, setMaintenance] = useState(false);
   const [pending, setPending] = useState<PendingPlanningOperation | null>(null);
+  const [reorderRecoveryState, setReorderRecoveryState] = useState<"idle" | "checking" | "not_found" | "unknown">("idle");
   const [mobileDetail, setMobileDetail] = useState(() => !!searchParams.get("target"));
   const [conflict, setConflict] = useState(false);
   const [assignmentConflict, setAssignmentConflict] = useState(false);
@@ -374,6 +412,9 @@ export default function ChapterPlanningPage() {
     || candidateManualEditLocked || candidateSelectionLocked;
   const planningWriteDisabled = busy || generationBusy || generationExecutionBusy || technicalDemoLocked || candidateVersionLocked || !!generationExecutionPending || !!pending || maintenance || conflict || assignmentConflict
     || refreshRequired || assignmentRefreshRequired || !!pendingStorageIssue || !!foreignPending;
+  const structureReorderDisabledReason = hasUnsavedStructureDraft || hasUnsavedPartCreationDraft
+    ? "请先保存或放弃当前修改，再调整顺序。"
+    : undefined;
 
   const handleTechnicalDemoLockChange = useCallback((locked: boolean) => {
     if (locked) {
@@ -1101,6 +1142,10 @@ export default function ChapterPlanningPage() {
     }
     const generation = requestGeneration.current;
     setPending(stored);
+    if (stored.action === "structure_reorder") {
+      void reconcileStructureReorderPending(stored, generation);
+      return;
+    }
     if (stored.action === "generation_prepare") {
       generationRunRequest.current += 1;
       setGenerationLoadingSaved(false);
@@ -1114,7 +1159,7 @@ export default function ChapterPlanningPage() {
     void api.getPlanningOperation(id, stored.operation_key)
       .then(async (receipt) => {
         if (generation !== requestGeneration.current) return;
-        if (!receiptMatchesPending(receipt, stored, id)) {
+        if (!await receiptMatchesPending(receipt, stored, id, planRef.current?.id)) {
           corruptRecoverySnapshot.current = sessionStorage.getItem(pendingProjectOperationKey(user.id, id));
           setPending(null);
           setPendingStorageIssue("corrupt");
@@ -1370,6 +1415,7 @@ export default function ChapterPlanningPage() {
       created_at: new Date().toISOString(),
     };
     const generation = requestGeneration.current;
+    const expectedPlanId = planRef.current?.id;
     if (!savePendingPlanningOperation(operation)) {
       setPendingStorageIssue("unavailable");
       setError("浏览器无法安全保存操作恢复信息，已停止写入。请检查会话存储设置。");
@@ -1378,7 +1424,18 @@ export default function ChapterPlanningPage() {
     setBusy(true);
     setError("");
     try {
-      const result = await request(payload) as { affected_node?: { id?: string } | null };
+      const result = await request(payload) as PlanningOperationReceipt & { affected_node?: { id?: string } | null };
+      if (generation !== requestGeneration.current) return;
+      const matchesReorderReceipt = action !== "structure_reorder"
+        || await receiptMatchesPending(result, operation as PendingPlanningOperation, id, expectedPlanId);
+      if (generation !== requestGeneration.current) return;
+      if (!matchesReorderReceipt) {
+        corruptRecoverySnapshot.current = sessionStorage.getItem(pendingProjectOperationKey(user.id, id));
+        setPending(operation as PendingPlanningOperation);
+        setPendingStorageIssue("corrupt");
+        setError("服务器返回的排序收据与本地全量结构不一致；已保留恢复记录并停止全部规划写入。");
+        return;
+      }
       clearPendingPlanningOperation(user.id, id);
       if (generation !== requestGeneration.current) return;
       setPending(null);
@@ -1404,6 +1461,7 @@ export default function ChapterPlanningPage() {
         clearPendingPlanningOperation(user.id, id);
       } else if (generation === requestGeneration.current) {
         setPending(operation as PendingPlanningOperation);
+        if (action === "structure_reorder") setReorderRecoveryState("unknown");
       }
       if (generation !== requestGeneration.current) return;
       await handleWriteError(cause, generation);
@@ -1625,6 +1683,51 @@ export default function ChapterPlanningPage() {
     }
   }
 
+  async function reconcileStructureReorderPending(
+    operation = pending,
+    generation = requestGeneration.current
+  ) {
+    if (!id || !user || !operation || operation.action !== "structure_reorder") return;
+    const expectedPlanId = planRef.current?.id;
+    setReorderRecoveryState("checking");
+    setError("");
+    try {
+      const receipt = await api.getPlanningOperation(id, operation.operation_key);
+      if (generation !== requestGeneration.current) return;
+      const matchesReceipt = await receiptMatchesPending(receipt, operation, id, expectedPlanId);
+      if (generation !== requestGeneration.current) return;
+      if (!matchesReceipt) {
+        corruptRecoverySnapshot.current = sessionStorage.getItem(pendingProjectOperationKey(user.id, id));
+        setPendingStorageIssue("corrupt");
+        setError("服务器返回的排序收据与本地全量结构不一致；已保留恢复记录并停止全部规划写入。");
+        setReorderRecoveryState("unknown");
+        return;
+      }
+      clearPendingPlanningOperation(user.id, id);
+      setPending(null);
+      const refreshed = await loadPlan(false, generation);
+      if (generation !== requestGeneration.current) return;
+      if (!refreshed) {
+        setRefreshRequired(true);
+        setError("排序结果已确认，但权威规划尚未完整读取；已暂停新的写入。");
+        setReorderRecoveryState("unknown");
+        return;
+      }
+      setReorderRecoveryState("idle");
+      setNotice("已按原编号找回章节排序，并重新载入权威结构。");
+    } catch (cause) {
+      if (generation !== requestGeneration.current) return;
+      const safelyMissing = cause instanceof ApiError
+        && cause.status === 404
+        && cause.code === "PLANNING_OPERATION_NOT_FOUND"
+        && cause.recommendedAction === "retry_original_request";
+      setReorderRecoveryState(safelyMissing ? "not_found" : "unknown");
+      setNotice(safelyMissing
+        ? "服务端明确未找到原排序。如需继续，必须显式使用原编号和原全量结构重试。"
+        : "原排序结果暂时无法确认；只允许继续按原编号核对，不会自动重复提交。");
+    }
+  }
+
   async function retryPending() {
     if (!id || !user || !pending || busy || generationBusy || refreshRequired) return;
     const payloadKey = (pending.payload as { operation_key?: unknown }).operation_key;
@@ -1640,12 +1743,14 @@ export default function ChapterPlanningPage() {
     }
     const p = pending.payload as Record<string, unknown>;
     const generation = requestGeneration.current;
+    const expectedPlanId = planRef.current?.id;
     const action = pending.action;
     const target = pending.target_id;
     if (action === "generation_prepare") {
       await executeGenerationPrepare(pending as unknown as PendingPlanningOperation<GenerationRunPrepareInput>);
       return;
     }
+    if (action === "structure_reorder" && reorderRecoveryState !== "not_found") return;
     const handlers: Record<string, () => Promise<unknown>> = {
       part_create: () => api.createPlanningPart(id, p as unknown as PlanningPartCreateInput),
       part_update: () => api.updatePlanningPart(id, target!, p as unknown as PlanningPartUpdateInput),
@@ -1665,7 +1770,18 @@ export default function ChapterPlanningPage() {
     setBusy(true);
     setError("");
     try {
-      await handler();
+      const result = await handler();
+      if (generation !== requestGeneration.current) return;
+      const matchesReorderReceipt = action !== "structure_reorder"
+        || await receiptMatchesPending(result as PlanningOperationReceipt, pending, id, expectedPlanId);
+      if (generation !== requestGeneration.current) return;
+      if (!matchesReorderReceipt) {
+        corruptRecoverySnapshot.current = sessionStorage.getItem(pendingProjectOperationKey(user.id, id));
+        setPendingStorageIssue("corrupt");
+        setError("服务器返回的排序收据与本地全量结构不一致；已保留恢复记录并停止全部规划写入。");
+        setReorderRecoveryState("unknown");
+        return;
+      }
       clearPendingPlanningOperation(user.id, id);
       if (generation !== requestGeneration.current) return;
       setPending(null);
@@ -1680,6 +1796,7 @@ export default function ChapterPlanningPage() {
         return;
       }
       setNotice("上次未确认的操作已使用原操作编号安全完成。");
+      if (action === "structure_reorder") setReorderRecoveryState("idle");
     } catch (cause) {
       if (generation !== requestGeneration.current) return;
       if (action.startsWith("assignment_")) {
@@ -1696,6 +1813,7 @@ export default function ChapterPlanningPage() {
       if (!shouldKeepPlanningOperation(cause)) {
         clearPendingPlanningOperation(user.id, id);
         setPending(null);
+        if (action === "structure_reorder") setReorderRecoveryState("idle");
       }
     } finally {
       if (generation === requestGeneration.current) setBusy(false);
@@ -1703,12 +1821,13 @@ export default function ChapterPlanningPage() {
   }
 
   function reorder(parts: PlanningReorderInput["parts"], success: string, focusId: string) {
-    if (!plan) return;
+    if (!plan || planningWriteDisabled || structureReorderDisabledReason) return;
     const body: PlanningReorderInput = {
       operation_key: createPlanningOperationKey("structure_reorder"),
       expected_structure_version: plan.structure_version,
       parts,
     };
+    setReorderRecoveryState("idle");
     void execute("structure_reorder", focusId, body, (value) => api.reorderPlanningStructure(id!, value), success);
   }
 
@@ -1732,6 +1851,37 @@ export default function ChapterPlanningPage() {
     if (target < 0 || target >= part.chapter_ids.length) return;
     [part.chapter_ids[index], part.chapter_ids[target]] = [part.chapter_ids[target], part.chapter_ids[index]];
     reorder(parts, "章节顺序已更新。", chapterId);
+  }
+
+  function dropChapter(input: {
+    chapterId: string;
+    partId: string;
+    targetChapterId: string;
+    placement: "before" | "after";
+    expectedStructureVersion: number;
+  }) {
+    if (!plan || planningWriteDisabled || structureReorderDisabledReason) return;
+    if (plan.structure_version !== input.expectedStructureVersion || input.chapterId === input.targetChapterId) return;
+    const sourceLocation = locate(plan, { kind: "chapter", id: input.chapterId });
+    const targetLocation = locate(plan, { kind: "chapter", id: input.targetChapterId });
+    if (
+      !sourceLocation.part || !sourceLocation.chapter || !targetLocation.part || !targetLocation.chapter
+      || sourceLocation.part.id !== input.partId || targetLocation.part.id !== input.partId
+      || sourceLocation.part.status !== "active" || targetLocation.part.status !== "active"
+      || sourceLocation.chapter.status !== "active" || targetLocation.chapter.status !== "active"
+    ) return;
+    const parts = activeReorder(plan);
+    const part = parts.find((item) => item.part_id === input.partId);
+    if (!part) return;
+    const previous = [...part.chapter_ids];
+    part.chapter_ids = part.chapter_ids.filter((chapterId) => chapterId !== input.chapterId);
+    const targetIndex = part.chapter_ids.indexOf(input.targetChapterId);
+    if (targetIndex < 0) return;
+    part.chapter_ids.splice(targetIndex + (input.placement === "after" ? 1 : 0), 0, input.chapterId);
+    if (part.chapter_ids.every((chapterId, index) => chapterId === previous[index])) return;
+    const allChapterIds = parts.flatMap((item) => item.chapter_ids);
+    if (new Set(allChapterIds).size !== allChapterIds.length) return;
+    reorder(parts, "章节顺序已更新。", input.chapterId);
   }
 
   function moveChapterTo(chapter: PlanningChapter, targetPartId: string) {
@@ -2290,10 +2440,29 @@ export default function ChapterPlanningPage() {
       {foreignPending?.workspace === "technical_demo_execution" && <div className="planning-notice" role="alert"><span>技术模拟中还有结果未确认的固定内容请求；章节规划写入已暂停。它不调用 AI，也不会产生模型费用。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${id}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${id}/plan/chapters`}>返回技术模拟发起章节核对</Link></div>}
       {foreignPending?.workspace === "candidate_manual_edit" && <div className="planning-notice" role="alert"><span>候选版本还有手工另存结果未确认；章节规划写入已暂停。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${id}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${id}/plan/chapters`}>返回原章节核对候选版本</Link></div>}
       {foreignPending?.workspace === "candidate_selection" && <div className="planning-notice" role="alert"><span>候选采用还有结果未确认；章节规划写入已暂停，且不会自动重复提交。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${id}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${id}/plan/chapters`}>返回原章核对采用状态</Link></div>}
-      {pending && pending.action !== "generation_prepare" && (
+      {pending && pending.action !== "generation_prepare" && pending.action !== "structure_reorder" && (
         <div className="planning-notice" role="alert">
           <span>检测到结果尚未确认的操作，已暂停新的写入。</span>
           <button className="btn btn-secondary" disabled={busy} onClick={retryPending}>使用原操作编号安全重试</button>
+        </div>
+      )}
+      {pending?.action === "structure_reorder" && (
+        <div className="planning-notice" role="alert">
+          <span>章节排序结果尚未确认；系统不会自动重复提交。</span>
+          <span className="planning-notice__actions">
+            <button
+              className="btn btn-secondary"
+              disabled={busy || reorderRecoveryState === "checking" || !!pendingStorageIssue}
+              onClick={() => void reconcileStructureReorderPending()}
+            >
+              {reorderRecoveryState === "checking" ? "正在核对原排序…" : "按原编号核对排序状态"}
+            </button>
+            {reorderRecoveryState === "not_found" && (
+              <button className="btn btn-secondary" disabled={busy} onClick={() => void retryPending()}>
+                使用原编号与全量结构重试
+              </button>
+            )}
+          </span>
         </div>
       )}
       {pending?.action === "generation_prepare" && (
@@ -2346,7 +2515,16 @@ export default function ChapterPlanningPage() {
         <div className={`planning-workspace planning-workspace--studio${mobileDetail ? " show-detail" : ""}`}>
           <aside className="card planning-workspace__tree">
             <div className="planning-section-heading"><h2>篇章结构</h2><CreatePartForm plan={plan} busy={planningWriteDisabled} onDirtyChange={setHasUnsavedPartCreationDraft} onCreate={(body) => execute("part_create", null, body, (value) => api.createPlanningPart(id, value), "篇章已创建。")} /></div>
-            <PlanningStructurePanel plan={plan} selected={selection} busy={planningWriteDisabled} onSelect={selectScope} onMovePart={movePart} onMoveChapter={moveChapter} />
+            <PlanningStructurePanel
+              plan={plan}
+              selected={selection}
+              busy={planningWriteDisabled}
+              reorderDisabledReason={structureReorderDisabledReason}
+              onSelect={selectScope}
+              onMovePart={movePart}
+              onMoveChapter={moveChapter}
+              onDropChapter={dropChapter}
+            />
           </aside>
           <main className="card planning-workspace__detail">
             <button className="btn btn-secondary planning-mobile-back" onClick={returnToMobileStructure}>← 返回结构</button>
