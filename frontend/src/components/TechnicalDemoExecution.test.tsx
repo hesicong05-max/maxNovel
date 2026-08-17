@@ -45,7 +45,7 @@ const audit: GenerationCandidateAuditResponse = { schema_version: 1, ruleset_ver
 
 function renderComponent(entry = "/") {
   const onLockChange = vi.fn();
-  const rendered = render(<MemoryRouter initialEntries={[entry]}><TechnicalDemoExecution userId={userId} projectId={projectId} chapterId={chapterId} chapterTitle="第一章" run={run} onLockChange={onLockChange} /></MemoryRouter>);
+  const rendered = render(<MemoryRouter initialEntries={[entry]}><TechnicalDemoExecution userId={userId} projectId={projectId} chapterId={chapterId} chapterTitle="第一章" run={run} onLockChange={onLockChange} hideCandidateVersionWorkspace /></MemoryRouter>);
   return { onLockChange, ...rendered };
 }
 
@@ -71,13 +71,13 @@ describe("TechnicalDemoExecution", () => {
     expect(dialog).toHaveTextContent("不调用 AI");
     await waitFor(() => expect(screen.getByRole("button", { name: "取消，不执行" })).toHaveFocus());
     await userEvent.click(screen.getByRole("button", { name: "确认运行技术模拟" }));
-    expect(await screen.findByRole("heading", { name: /固定技术模拟候选已就绪/ })).toHaveFocus();
+    expect(await screen.findByRole("heading", { name: "固定技术模拟执行已完成" })).toHaveFocus();
     expect(persistedAtPost).toBe(true);
     expect(mocks.execute).toHaveBeenCalledTimes(1);
     expect(mocks.candidate).toHaveBeenCalledTimes(1);
-    expect(mocks.audit).toHaveBeenCalledTimes(1);
-    expect(screen.getByLabelText("固定技术模拟候选正文")).toHaveAttribute("tabindex", "0");
-    expect(screen.getByText(/伏笔动作为 0/)).toBeInTheDocument();
+    expect(mocks.audit).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("固定技术模拟候选正文")).not.toBeInTheDocument();
+    expect(screen.getByText(/正文与确定性审计统一在下方候选版本工作区查看/)).toBeInTheDocument();
     expect(onLockChange).toHaveBeenCalledWith(true);
     expect(onLockChange).toHaveBeenCalledWith(false);
   });
@@ -107,13 +107,13 @@ describe("TechnicalDemoExecution", () => {
     await waitFor(() => expect(originalTrigger).toHaveFocus());
     await userEvent.click(originalTrigger);
     await userEvent.click(screen.getByRole("button", { name: "确认原请求重试" }));
-    await screen.findByRole("heading", { name: /固定技术模拟候选已就绪/ });
+    await screen.findByRole("heading", { name: "固定技术模拟执行已完成" });
     expect(mocks.execute).toHaveBeenCalledTimes(2);
   });
 
   it("treats URL pointers as read-only and never POSTs", async () => {
     renderComponent(`/?technical_demo_run=${runId}&technical_demo_execution=${execution.execution_id}&technical_demo_candidate=${candidate.id}`);
-    await screen.findByRole("heading", { name: /固定技术模拟候选已就绪/ });
+    await screen.findByRole("heading", { name: "固定技术模拟执行已完成" });
     expect(mocks.candidate).toHaveBeenCalledTimes(1);
     expect(mocks.execute).not.toHaveBeenCalled();
     expect(mocks.capability).not.toHaveBeenCalled();
@@ -178,13 +178,13 @@ describe("TechnicalDemoExecution", () => {
     await waitFor(() => expect(newTrigger).toHaveFocus());
     await userEvent.click(newTrigger);
     await userEvent.click(screen.getByRole("button", { name: "确认运行技术模拟" }));
-    await screen.findByRole("heading", { name: /固定技术模拟候选已就绪/ });
+    await screen.findByRole("heading", { name: "固定技术模拟执行已完成" });
     const firstKey = mocks.execute.mock.calls[0][1].operation_key;
     const secondKey = mocks.execute.mock.calls[1][1].operation_key;
     expect(secondKey).not.toBe(firstKey);
   });
 
-  it("retries only candidate/audit GETs and exposes deterministic review evidence", async () => {
+  it("retries only the technical candidate GET and leaves audit to the version workspace", async () => {
     const reviewAudit = { ...audit, status: "review" as const, preparation: { status: "review" as const, warnings: [{ code: "CHAPTER_SUMMARY_EMPTY" as const, element_id: null }] }, unrecognized_explicit_terms: { status: "review" as const, items: [{ term: "无名星门", excerpt: "提到《无名星门》。", start_offset: 2, end_offset: 8 }], truncated: false }, context_summary: { ...audit.context_summary, element_count: 1, elements: [{ element_id: id("element"), type_key: "location", type_display_name: "地点", name: "星门", version_no: 1 }], warning_count: 1 } };
     mocks.candidate.mockRejectedValueOnce(new Error("candidate read failed")).mockResolvedValueOnce(candidate);
     mocks.audit.mockRejectedValueOnce(new Error("audit read failed")).mockResolvedValueOnce(reviewAudit);
@@ -192,14 +192,11 @@ describe("TechnicalDemoExecution", () => {
     await userEvent.click(screen.getByRole("button", { name: "查看边界并确认技术模拟" }));
     await userEvent.click(await screen.findByRole("button", { name: "确认运行技术模拟" }));
     await userEvent.click(await screen.findByRole("button", { name: "重新读取固定候选" }));
-    await screen.findByRole("heading", { name: /固定技术模拟候选已就绪/ });
-    await userEvent.click(await screen.findByRole("button", { name: "重新读取审计" }));
-    expect(await screen.findByText("《无名星门》")).toBeInTheDocument();
-    expect(screen.getByText(/本章摘要为空/)).toBeInTheDocument();
-    expect(screen.getByText(/不判断情节、人物或世界规则的语义一致性/)).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "固定技术模拟执行已完成" });
+    expect(screen.queryByRole("button", { name: "重新读取审计" })).not.toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/一致性通过|AI.*验证|违规设定|事实冲突/);
     expect(mocks.execute).toHaveBeenCalledTimes(1);
     expect(mocks.candidate).toHaveBeenCalledTimes(2);
-    expect(mocks.audit).toHaveBeenCalledTimes(2);
+    expect(mocks.audit).not.toHaveBeenCalled();
   });
 });

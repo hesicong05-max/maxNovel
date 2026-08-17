@@ -18,6 +18,7 @@ import {
 } from "@/services/foreshadowOperations";
 import { loadPendingGenerationExecution } from "@/services/generationExecution";
 import { loadPendingTechnicalDemoExecution } from "@/services/technicalDemoExecution";
+import { loadPendingCandidateManualEdit } from "@/services/candidateVersionOperations";
 import { clearPendingProjectOperationRecord } from "@/services/pendingProjectOperations";
 import type { LoreElementListItem } from "@/types/lore";
 import DemoGuide from "@/components/DemoGuide";
@@ -155,7 +156,7 @@ export default function ForeshadowPlanningPage() {
   const [conflict, setConflict] = useState(false);
   const [refreshRequired, setRefreshRequired] = useState(false);
   const [pending, setPending] = useState<PendingForeshadowOperation | null>(null);
-  const [foreignPending, setForeignPending] = useState<{ workspace: "planning" | "generation_execution" | "technical_demo_execution"; chapterId: string | null } | null>(null);
+  const [foreignPending, setForeignPending] = useState<{ workspace: "planning" | "generation_execution" | "technical_demo_execution" | "candidate_manual_edit"; chapterId: string | null; runId?: string; candidateId?: string } | null>(null);
   const [storageIssue, setStorageIssue] = useState<"corrupt" | "unavailable" | null>(null);
   const [demoFixture, setDemoFixture] = useState<DemoFixtureCurrentResponse | null>(null);
   const [recoveryState, setRecoveryState] = useState<RecoveryState>("idle");
@@ -416,10 +417,16 @@ export default function ForeshadowPlanningPage() {
       const technicalPending = loaded.workspace === "technical_demo_execution"
         ? loadPendingTechnicalDemoExecution(user.id, projectId)
         : null;
+      const candidatePending = loaded.workspace === "candidate_manual_edit"
+        ? loadPendingCandidateManualEdit(user.id, projectId)
+        : null;
       setForeignPending({
         workspace: loaded.workspace,
         chapterId: generationPending?.status === "available" ? generationPending.operation.chapter_id
-          : technicalPending?.status === "available" ? technicalPending.operation.chapter_id : null,
+          : technicalPending?.status === "available" ? technicalPending.operation.chapter_id
+            : candidatePending?.status === "available" ? candidatePending.operation.chapter_id : null,
+        runId: candidatePending?.status === "available" ? candidatePending.operation.run_id : undefined,
+        candidateId: candidatePending?.status === "available" ? candidatePending.operation.payload.parent_candidate_id : undefined,
       });
       return;
     }
@@ -638,6 +645,7 @@ export default function ForeshadowPlanningPage() {
       {foreignPending?.workspace === "planning" && <div className="planning-notice" role="alert"><span>章节规划中还有结果未确认的写入；伏笔写入已暂停。</span><Link className="btn btn-secondary" to={`/project/${projectId}/plan/chapters`}>返回章节规划核对</Link></div>}
       {foreignPending?.workspace === "generation_execution" && <div className="planning-notice" role="alert"><span>生成候选中还有结果未确认的模型调用；伏笔写入已暂停，且不会自动确认埋入或回收。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${projectId}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${projectId}/plan/chapters`}>返回发起章节核对生成</Link></div>}
       {foreignPending?.workspace === "technical_demo_execution" && <div className="planning-notice" role="alert"><span>技术模拟中还有结果未确认的固定内容请求；伏笔写入已暂停，且不会自动确认埋入或回收。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${projectId}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${projectId}/plan/chapters`}>返回技术模拟发起章节核对</Link></div>}
+      {foreignPending?.workspace === "candidate_manual_edit" && <div className="planning-notice" role="alert"><span>候选版本还有手工另存结果未确认；伏笔写入已暂停，且不会自动确认埋入或回收。</span><Link className="btn btn-secondary" to={foreignPending.chapterId && foreignPending.runId && foreignPending.candidateId ? `/project/${projectId}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}&generation_run=${encodeURIComponent(foreignPending.runId)}&candidate_version=${encodeURIComponent(foreignPending.candidateId)}` : `/project/${projectId}/plan/chapters`}>返回原章节核对候选版本</Link></div>}
       {pending && <div className="planning-notice" role="status"><span>上次伏笔操作仍等待确认；已冻结新写入，避免重复记录。</span><span className="planning-notice__actions"><button className="btn btn-secondary" disabled={busy} onClick={() => void reconcilePending(pending)}>{recoveryState === "checking" ? "正在核对…" : "核对原操作结果"}</button>{recoveryState === "not_found" && <button className="btn btn-secondary" disabled={busy} onClick={() => void retryPending()}>使用原编号和内容重试</button>}</span></div>}
 
       <section className="foreshadow-overview" aria-label="伏笔状态概况">

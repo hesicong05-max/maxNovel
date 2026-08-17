@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef } from "react";
 import TechnicalDemoExecution from "@/components/TechnicalDemoExecution";
+import CandidateVersionWorkspace from "@/components/CandidateVersionWorkspace";
 import type {
   GenerationAttemptResponse,
   GenerationCandidateAuditResponse,
@@ -51,6 +52,8 @@ interface Props {
   executionMode?: "real" | "technical" | "hidden";
   technicalDemoUserId?: string;
   onTechnicalDemoLockChange?: (locked: boolean) => void;
+  candidateVersionRecoveryId?: string;
+  onCandidateVersionLockChange?: (locked: boolean) => void;
   onPrepare: () => void;
   onCheckPending: () => void;
   onRetryOriginal: () => void;
@@ -120,9 +123,6 @@ export default function PlanningGenerationPreflight({
   capability,
   attempt,
   candidate,
-  candidateAudit,
-  auditLoading,
-  auditError,
   executionBusy,
   candidateLoading,
   executionError,
@@ -135,6 +135,8 @@ export default function PlanningGenerationPreflight({
   executionMode = "real",
   technicalDemoUserId,
   onTechnicalDemoLockChange,
+  candidateVersionRecoveryId,
+  onCandidateVersionLockChange,
   onPrepare,
   onCheckPending,
   onRetryOriginal,
@@ -146,7 +148,6 @@ export default function PlanningGenerationPreflight({
   onConfirmGeneration,
   onCheckGenerationAttempt,
   onReadGenerationCandidate,
-  onReadGenerationCandidateAudit,
   onRetryOriginalGeneration,
   onStartNewAfterFailure,
 }: Props) {
@@ -339,6 +340,8 @@ export default function PlanningGenerationPreflight({
               run={run}
               disabledReason={stale ? "当前检查记录已过期，请先重新检查上下文。" : ""}
               onLockChange={onTechnicalDemoLockChange}
+              onCandidateVersionLockChange={onCandidateVersionLockChange}
+              hideCandidateVersionWorkspace={!!candidateVersionRecoveryId}
             />
           ) : executionMode === "hidden" ? (
             <div className="planning-generation__boundary" role="status">当前项目不提供候选执行入口；上下文检查记录仍可只读核对。</div>
@@ -379,39 +382,25 @@ export default function PlanningGenerationPreflight({
 
             {candidate && (
               <article className="planning-generation__candidate">
-                <header><div><h6 ref={candidateHeadingRef} tabIndex={-1}>候选正文已就绪：{candidate.title}</h6><span>独立候选版本 {candidate.version_no} · {candidate.word_count} 字词</span></div><strong>未覆盖原稿</strong></header>
-                <pre tabIndex={0} aria-label="候选正文内容">{candidate.content}</pre>
+                <header><div><h6 ref={candidateHeadingRef} tabIndex={-1}>模型生成执行已完成</h6><span>候选版本 {candidate.version_no} 已保存；正文与确定性检查统一在下方候选版本工作区查看。</span></div><strong>未覆盖原稿</strong></header>
                 <dl className="planning-generation__receipt">
-                  <div><dt>候选编号</dt><dd>{candidate.id}</dd></div>
                   <div><dt>模型用量</dt><dd>{!attempt ? "请以生成时的执行收据为准" : attempt.usage.status === "reported" ? `输入 ${attempt.usage.input_tokens} / 输出 ${attempt.usage.output_tokens} / 合计 ${attempt.usage.total_tokens} tokens` : attempt.usage.status === "unknown" ? "用量未知" : "服务商未返回用量"}</dd></div>
                 </dl>
-                <section className="planning-generation__audit" aria-labelledby={`generation-audit-${candidate.id}`} aria-busy={auditLoading}>
-                  <header>
-                    <div>
-                      <h6 id={`generation-audit-${candidate.id}`}>确定性检查</h6>
-                      <p>只核对候选完整性、目标字数和本次冻结上下文；不判断情节、人物或世界规则的语义一致性，仍需作者判断。</p>
-                    </div>
-                    {candidateAudit && <strong role="status" aria-live="polite">{candidateAudit.status === "review" ? "需要人工核对" : "未发现确定性问题"}</strong>}
-                  </header>
-                  {auditLoading && <p className="planning-generation__status" role="status">正在读取确定性检查结果…</p>}
-                  {auditError && <div className="planning-generation__error" role="alert"><span>{auditError}</span><button className="btn btn-secondary" disabled={auditLoading} onClick={onReadGenerationCandidateAudit}>重新读取检查</button></div>}
-                  {candidateAudit && (
-                    <>
-                      <dl className="planning-generation__receipt">
-                        <div><dt>内容完整性</dt><dd>{candidateAudit.integrity.status === "pass" ? "校验值、字节数和字词数一致" : "内容到达存储边界，建议人工核对是否截断"}</dd></div>
-                        <div><dt>目标字数</dt><dd>{candidateAudit.target_length.status === "not_applicable" ? "本章未设置目标字数" : candidateAudit.target_length.status === "pass" ? `位于 ${candidateAudit.target_length.minimum_word_count}–${candidateAudit.target_length.maximum_word_count} 字词范围` : `当前 ${candidateAudit.target_length.actual_word_count} 字词，不在 ${candidateAudit.target_length.minimum_word_count}–${candidateAudit.target_length.maximum_word_count} 范围`}</dd></div>
-                        <div><dt>冻结上下文</dt><dd>{candidateAudit.context_summary.element_count} 项设定 · {candidateAudit.context_summary.relation_count} 条关系</dd></div>
-                        <div><dt>伏笔动作</dt><dd>本次未自动确认埋入、强化或回收</dd></div>
-                      </dl>
-                      <details><summary>查看本次冻结设定</summary><ul>{candidateAudit.context_summary.elements.map((item) => <li key={item.element_id}><strong>{item.name}</strong> · {item.type_display_name} · 内容版本 {item.version_no}</li>)}</ul></details>
-                      {candidateAudit.preparation.warnings.length > 0 && <div className="planning-generation__warning"><strong>生成准备阶段已有提醒</strong><ul>{candidateAudit.preparation.warnings.map((item, index) => <li key={`${item.code}-${item.element_id ?? index}`}>{warningText[item.code] ?? item.code}</li>)}</ul></div>}
-                      {candidateAudit.unrecognized_explicit_terms.items.length > 0 && <div className="planning-generation__warning"><strong>发现需要核对的《》标记名称</strong><p>以下名称仅因《》标记且未出现在本次冻结清单中而被提示，请作者核对是否需要纳入设定。</p><ul>{candidateAudit.unrecognized_explicit_terms.items.map((item) => <li key={`${item.start_offset}-${item.term}`}><strong>《{item.term}》</strong><blockquote>{item.excerpt}</blockquote></li>)}</ul>{candidateAudit.unrecognized_explicit_terms.truncated && <p>提示已达到 20 条上限，请人工检查其余正文。</p>}</div>}
-                    </>
-                  )}
-                </section>
               </article>
             )}
           </section>}
+          {technicalDemoUserId && (candidateVersionRecoveryId || (executionMode === "real" && candidate)) && (
+            <CandidateVersionWorkspace
+              userId={technicalDemoUserId}
+              projectId={plan.project_id}
+              chapterId={chapter.id}
+              chapterTitle={chapter.title}
+              run={run}
+              initialCandidateId={candidateVersionRecoveryId ?? candidate!.id}
+              disabledReason={stale ? "当前检查记录已过期，请先重新检查上下文。" : ""}
+              onLockChange={onCandidateVersionLockChange}
+            />
+          )}
           <div className="planning-generation__actions">
             <button className="btn btn-primary" disabled={busy || disabled || !!runActionsDisabledReason} onClick={onPrepare}>{busy ? "正在检查…" : stale ? "重新检查当前上下文" : "再次检查当前上下文"}</button>
             <button className="btn btn-secondary" disabled={busy || !!runActionsDisabledReason} onClick={hasPendingRecovery ? onAbandonPending : onClearSavedPointer}>{hasPendingRecovery ? "处理未清除的恢复线索" : "关闭这条记录"}</button>

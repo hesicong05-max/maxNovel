@@ -68,6 +68,7 @@ import type {
 } from "@/types/lore";
 import type {
   GenerationAttemptExecuteInput,
+  GenerationCandidateManualEditInput,
   GenerationRunPrepareInput,
   GenerationRunResponse,
 } from "@/types/generation";
@@ -709,6 +710,48 @@ export const api = {
     signal?: AbortSignal
   ) => fetchJSON<unknown>(
     `/projects/${encodeURIComponent(projectId)}/planning/generation-candidates/${encodeURIComponent(candidateId)}/audit`,
+    { signal }
+  ),
+  listGenerationCandidateVersions: (
+    projectId: string,
+    runId: string,
+    options?: { limit?: number; beforeVersionNo?: number; signal?: AbortSignal }
+  ) => {
+    const query = new URLSearchParams();
+    if (options?.limit !== undefined) query.set("limit", String(options.limit));
+    if (options?.beforeVersionNo !== undefined) {
+      query.set("before_version_no", String(options.beforeVersionNo));
+    }
+    const suffix = query.size ? `?${query.toString()}` : "";
+    return fetchJSON<unknown>(
+      `/projects/${encodeURIComponent(projectId)}/planning/generation-runs/${encodeURIComponent(runId)}/candidate-versions${suffix}`,
+      { signal: options?.signal }
+    );
+  },
+  getGenerationCandidateVersion: (
+    projectId: string,
+    runId: string,
+    candidateId: string,
+    signal?: AbortSignal
+  ) => fetchJSON<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/planning/generation-runs/${encodeURIComponent(runId)}/candidate-versions/${encodeURIComponent(candidateId)}`,
+    { signal }
+  ),
+  createGenerationCandidateManualEdit: (
+    projectId: string,
+    runId: string,
+    data: GenerationCandidateManualEditInput
+  ) => fetchJSON<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/planning/generation-runs/${encodeURIComponent(runId)}/candidate-manual-edits`,
+    { method: "POST", body: JSON.stringify(data) }
+  ),
+  getGenerationCandidateManualEditByKey: (
+    projectId: string,
+    runId: string,
+    operationKey: string,
+    signal?: AbortSignal
+  ) => fetchJSON<unknown>(
+    `/projects/${encodeURIComponent(projectId)}/planning/generation-runs/${encodeURIComponent(runId)}/candidate-manual-edits/by-key/${encodeURIComponent(operationKey)}`,
     { signal }
   ),
   createPlanningPart: (projectId: string, data: PlanningPartCreateInput) =>

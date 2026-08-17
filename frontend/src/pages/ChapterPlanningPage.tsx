@@ -11,13 +11,13 @@ import { ApiError, api } from "@/services/api";
 import { generationRunContractError } from "@/services/generationRuns";
 import { pendingProjectOperationKey } from "@/services/pendingProjectOperations";
 import { loadPendingTechnicalDemoExecution } from "@/services/technicalDemoExecution";
+import { loadPendingCandidateManualEdit } from "@/services/candidateVersionOperations";
 import {
   clearPendingGenerationExecution,
   createGenerationExecutionKey,
   loadPendingGenerationExecution,
   readGenerationAttemptByKey,
   readGenerationCandidate,
-  readGenerationCandidateAudit,
   readGenerationCapability,
   requestGenerationAttempt,
   savePendingGenerationExecution,
@@ -36,7 +36,6 @@ import type { LoreElementListItem } from "@/types/lore";
 import type { DemoFixtureCurrentResponse } from "@/types/demo";
 import type {
   GenerationAttemptResponse,
-  GenerationCandidateAuditResponse,
   GenerationCandidateResponse,
   GenerationCapabilityResponse,
   GenerationRunPrepareInput,
@@ -165,7 +164,7 @@ export default function ChapterPlanningPage() {
   const [assignmentRefreshRequired, setAssignmentRefreshRequired] = useState(false);
   const [assignmentSearchRefreshToken, setAssignmentSearchRefreshToken] = useState(0);
   const [pendingStorageIssue, setPendingStorageIssue] = useState<"corrupt" | "unavailable" | null>(null);
-  const [foreignPending, setForeignPending] = useState<{ workspace: "foreshadow" | "generation_execution" | "technical_demo_execution"; chapterId: string | null } | null>(null);
+  const [foreignPending, setForeignPending] = useState<{ workspace: "foreshadow" | "generation_execution" | "technical_demo_execution" | "candidate_manual_edit"; chapterId: string | null } | null>(null);
   const [serverSyncToken, setServerSyncToken] = useState(0);
   const [focusTarget, setFocusTarget] = useState<string | null>(null);
   const [assignmentFocusTarget, setAssignmentFocusTarget] = useState<{ elementId: string; scopeIdentity: string } | null>(null);
@@ -184,9 +183,6 @@ export default function ChapterPlanningPage() {
   const [generationCapability, setGenerationCapability] = useState<GenerationCapabilityResponse | null>(null);
   const [generationAttempt, setGenerationAttempt] = useState<GenerationAttemptResponse | null>(null);
   const [generationCandidate, setGenerationCandidate] = useState<GenerationCandidateResponse | null>(null);
-  const [generationCandidateAudit, setGenerationCandidateAudit] = useState<GenerationCandidateAuditResponse | null>(null);
-  const [generationAuditLoading, setGenerationAuditLoading] = useState(false);
-  const [generationAuditError, setGenerationAuditError] = useState("");
   const [generationExecutionPending, setGenerationExecutionPending] = useState<PendingGenerationExecution | null>(null);
   const [generationExecutionBusy, setGenerationExecutionBusy] = useState(false);
   const [generationCandidateLoading, setGenerationCandidateLoading] = useState(false);
@@ -199,6 +195,8 @@ export default function ChapterPlanningPage() {
   const [demoDescriptor, setDemoDescriptor] = useState<DemoFixtureCurrentResponse | null>(null);
   const [demoDescriptorStatus, setDemoDescriptorStatus] = useState<"loading" | "known" | "unknown">("loading");
   const [technicalDemoLocked, setTechnicalDemoLocked] = useState(false);
+  const [candidateVersionLocked, setCandidateVersionLocked] = useState(true);
+  const [candidateVersionRecoveryId, setCandidateVersionRecoveryId] = useState<string | null>(null);
   const conflictRef = useRef<HTMLDivElement | null>(null);
   const assignmentConflictRef = useRef<HTMLDivElement | null>(null);
   const globalGenerationFeedbackRef = useRef<HTMLDivElement | null>(null);
@@ -207,10 +205,10 @@ export default function ChapterPlanningPage() {
   const generationRunRequest = useRef(0);
   const generationExecutionRequest = useRef(0);
   const generationCandidateRequest = useRef(0);
-  const generationAuditRequest = useRef(0);
   const generationExecutionPendingRef = useRef<PendingGenerationExecution | null>(null);
   const generationRunRef = useRef<GenerationRunResponse | null>(null);
   const generationCandidateRef = useRef<GenerationCandidateResponse | null>(null);
+  const corruptRecoverySnapshot = useRef<string | null>(null);
   const generationIdentityRef = useRef({ projectId: id ?? "", userId: user?.id ?? "" });
   const acceptedGenerationRunId = useRef<string | null>(null);
   const generationPointerTransition = useRef<string | null>(null);
@@ -287,7 +285,7 @@ export default function ChapterPlanningPage() {
     && located.chapter?.status === "active"
     && located.part?.status === "active";
   const globalGenerationFeedbackVisible = !!generationError && !generationFeedbackInlineVisible;
-  const planningWriteDisabled = busy || generationBusy || generationExecutionBusy || technicalDemoLocked || !!generationExecutionPending || !!pending || maintenance || conflict || assignmentConflict
+  const planningWriteDisabled = busy || generationBusy || generationExecutionBusy || technicalDemoLocked || candidateVersionLocked || !!generationExecutionPending || !!pending || maintenance || conflict || assignmentConflict
     || refreshRequired || assignmentRefreshRequired || !!pendingStorageIssue || !!foreignPending;
 
   const handleTechnicalDemoLockChange = useCallback((locked: boolean) => {
@@ -303,6 +301,21 @@ export default function ChapterPlanningPage() {
     }
     setTechnicalDemoLocked(false);
     setForeignPending((value) => value?.workspace === "technical_demo_execution" ? null : value);
+  }, [id, user]);
+  const handleCandidateVersionLockChange = useCallback((locked: boolean) => {
+    if (locked) {
+      setCandidateVersionLocked(true);
+      return;
+    }
+    if (!id || !user) return;
+    const current = loadPendingCandidateManualEdit(user.id, id);
+    if (current.status !== "missing") {
+      setCandidateVersionLocked(true);
+      return;
+    }
+    setCandidateVersionLocked(false);
+    setCandidateVersionRecoveryId(null);
+    setForeignPending((value) => value?.workspace === "candidate_manual_edit" ? null : value);
   }, [id, user]);
   const assignmentWriteDisabled = planningWriteDisabled || assignmentLoading || !!assignmentError;
   const generationStale = useMemo(() => {
@@ -352,7 +365,9 @@ export default function ChapterPlanningPage() {
     return "";
   }, [generationRun, generationExecutionRequiresNewPreflight, generationStale, generationExecutionPending, generationBusy, busy, generationExecutionBusy, generationDisabledReason]);
 
-  const generationRunActionsDisabledReason = technicalDemoLocked
+  const generationRunActionsDisabledReason = candidateVersionLocked
+    ? "候选版本另存、草稿恢复或严格校验尚未完成；不能重新检查或关闭记录。"
+    : technicalDemoLocked
     ? "技术模拟恢复或候选校验尚未完成；不能重新检查或关闭记录。"
     : generationExecutionPending || (generationAttempt && !generationCandidate)
     ? "生成执行收据仍在处理中；只能核对或处理当前生成，不能重新检查或关闭记录。"
@@ -455,9 +470,6 @@ export default function ChapterPlanningPage() {
     setGenerationCapability(null);
     setGenerationAttempt(null);
     setGenerationCandidate(null);
-    setGenerationCandidateAudit(null);
-    setGenerationAuditLoading(false);
-    setGenerationAuditError("");
     generationExecutionPendingRef.current = null;
     setGenerationExecutionPending(null);
     setGenerationExecutionBusy(false);
@@ -469,9 +481,11 @@ export default function ChapterPlanningPage() {
     setGenerationOriginalRetryAllowed(false);
     setGenerationExecutionRequiresNewPreflight(false);
     setTechnicalDemoLocked(false);
+    setCandidateVersionLocked(true);
+    setCandidateVersionRecoveryId(null);
+    corruptRecoverySnapshot.current = null;
     generationExecutionRequest.current += 1;
     generationCandidateRequest.current += 1;
-    generationAuditRequest.current += 1;
     generationRunRequest.current += 1;
     acceptedGenerationRunId.current = null;
     generationPointerTransition.current = null;
@@ -600,71 +614,6 @@ export default function ChapterPlanningPage() {
       if (request === generationCandidateRequest.current) generationCandidateRequest.current += 1;
     };
   }, [id, user?.id, generationRun?.id, generationExecutionPending?.operation_key, selection.kind, selection.id, located.chapter?.title, searchParams.get("generation_attempt"), searchParams.get("generation_candidate")]);
-
-  useEffect(() => {
-    if (!generationCandidate || !generationRun || selection.kind !== "chapter") {
-      generationAuditRequest.current += 1;
-      setGenerationCandidateAudit(null);
-      setGenerationAuditLoading(false);
-      setGenerationAuditError("");
-      return;
-    }
-    const controller = new AbortController();
-    const request = ++generationAuditRequest.current;
-    const expectedIdentity = {
-      projectId: generationCandidate.project_id,
-      userId: generationCandidate.created_by,
-      chapterId: generationCandidate.planning_chapter_id,
-      runId: generationCandidate.run_id,
-      candidateId: generationCandidate.id,
-      contextChecksum: generationRun.context_checksum,
-    };
-    setGenerationCandidateAudit(null);
-    setGenerationAuditLoading(true);
-    setGenerationAuditError("");
-    void readGenerationCandidateAudit({
-      projectId: generationCandidate.project_id,
-      runId: generationCandidate.run_id,
-      chapterId: generationCandidate.planning_chapter_id,
-      candidate: generationCandidate,
-      contextChecksum: generationRun.context_checksum,
-      targetWordCount: generationRun.context_manifest.chapter.target_word_count,
-      elements: generationRun.context_manifest.elements.map((item) => ({
-        elementId: item.element_id,
-        typeKey: item.type.key,
-        typeDisplayName: item.type.display_name,
-        name: item.version.name,
-        versionNo: item.version.version_no,
-      })),
-      relationCount: generationRun.context_manifest.counts.relations,
-      warnings: generationRun.context_manifest.warnings,
-    }, controller.signal).then((value) => {
-      const currentRun = generationRunRef.current;
-      const currentCandidate = generationCandidateRef.current;
-      if (
-        request !== generationAuditRequest.current
-        || generationIdentityRef.current.projectId !== expectedIdentity.projectId
-        || generationIdentityRef.current.userId !== expectedIdentity.userId
-        || selectionRef.current.kind !== "chapter"
-        || selectionRef.current.id !== expectedIdentity.chapterId
-        || currentRun?.id !== expectedIdentity.runId
-        || currentRun.context_checksum !== expectedIdentity.contextChecksum
-        || currentCandidate?.id !== expectedIdentity.candidateId
-        || value.candidate_id !== expectedIdentity.candidateId
-      ) return;
-      setGenerationCandidateAudit(value);
-    }).catch((cause) => {
-      if (controller.signal.aborted || request !== generationAuditRequest.current) return;
-      setGenerationCandidateAudit(null);
-      setGenerationAuditError(`${errorMessage(cause)} 候选正文仍保留只读；只会重新读取检查，不会重新调用模型。`);
-    }).finally(() => {
-      if (request === generationAuditRequest.current) setGenerationAuditLoading(false);
-    });
-    return () => {
-      controller.abort();
-      if (request === generationAuditRequest.current) generationAuditRequest.current += 1;
-    };
-  }, [id, user?.id, generationCandidate?.id, generationRun?.id, generationRun?.context_checksum, selection.kind, selection.id]);
 
   useEffect(() => {
     if (!mobileDetail) return;
@@ -832,6 +781,14 @@ export default function ChapterPlanningPage() {
 
   useEffect(() => {
     if (!id || !user || loadState !== "ready") return;
+    const sharedGate = loadPendingPlanningOperation(user.id, id);
+    const candidateGate = loadPendingCandidateManualEdit(user.id, id);
+    setCandidateVersionLocked(
+      candidateGate.status === "available"
+      || (sharedGate.status === "foreign"
+        && sharedGate.workspace === "candidate_manual_edit"
+        && (candidateGate.status === "corrupt" || candidateGate.status === "unavailable"))
+    );
     const executionLoaded = loadPendingGenerationExecution(user.id, id);
     if (executionLoaded.status === "available") {
       const operation = executionLoaded.operation;
@@ -891,6 +848,9 @@ export default function ChapterPlanningPage() {
       return;
     }
     if (executionLoaded.status === "corrupt" || executionLoaded.status === "unavailable") {
+      corruptRecoverySnapshot.current = executionLoaded.status === "corrupt"
+        ? sessionStorage.getItem(pendingProjectOperationKey(user.id, id))
+        : null;
       generationExecutionPendingRef.current = null;
       setGenerationExecutionPending(null);
       setPendingStorageIssue(executionLoaded.status);
@@ -904,22 +864,34 @@ export default function ChapterPlanningPage() {
     setGenerationExecutionPending(null);
     setGenerationAttempt(null);
     setGenerationCandidate(null);
-    setGenerationCandidateAudit(null);
-    setGenerationAuditError("");
-    generationAuditRequest.current += 1;
     setGenerationExecutionError("");
-    const loaded = loadPendingPlanningOperation(user.id, id);
-    if (loaded.status === "missing") { setPending(null); setPendingStorageIssue(null); setForeignPending(null); return; }
+    const loaded = sharedGate;
+    if (loaded.status === "missing") {
+      corruptRecoverySnapshot.current = null;
+      setPending(null); setPendingStorageIssue(null); setForeignPending(null);
+      setCandidateVersionLocked(false); setCandidateVersionRecoveryId(null);
+      return;
+    }
     if (loaded.status === "foreign") {
       setPending(null);
       setPendingStorageIssue(null);
+      if (loaded.workspace !== "candidate_manual_edit") {
+        setCandidateVersionLocked(false);
+        setCandidateVersionRecoveryId(null);
+      }
       const generationPending = loaded.workspace === "generation_execution"
         ? loadPendingGenerationExecution(user.id, id)
         : null;
       const technicalPending = loaded.workspace === "technical_demo_execution"
         ? loadPendingTechnicalDemoExecution(user.id, id)
         : null;
+      const candidatePending = loaded.workspace === "candidate_manual_edit"
+        ? loadPendingCandidateManualEdit(user.id, id)
+        : null;
       if (technicalPending?.status === "corrupt" || technicalPending?.status === "unavailable") {
+        corruptRecoverySnapshot.current = technicalPending.status === "corrupt"
+          ? sessionStorage.getItem(pendingProjectOperationKey(user.id, id))
+          : null;
         setForeignPending(null);
         setTechnicalDemoLocked(true);
         setPendingStorageIssue(technicalPending.status);
@@ -928,10 +900,23 @@ export default function ChapterPlanningPage() {
           : "浏览器恢复存储不可用；已安全停止全部写入。");
         return;
       }
+      if (candidatePending?.status === "corrupt" || candidatePending?.status === "unavailable") {
+        corruptRecoverySnapshot.current = candidatePending.status === "corrupt"
+          ? sessionStorage.getItem(pendingProjectOperationKey(user.id, id))
+          : null;
+        setForeignPending(null);
+        setCandidateVersionLocked(true);
+        setPendingStorageIssue(candidatePending.status);
+        setError(candidatePending.status === "corrupt"
+          ? "检测到损坏或身份不匹配的候选版本恢复记录，已安全停止全部写入。"
+          : "浏览器恢复存储不可用；已安全停止全部写入。");
+        return;
+      }
       setForeignPending({
         workspace: loaded.workspace,
         chapterId: generationPending?.status === "available" ? generationPending.operation.chapter_id
-          : technicalPending?.status === "available" ? technicalPending.operation.chapter_id : null,
+          : technicalPending?.status === "available" ? technicalPending.operation.chapter_id
+            : candidatePending?.status === "available" ? candidatePending.operation.chapter_id : null,
       });
       if (technicalPending?.status === "available") {
         setTechnicalDemoLocked(true);
@@ -943,9 +928,24 @@ export default function ChapterPlanningPage() {
         setSearchParams(params, { replace: true });
         setMobileDetail(true);
       }
+      if (candidatePending?.status === "available") {
+        setCandidateVersionLocked(true);
+        const operation = candidatePending.operation;
+        setCandidateVersionRecoveryId(operation.payload.parent_candidate_id);
+        const params = new URLSearchParams(searchParams);
+        params.set("scope", "chapter");
+        params.set("target", operation.chapter_id);
+        params.set("generation_run", operation.run_id);
+        params.set("candidate_version", operation.payload.parent_candidate_id);
+        setSearchParams(params, { replace: true });
+        setMobileDetail(true);
+      }
       return;
     }
     if (loaded.status === "corrupt" || loaded.status === "unavailable") {
+      corruptRecoverySnapshot.current = loaded.status === "corrupt"
+        ? sessionStorage.getItem(pendingProjectOperationKey(user.id, id))
+        : null;
       setPending(null);
       setPendingStorageIssue(loaded.status);
       setError(loaded.status === "corrupt"
@@ -979,6 +979,7 @@ export default function ChapterPlanningPage() {
       .then(async (receipt) => {
         if (generation !== requestGeneration.current) return;
         if (!receiptMatchesPending(receipt, stored, id)) {
+          corruptRecoverySnapshot.current = sessionStorage.getItem(pendingProjectOperationKey(user.id, id));
           setPending(null);
           setPendingStorageIssue("corrupt");
           setError("服务器返回的操作收据与本地恢复记录不一致，已安全停止全部规划写入。");
@@ -1046,12 +1047,15 @@ export default function ChapterPlanningPage() {
       setNotice("技术模拟仍在按原编号恢复；已保持在发起章节，避免把候选显示到其他范围。");
       return;
     }
+    if (changingScope && candidateVersionLocked) {
+      setNotice("候选版本另存或草稿仍在恢复；已保持在原章节，避免把候选显示到其他范围。");
+      return;
+    }
     if (changingScope && !confirmEditorUnload()) return;
     if (changingScope) {
       selectionRef.current = next;
       generationRunRequest.current += 1;
       generationCandidateRequest.current += 1;
-      generationAuditRequest.current += 1;
       acceptedGenerationRunId.current = null;
       generationPointerTransition.current = null;
       setGenerationRun(null);
@@ -1061,9 +1065,6 @@ export default function ChapterPlanningPage() {
       setGenerationAttempt(null);
       setGenerationCandidate(null);
       setGenerationCandidateLoading(false);
-      setGenerationCandidateAudit(null);
-      setGenerationAuditLoading(false);
-      setGenerationAuditError("");
       setGenerationExecutionError("");
     }
     setSearchParams(next.kind === "novel" ? {} : { scope: next.kind, target: next.id });
@@ -1642,10 +1643,52 @@ export default function ChapterPlanningPage() {
   function clearCorruptRecoveryRecord() {
     if (!id || !user || pendingStorageIssue !== "corrupt") return;
     if (!window.confirm("只清除这条损坏的浏览器会话恢复记录？不会删除任何小说、设定或服务器数据。")) return;
+    const storageKey = pendingProjectOperationKey(user.id, id);
+    let currentRaw: string | null;
+    try {
+      currentRaw = sessionStorage.getItem(storageKey);
+    } catch {
+      setError("浏览器会话存储仍不可用，无法核对或清除损坏记录；继续保持禁写。");
+      return;
+    }
+    if (!corruptRecoverySnapshot.current || currentRaw !== corruptRecoverySnapshot.current) {
+      setError("恢复记录状态已经变化，未执行清除；请重新载入后核对。");
+      return;
+    }
+    const shared = loadPendingPlanningOperation(user.id, id);
+    const corruptWorkspace = shared.status === "foreign" ? shared.workspace : "planning";
+    const stillCorrupt = corruptWorkspace === "candidate_manual_edit"
+      ? loadPendingCandidateManualEdit(user.id, id).status === "corrupt"
+      : corruptWorkspace === "technical_demo_execution"
+        ? loadPendingTechnicalDemoExecution(user.id, id).status === "corrupt"
+        : corruptWorkspace === "generation_execution"
+          ? loadPendingGenerationExecution(user.id, id).status === "corrupt"
+          : shared.status === "corrupt";
+    if (!stillCorrupt) {
+      setError("恢复记录状态已经变化，未执行清除；请重新载入后核对。");
+      return;
+    }
     if (clearPendingPlanningOperation(user.id, id)) {
+      const confirmedMissing = loadPendingPlanningOperation(user.id, id).status === "missing"
+        && loadPendingGenerationExecution(user.id, id).status === "missing"
+        && loadPendingTechnicalDemoExecution(user.id, id).status === "missing"
+        && loadPendingCandidateManualEdit(user.id, id).status === "missing";
+      if (!confirmedMissing) {
+        setError("清理后无法确认浏览器恢复槽为空；继续保持禁写。");
+        return;
+      }
+      corruptRecoverySnapshot.current = null;
       setPendingStorageIssue(null);
-      setTechnicalDemoLocked(false);
-      setForeignPending((value) => value?.workspace === "technical_demo_execution" ? null : value);
+      if (corruptWorkspace === "technical_demo_execution") {
+        setTechnicalDemoLocked(false);
+        setForeignPending((value) => value?.workspace === "technical_demo_execution" ? null : value);
+      } else if (corruptWorkspace === "candidate_manual_edit") {
+        setCandidateVersionLocked(false);
+        setCandidateVersionRecoveryId(null);
+        setForeignPending((value) => value?.workspace === "candidate_manual_edit" ? null : value);
+      } else if (corruptWorkspace === "generation_execution") {
+        setForeignPending((value) => value?.workspace === "generation_execution" ? null : value);
+      }
       setError("");
       setGenerationError("");
       setGenerationFeedbackChapterId(null);
@@ -1717,8 +1760,6 @@ export default function ChapterPlanningPage() {
       params.set("generation_candidate", value.id);
       setSearchParams(params, { replace: true });
       setGenerationCandidate(value);
-      setGenerationCandidateAudit(null);
-      setGenerationAuditError("");
       if (!clearPendingGenerationExecution(user.id, id, operation.operation_key)) {
         setGenerationExecutionError("候选已经过严格校验，但浏览器无法按原编号清除恢复线索；继续保持禁写。");
         return false;
@@ -2039,62 +2080,6 @@ export default function ChapterPlanningPage() {
     await readCandidateForAttempt(generationAttempt, generationExecutionPending, generationRun);
   }
 
-  function rereadGenerationCandidateAudit() {
-    if (!generationCandidate || !generationRun || !id || !user || selectionRef.current.kind !== "chapter") return;
-    setGenerationCandidateAudit(null);
-    setGenerationAuditError("");
-    const currentCandidate = generationCandidate;
-    const currentRun = generationRun;
-    const expectedIdentity = {
-      projectId: id,
-      userId: user.id,
-      chapterId: selectionRef.current.id,
-      runId: currentRun.id,
-      candidateId: currentCandidate.id,
-      contextChecksum: currentRun.context_checksum,
-    };
-    const controller = new AbortController();
-    const request = ++generationAuditRequest.current;
-    setGenerationAuditLoading(true);
-    void readGenerationCandidateAudit({
-      projectId: currentCandidate.project_id,
-      runId: currentCandidate.run_id,
-      chapterId: currentCandidate.planning_chapter_id,
-      candidate: currentCandidate,
-      contextChecksum: currentRun.context_checksum,
-      targetWordCount: currentRun.context_manifest.chapter.target_word_count,
-      elements: currentRun.context_manifest.elements.map((item) => ({
-        elementId: item.element_id,
-        typeKey: item.type.key,
-        typeDisplayName: item.type.display_name,
-        name: item.version.name,
-        versionNo: item.version.version_no,
-      })),
-      relationCount: currentRun.context_manifest.counts.relations,
-      warnings: currentRun.context_manifest.warnings,
-    }, controller.signal).then((value) => {
-      const activeRun = generationRunRef.current;
-      const activeCandidate = generationCandidateRef.current;
-      if (
-        request !== generationAuditRequest.current
-        || generationIdentityRef.current.projectId !== expectedIdentity.projectId
-        || generationIdentityRef.current.userId !== expectedIdentity.userId
-        || selectionRef.current.kind !== "chapter"
-        || selectionRef.current.id !== expectedIdentity.chapterId
-        || activeRun?.id !== expectedIdentity.runId
-        || activeRun.context_checksum !== expectedIdentity.contextChecksum
-        || activeCandidate?.id !== expectedIdentity.candidateId
-        || value.candidate_id !== expectedIdentity.candidateId
-      ) return;
-      setGenerationCandidateAudit(value);
-    }).catch((cause) => {
-      if (controller.signal.aborted || request !== generationAuditRequest.current) return;
-      setGenerationAuditError(`${errorMessage(cause)} 候选正文仍保留只读；只会重新读取检查，不会重新调用模型。`);
-    }).finally(() => {
-      if (request === generationAuditRequest.current) setGenerationAuditLoading(false);
-    });
-  }
-
   function returnToPendingGenerationChapter() {
     if (!pending?.target_id || !planRef.current) return;
     const target = locate(planRef.current, { kind: "chapter", id: pending.target_id });
@@ -2158,6 +2143,7 @@ export default function ChapterPlanningPage() {
       {foreignPending?.workspace === "foreshadow" && <div className="planning-notice" role="alert"><span>伏笔管理中还有结果未确认的写入；章节规划写入已暂停。</span><Link className="btn btn-secondary" to={`/project/${id}/plan/foreshadows`}>前往伏笔管理核对</Link></div>}
       {foreignPending?.workspace === "generation_execution" && <div className="planning-notice" role="alert"><span>生成候选中还有结果未确认的模型调用；章节规划写入已暂停，且不会自动重复生成。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${id}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${id}/plan/chapters`}>返回发起章节核对生成</Link></div>}
       {foreignPending?.workspace === "technical_demo_execution" && <div className="planning-notice" role="alert"><span>技术模拟中还有结果未确认的固定内容请求；章节规划写入已暂停。它不调用 AI，也不会产生模型费用。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${id}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${id}/plan/chapters`}>返回技术模拟发起章节核对</Link></div>}
+      {foreignPending?.workspace === "candidate_manual_edit" && <div className="planning-notice" role="alert"><span>候选版本还有手工另存结果未确认；章节规划写入已暂停。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${id}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${id}/plan/chapters`}>返回原章节核对候选版本</Link></div>}
       {pending && pending.action !== "generation_prepare" && (
         <div className="planning-notice" role="alert">
           <span>检测到结果尚未确认的操作，已暂停新的写入。</span>
@@ -2250,7 +2236,7 @@ export default function ChapterPlanningPage() {
                   onMove={(targetPartId) => moveChapterTo(located.chapter!, targetPartId)}
                 />
                 {(located.chapter.status === "active" && located.part.status === "active"
-                  || !!generationExecutionPending || !!generationAttempt || !!generationCandidate) && (
+                  || !!generationExecutionPending || !!generationAttempt || !!generationCandidate || !!candidateVersionRecoveryId) && (
                   <PlanningGenerationPreflight
                     plan={plan}
                     part={located.part}
@@ -2270,9 +2256,9 @@ export default function ChapterPlanningPage() {
                     capability={generationCapability}
                     attempt={generationAttempt}
                     candidate={generationCandidate}
-                    candidateAudit={generationCandidateAudit}
-                    auditLoading={generationAuditLoading}
-                    auditError={generationAuditError}
+                    candidateAudit={null}
+                    auditLoading={false}
+                    auditError=""
                     executionBusy={generationExecutionBusy}
                     candidateLoading={generationCandidateLoading}
                     executionError={generationExecutionError}
@@ -2290,6 +2276,8 @@ export default function ChapterPlanningPage() {
                           ? "hidden" : "real"}
                     technicalDemoUserId={user?.id}
                     onTechnicalDemoLockChange={handleTechnicalDemoLockChange}
+                    candidateVersionRecoveryId={candidateVersionRecoveryId ?? searchParams.get("candidate_version") ?? undefined}
+                    onCandidateVersionLockChange={handleCandidateVersionLockChange}
                     onPrepare={() => void executeGenerationPrepare()}
                     onCheckPending={() => {
                       if (pending?.action === "generation_prepare") void reconcileGenerationPending(pending as unknown as PendingPlanningOperation<GenerationRunPrepareInput>, requestGeneration.current, true);
@@ -2303,7 +2291,7 @@ export default function ChapterPlanningPage() {
                     onConfirmGeneration={() => void confirmGenerationExecution()}
                     onCheckGenerationAttempt={() => void checkGenerationExecution()}
                     onReadGenerationCandidate={() => void rereadGenerationCandidate()}
-                    onReadGenerationCandidateAudit={rereadGenerationCandidateAudit}
+                    onReadGenerationCandidateAudit={() => {}}
                     onRetryOriginalGeneration={() => void retryOriginalGenerationExecution()}
                     onStartNewAfterFailure={() => void startNewGenerationAfterFailure()}
                   />

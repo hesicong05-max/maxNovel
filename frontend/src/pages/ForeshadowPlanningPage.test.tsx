@@ -10,7 +10,8 @@ import type { ForeshadowLifecycle, ForeshadowMutationReceipt } from "@/types/for
 import type { NovelPlan } from "@/types/planning";
 import ForeshadowPlanningPage from "./ForeshadowPlanningPage";
 
-vi.mock("@/components/AuthContext", () => ({ useAuth: () => ({ user: { id: "user-1" } }) }));
+const authState = vi.hoisted(() => ({ userId: "user-1" }));
+vi.mock("@/components/AuthContext", () => ({ useAuth: () => ({ user: { id: authState.userId } }) }));
 
 const id = (value: string) => value.padEnd(32, value).slice(0, 32);
 const projectId = id("project");
@@ -68,7 +69,7 @@ function renderPage(overrides: Record<string, unknown> = {}) {
 }
 
 describe("ForeshadowPlanningPage", () => {
-  beforeEach(() => { vi.restoreAllMocks(); sessionStorage.clear(); });
+  beforeEach(() => { vi.restoreAllMocks(); sessionStorage.clear(); authState.userId = "user-1"; });
 
   it("shows the four authoritative states and keeps plans separate from author facts", async () => {
     renderPage();
@@ -196,6 +197,37 @@ describe("ForeshadowPlanningPage", () => {
     expect(screen.queryByText(/章节规划中还有结果未确认的写入/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "加入已有伏笔" })).toBeDisabled();
     expect(screen.getByRole("link", { name: "返回发起章节核对生成" })).toHaveAttribute("href", `/project/${projectId}/plan/chapters`);
+  });
+
+  it("deep-links a v5 candidate edit recovery to its exact chapter, run, and parent version", async () => {
+    authState.userId = id("user");
+    const recoveryChapterId = id("recoverychapter");
+    const runId = id("run");
+    const candidateId = id("candidate");
+    sessionStorage.setItem(`novel_pending_planning_operation_v1:${authState.userId}:${projectId}`, JSON.stringify({
+      schema_version: 5,
+      workspace: "candidate_manual_edit",
+      user_id: authState.userId,
+      project_id: projectId,
+      chapter_id: recoveryChapterId,
+      run_id: runId,
+      operation_key: "candidate:manual-edit:pending123",
+      payload: {
+        operation_key: "candidate:manual-edit:pending123",
+        parent_candidate_id: candidateId,
+        expected_parent_version_no: 2,
+        expected_parent_checksum: "a".repeat(64),
+        expected_context_checksum: "b".repeat(64),
+        content: "沈星修订后的候选正文。",
+      },
+      created_at: now,
+    }));
+
+    renderPage();
+
+    const link = await screen.findByRole("link", { name: "返回原章节核对候选版本" });
+    expect(link).toHaveAttribute("href", `/project/${projectId}/plan/chapters?scope=chapter&target=${recoveryChapterId}&generation_run=${runId}&candidate_version=${candidateId}`);
+    expect(screen.getByRole("button", { name: "加入已有伏笔" })).toBeDisabled();
   });
 
   it("protects dirty forms from filter, route, and browser exits", async () => {

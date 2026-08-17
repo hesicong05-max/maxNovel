@@ -8,6 +8,7 @@ import { savePendingPlanningOperation } from "@/services/planningOperations";
 import { pendingProjectOperationKey } from "@/services/pendingProjectOperations";
 import { loadPendingGenerationExecution, savePendingGenerationExecution, type PendingGenerationExecution } from "@/services/generationExecution";
 import { savePendingTechnicalDemoExecution, type PendingTechnicalDemoExecution } from "@/services/technicalDemoExecution";
+import { savePendingCandidateManualEdit, type PendingCandidateManualEdit } from "@/services/candidateVersionOperations";
 import type { GenerationAttemptResponse, GenerationCandidateAuditResponse, GenerationCandidateResponse, GenerationCapabilityResponse, GenerationRunPrepareInput, GenerationRunResponse } from "@/types/generation";
 import type { TechnicalDemoCandidateResponse, TechnicalDemoExecutionResponse } from "@/types/demo";
 import type { NovelPlan } from "@/types/planning";
@@ -148,6 +149,51 @@ function auditResponse(candidate: GenerationCandidateResponse): GenerationCandid
   };
 }
 
+function versionDetail(candidate: GenerationCandidateResponse) {
+  const { source_attempt_id, ...base } = candidate;
+  void source_attempt_id;
+  return {
+    ...base,
+    parent_version_no: null,
+    root_candidate_id: candidate.id,
+    root_origin_kind: "generated" as const,
+    ai_invoked_for_this_version: true,
+    billing_effect_for_this_version: "possible" as const,
+    usage_status_for_this_version: "unavailable" as const,
+  };
+}
+
+function versionList(candidate: GenerationCandidateResponse) {
+  const { project_id, run_id, planning_chapter_id, content, content_format, ...item } = versionDetail(candidate);
+  return { schema_version: 1, project_id, run_id, planning_chapter_id, items: [item], next_cursor: null, has_more: false };
+}
+
+function technicalVersionDetail(candidate: TechnicalDemoCandidateResponse) {
+  const {
+    schema_version, source_technical_demo_execution_id, ai_invoked, billing_effect, usage_status,
+    ...base
+  } = candidate;
+  void schema_version;
+  void source_technical_demo_execution_id;
+  void ai_invoked;
+  void billing_effect;
+  void usage_status;
+  return {
+    ...base,
+    parent_version_no: null,
+    root_candidate_id: candidate.id,
+    root_origin_kind: "technical_demo" as const,
+    ai_invoked_for_this_version: false,
+    billing_effect_for_this_version: "none" as const,
+    usage_status_for_this_version: "not_applicable" as const,
+  };
+}
+
+function technicalVersionList(candidate: TechnicalDemoCandidateResponse) {
+  const { project_id, run_id, planning_chapter_id, content, content_format, ...item } = technicalVersionDetail(candidate);
+  return { schema_version: 1, project_id, run_id, planning_chapter_id, items: [item], next_cursor: null, has_more: false };
+}
+
 async function technicalCandidateResponse(executionId: string): Promise<TechnicalDemoCandidateResponse> {
   const content = "固定技术模拟候选正文";
   const bytes = new TextEncoder().encode(content);
@@ -222,6 +268,8 @@ function renderPage(
     }),
     getGenerationAttemptByKey: vi.fn().mockRejectedValue(new ApiError(404, { detail: "not found" })),
     getGenerationCandidate: vi.fn().mockRejectedValue(new ApiError(404, { detail: "candidate not found" })),
+    listGenerationCandidateVersions: vi.fn().mockRejectedValue(new ApiError(404, { detail: "versions not found" })),
+    getGenerationCandidateVersion: vi.fn().mockRejectedValue(new ApiError(404, { detail: "version not found" })),
     getGenerationCandidateAudit: vi.fn().mockRejectedValue(new ApiError(503, { detail: "audit unavailable" })),
     getTechnicalDemoCapability: vi.fn().mockRejectedValue(new ApiError(404, { detail: "not found" })),
     executeTechnicalDemo: vi.fn().mockRejectedValue(new Error("must not execute on startup")),
@@ -299,6 +347,86 @@ describe("ChapterPlanningPage generation preflight", () => {
     expect(api.executeGenerationAttempt).not.toHaveBeenCalled();
   });
 
+  it("deep-links a v5 refresh to its original chapter/run and uses GET-only recovery", async () => {
+    const operation = executionOperation("generation:execute:parent-v5");
+    const parent = await candidateResponse(operation);
+    const pending: PendingCandidateManualEdit = {
+      schema_version: 5,
+      workspace: "candidate_manual_edit",
+      user_id: userId,
+      project_id: projectId,
+      chapter_id: chapterId,
+      run_id: id("run"),
+      operation_key: "candidate:manual-edit:page-recover",
+      payload: {
+        operation_key: "candidate:manual-edit:page-recover",
+        parent_candidate_id: parent.id,
+        expected_parent_version_no: parent.version_no,
+        expected_parent_checksum: parent.content_checksum,
+        expected_context_checksum: "c".repeat(64),
+        content: `${parent.content} 手工补充。`,
+      },
+      created_at: now,
+    };
+    expect(savePendingCandidateManualEdit(pending)).toBe(true);
+    const savedRun = response({ operation_key: "planning:generation_prepare:v5", expected_structure_version: 3, expected_assignment_version: 2, expected_chapter_lock_version: 4 });
+    const byKey = vi.fn().mockRejectedValue(new ApiError(404, {
+      detail: "not found",
+      code: "GENERATION_CANDIDATE_MANUAL_EDIT_NOT_FOUND",
+      retryable: true,
+      recommended_action: "retry_original_candidate_manual_edit",
+    }));
+    const api = renderPage({
+      getGenerationRun: vi.fn().mockResolvedValue(savedRun),
+      listGenerationCandidateVersions: vi.fn().mockResolvedValue(versionList(parent)),
+      getGenerationCandidateVersion: vi.fn().mockResolvedValue(versionDetail(parent)),
+      getGenerationCandidateManualEditByKey: byKey,
+      createGenerationCandidateManualEdit: vi.fn().mockRejectedValue(new Error("must not POST on refresh")),
+      getGenerationCandidateAudit: vi.fn().mockResolvedValue(auditResponse(parent)),
+    }, `/project/${projectId}/plan/chapters`);
+
+    await waitFor(() => expect(api.getGenerationRun).toHaveBeenCalled());
+    const workspaceHeading = await screen.findByRole("heading", { name: "候选版本" });
+    expect(workspaceHeading).toBeInTheDocument();
+    await waitFor(() => expect(api.listGenerationCandidateVersions).toHaveBeenCalled());
+    await waitFor(() => expect(api.getGenerationCandidateVersion).toHaveBeenCalled());
+    await waitFor(() => expect(byKey).toHaveBeenCalled());
+    expect(await screen.findByRole("button", { name: "明确确认原请求重试" })).toBeInTheDocument();
+    expect(screen.getByTestId("location")).toHaveTextContent(`scope=chapter`);
+    expect(screen.getByTestId("location")).toHaveTextContent(`target=${chapterId}`);
+    expect(screen.getByTestId("location")).toHaveTextContent(`generation_run=${id("run")}`);
+    expect(screen.getByTestId("location")).toHaveTextContent(`candidate_version=${parent.id}`);
+    expect(api.getGenerationRun).toHaveBeenCalledWith(projectId, id("run"), expect.any(AbortSignal));
+    expect(byKey).toHaveBeenCalledTimes(1);
+    expect(api.createGenerationCandidateManualEdit).not.toHaveBeenCalled();
+    expect(api.executeGenerationAttempt).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(pendingProjectOperationKey(userId, projectId))).not.toBeNull();
+  });
+
+  it("keeps page writes locked until deferred candidate list and parent identity finish", async () => {
+    const operation = executionOperation("generation:execute:deferred-gate");
+    const parent = await candidateResponse(operation);
+    const listRead = deferred<ReturnType<typeof versionList>>();
+    const detailRead = deferred<ReturnType<typeof versionDetail>>();
+    const api = renderPage({
+      getGenerationRun: vi.fn().mockResolvedValue(response({ operation_key: "planning:generation_prepare:deferred-gate", expected_structure_version: 3, expected_assignment_version: 2, expected_chapter_lock_version: 4 })),
+      listGenerationCandidateVersions: vi.fn().mockReturnValue(listRead.promise),
+      getGenerationCandidateVersion: vi.fn().mockReturnValue(detailRead.promise),
+      getGenerationCandidateAudit: vi.fn().mockRejectedValue(new Error("audit deferred gate")),
+      createGenerationCandidateManualEdit: vi.fn(),
+    }, `/project/${projectId}/plan/chapters?scope=chapter&target=${chapterId}&generation_run=${id("run")}&candidate_version=${parent.id}`);
+
+    await screen.findByRole("heading", { name: "候选版本" });
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeDisabled();
+    listRead.resolve(versionList(parent));
+    await waitFor(() => expect(api.getGenerationCandidateVersion).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeDisabled();
+    detailRead.resolve(versionDetail(parent));
+    await screen.findByRole("heading", { name: "第一章 · 候选版本 1" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "新建篇章" })).toBeEnabled());
+    expect(api.createGenerationCandidateManualEdit).not.toHaveBeenCalled();
+  });
+
   it("returns from another selected chapter to the v4 originating chapter without POST", async () => {
     const { plan: twoChapterPlan, secondChapterId } = planWithSecondChapter();
     const operationKey = "technical-demo:execute:cross-page";
@@ -326,11 +454,14 @@ describe("ChapterPlanningPage generation preflight", () => {
       getGenerationRun: vi.fn().mockResolvedValue(response({ operation_key: "planning:generation_prepare:technical-success", expected_structure_version: 3, expected_assignment_version: 2, expected_chapter_lock_version: 4 })),
       getTechnicalDemoExecutionByKey: vi.fn().mockResolvedValue(receipt),
       getTechnicalDemoCandidate: vi.fn().mockResolvedValue(candidate),
+      listGenerationCandidateVersions: vi.fn().mockResolvedValue(technicalVersionList(candidate)),
+      getGenerationCandidateVersion: vi.fn().mockResolvedValue(technicalVersionDetail(candidate)),
       getGenerationCandidateAudit: vi.fn().mockResolvedValue(technicalAuditResponse(candidate)),
     });
-    expect(await screen.findByRole("heading", { name: /固定技术模拟候选已就绪/ })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "第一章 · 候选版本 1" })).toBeInTheDocument();
+    expect(screen.getByLabelText("正在查看的候选版本正文")).toHaveTextContent(candidate.content);
     await waitFor(() => expect(screen.queryByText(/技术模拟中还有结果未确认/)).not.toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "新建篇章" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "新建篇章" })).toBeEnabled());
     expect(sessionStorage.getItem(pendingProjectOperationKey(userId, projectId))).toBeNull();
     expect(api.executeTechnicalDemo).not.toHaveBeenCalled();
     expect(api.executeGenerationAttempt).not.toHaveBeenCalled();
@@ -352,6 +483,89 @@ describe("ChapterPlanningPage generation preflight", () => {
     expect(sessionStorage.getItem(pendingProjectOperationKey(userId, projectId))).toBeNull();
     expect(screen.getByRole("button", { name: "新建篇章" })).toBeEnabled();
     expect(api.executeTechnicalDemo).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["unparseable", "{broken"],
+    ["malformed planning v1", JSON.stringify({
+      schema_version: 1, user_id: userId, project_id: projectId,
+      operation_key: "planning:part_create:malformed", action: "part_create", target_id: null,
+      payload: { operation_key: "planning:part_create:malformed", expected_structure_version: 1, title: "", description: "" },
+      created_at: now,
+    })],
+  ])("clears generic corrupt %s without leaving candidate or technical locks", async (_kind, raw) => {
+    sessionStorage.setItem(pendingProjectOperationKey(userId, projectId), raw);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const createGenerationCandidateManualEdit = vi.fn();
+    const api = renderPage({ createGenerationCandidateManualEdit });
+    const clear = await screen.findByRole("button", { name: "确认清除损坏恢复记录" });
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeDisabled();
+    await userEvent.click(clear);
+    expect(await screen.findByText(/损坏的本地恢复记录已清除/)).toBeInTheDocument();
+    expect(sessionStorage.getItem(pendingProjectOperationKey(userId, projectId))).toBeNull();
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeEnabled();
+    expect(createGenerationCandidateManualEdit).not.toHaveBeenCalled();
+    expect(api.executeGenerationAttempt).not.toHaveBeenCalled();
+    expect(api.executeTechnicalDemo).not.toHaveBeenCalled();
+  });
+
+  it("does not clear or unlock when the corrupt record is replaced before confirmation", async () => {
+    const storageKey = pendingProjectOperationKey(userId, projectId);
+    sessionStorage.setItem(storageKey, "{broken");
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const createGenerationCandidateManualEdit = vi.fn();
+    const api = renderPage({ createGenerationCandidateManualEdit });
+    const clear = await screen.findByRole("button", { name: "确认清除损坏恢复记录" });
+    const replacement = JSON.stringify({ schema_version: 1, changed: true });
+    sessionStorage.setItem(storageKey, replacement);
+    await userEvent.click(clear);
+    expect(await screen.findByText(/恢复记录状态已经变化/)).toBeInTheDocument();
+    expect(sessionStorage.getItem(storageKey)).toBe(replacement);
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeDisabled();
+    expect(createGenerationCandidateManualEdit).not.toHaveBeenCalled();
+    expect(api.executeGenerationAttempt).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on a corrupt v5 record without reading or posting a candidate edit", async () => {
+    sessionStorage.setItem(pendingProjectOperationKey(userId, projectId), JSON.stringify({
+      schema_version: 5,
+      workspace: "candidate_manual_edit",
+      user_id: userId,
+      project_id: projectId,
+      chapter_id: chapterId,
+      run_id: id("run"),
+      operation_key: "candidate:manual-edit:corrupt-page",
+      payload: { operation_key: "candidate:manual-edit:corrupt-page" },
+      created_at: now,
+    }));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const getGenerationCandidateManualEditByKey = vi.fn();
+    const createGenerationCandidateManualEdit = vi.fn();
+    const api = renderPage({ getGenerationCandidateManualEditByKey, createGenerationCandidateManualEdit });
+
+    expect(await screen.findByText(/损坏或身份不匹配的候选版本恢复记录/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeDisabled();
+    expect(getGenerationCandidateManualEditByKey).not.toHaveBeenCalled();
+    expect(createGenerationCandidateManualEdit).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "确认清除损坏恢复记录" }));
+    expect(await screen.findByText(/损坏的本地恢复记录已清除/)).toBeInTheDocument();
+    expect(sessionStorage.getItem(pendingProjectOperationKey(userId, projectId))).toBeNull();
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeEnabled();
+    expect(getGenerationCandidateManualEditByKey).not.toHaveBeenCalled();
+    expect(createGenerationCandidateManualEdit).not.toHaveBeenCalled();
+    expect(api.executeGenerationAttempt).not.toHaveBeenCalled();
+  });
+
+  it("keeps all writes disabled when shared recovery storage is unavailable", async () => {
+    vi.spyOn(Object.getPrototypeOf(sessionStorage) as Storage, "getItem")
+      .mockImplementation(() => { throw new DOMException("blocked", "SecurityError"); });
+    const createGenerationCandidateManualEdit = vi.fn();
+    const api = renderPage({ createGenerationCandidateManualEdit });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/浏览器恢复存储不可用/);
+    expect(screen.getByRole("button", { name: "新建篇章" })).toBeDisabled();
+    expect(createGenerationCandidateManualEdit).not.toHaveBeenCalled();
+    expect(api.executeGenerationAttempt).not.toHaveBeenCalled();
   });
 
   it("prepares with authoritative versions, persists a URL pointer, and shows no generation claim", async () => {
@@ -731,6 +945,8 @@ describe("ChapterPlanningPage generation preflight", () => {
         operation_key: input.operation_key,
       })),
       getGenerationCandidate: vi.fn().mockResolvedValue(candidate),
+      listGenerationCandidateVersions: vi.fn().mockResolvedValue(versionList(candidate)),
+      getGenerationCandidateVersion: vi.fn().mockResolvedValue(versionDetail(candidate)),
     });
     await userEvent.click(await screen.findByRole("button", { name: "检查生成上下文" }));
     await screen.findByText("检查记录已保存");
@@ -741,7 +957,7 @@ describe("ChapterPlanningPage generation preflight", () => {
     expect(screen.getByTestId("location")).toHaveTextContent(`generation_candidate=${candidate.id}`);
     expect(sessionStorage.length).toBe(0);
     expect(api.executeGenerationAttempt).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button", { name: "关闭这条记录" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "关闭这条记录" })).toBeEnabled());
   });
 
   it("reads the deterministic audit only after candidate validation and never adds a POST", async () => {
@@ -754,6 +970,8 @@ describe("ChapterPlanningPage generation preflight", () => {
     const api = renderPage({
       executeGenerationAttempt,
       getGenerationCandidate: vi.fn().mockResolvedValue(candidate),
+      listGenerationCandidateVersions: vi.fn().mockResolvedValue(versionList(candidate)),
+      getGenerationCandidateVersion: vi.fn().mockResolvedValue(versionDetail(candidate)),
       getGenerationCandidateAudit,
     });
     await userEvent.click(await screen.findByRole("button", { name: "检查生成上下文" }));
@@ -761,7 +979,7 @@ describe("ChapterPlanningPage generation preflight", () => {
     await userEvent.click(screen.getByRole("button", { name: "查看模型信息并确认生成" }));
     await userEvent.click(await screen.findByRole("button", { name: "确认并生成一次候选" }));
     expect(await screen.findByRole("heading", { name: "确定性检查" })).toBeInTheDocument();
-    expect(screen.getByText("需要人工核对")).toBeInTheDocument();
+    expect(screen.getByText(/需要作者人工核对/)).toBeInTheDocument();
     expect(getGenerationCandidateAudit).toHaveBeenCalledWith(projectId, candidate.id, expect.any(AbortSignal));
     expect(api.getGenerationCandidate).toHaveBeenCalledTimes(1);
     expect(executeGenerationAttempt).toHaveBeenCalledTimes(1);
@@ -777,16 +995,18 @@ describe("ChapterPlanningPage generation preflight", () => {
     const api = renderPage({
       getGenerationRun: vi.fn().mockResolvedValue(response({ operation_key: "planning:generation_prepare:audit-read", expected_structure_version: 3, expected_assignment_version: 2, expected_chapter_lock_version: 4 })),
       getGenerationCandidate: vi.fn().mockResolvedValue(candidate),
+      listGenerationCandidateVersions: vi.fn().mockResolvedValue(versionList(candidate)),
+      getGenerationCandidateVersion: vi.fn().mockResolvedValue(versionDetail(candidate)),
       getGenerationCandidateAudit,
     }, `/project/${projectId}/plan/chapters?scope=chapter&target=${chapterId}&generation_run=${operation.run_id}&generation_attempt=${attempt.id}&generation_candidate=${candidate.id}`);
     expect(await screen.findByText(candidate.content)).toBeInTheDocument();
     expect(await screen.findByText(/audit offline/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "重新读取检查" }));
-    expect(await screen.findByText("需要人工核对")).toBeInTheDocument();
+    expect(await screen.findByText(/需要作者人工核对/)).toBeInTheDocument();
     expect(getGenerationCandidateAudit).toHaveBeenCalledTimes(2);
     expect(api.getGenerationCandidate).toHaveBeenCalledTimes(1);
     expect(api.executeGenerationAttempt).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("候选正文内容")).toHaveTextContent(candidate.content);
+    expect(screen.getByLabelText("正在查看的候选版本正文")).toHaveTextContent(candidate.content);
   });
 
   it("drops a delayed chapter A candidate after switching to chapter B", async () => {
@@ -819,10 +1039,13 @@ describe("ChapterPlanningPage generation preflight", () => {
       getPlanning: vi.fn().mockResolvedValue(twoChapter.plan),
       getGenerationRun: vi.fn().mockResolvedValue(response({ operation_key: "planning:generation_prepare:delayed-audit", expected_structure_version: 3, expected_assignment_version: 2, expected_chapter_lock_version: 4 })),
       getGenerationCandidate: vi.fn().mockResolvedValue(candidate),
+      listGenerationCandidateVersions: vi.fn().mockResolvedValue(versionList(candidate)),
+      getGenerationCandidateVersion: vi.fn().mockResolvedValue(versionDetail(candidate)),
       getGenerationCandidateAudit: vi.fn().mockReturnValue(auditRead.promise),
     }, `/project/${projectId}/plan/chapters?scope=chapter&target=${chapterId}&generation_run=${operation.run_id}&generation_attempt=${attempt.id}&generation_candidate=${candidate.id}`);
     expect(await screen.findByText(candidate.content)).toBeInTheDocument();
     await waitFor(() => expect(api.getGenerationCandidateAudit).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByRole("button", { name: "第二章" })).toBeEnabled());
     await userEvent.click(screen.getByRole("button", { name: "第二章" }));
     auditRead.resolve(auditResponse(candidate));
     await waitFor(() => expect(screen.getByRole("heading", { name: "第二章", level: 2 })).toBeInTheDocument());
@@ -844,10 +1067,13 @@ describe("ChapterPlanningPage generation preflight", () => {
       getPlanning: vi.fn().mockResolvedValue(twoChapter.plan),
       getGenerationRun: vi.fn().mockResolvedValue(response({ operation_key: "planning:generation_prepare:delayed-audit-retry", expected_structure_version: 3, expected_assignment_version: 2, expected_chapter_lock_version: 4 })),
       getGenerationCandidate: vi.fn().mockResolvedValue(candidate),
+      listGenerationCandidateVersions: vi.fn().mockResolvedValue(versionList(candidate)),
+      getGenerationCandidateVersion: vi.fn().mockResolvedValue(versionDetail(candidate)),
       getGenerationCandidateAudit,
     }, `/project/${projectId}/plan/chapters?scope=chapter&target=${chapterId}&generation_run=${operation.run_id}&generation_attempt=${attempt.id}&generation_candidate=${candidate.id}`);
     expect(await screen.findByText(/audit offline/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "重新读取检查" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "第二章" })).toBeEnabled());
     await userEvent.click(screen.getByRole("button", { name: "第二章" }));
     retryRead.resolve(auditResponse(candidate));
     await waitFor(() => expect(screen.getByRole("heading", { name: "第二章", level: 2 })).toBeInTheDocument());
@@ -902,6 +1128,8 @@ describe("ChapterPlanningPage generation preflight", () => {
     const api = renderPage({
       getGenerationRun: vi.fn().mockResolvedValue(response({ operation_key: "planning:generation_prepare:url-read", expected_structure_version: 3, expected_assignment_version: 2, expected_chapter_lock_version: 4 })),
       getGenerationCandidate: vi.fn().mockResolvedValue(candidate),
+      listGenerationCandidateVersions: vi.fn().mockResolvedValue(versionList(candidate)),
+      getGenerationCandidateVersion: vi.fn().mockResolvedValue(versionDetail(candidate)),
     }, `/project/${projectId}/plan/chapters?scope=chapter&target=${chapterId}&generation_run=${operation.run_id}&generation_attempt=${attempt.id}&generation_candidate=${candidate.id}`);
     expect(await screen.findByText(candidate.content)).toBeInTheDocument();
     expect(api.getGenerationRun).toHaveBeenCalledTimes(1);
@@ -918,7 +1146,12 @@ describe("ChapterPlanningPage generation preflight", () => {
       .mockRejectedValueOnce(new Error("candidate offline"))
       .mockResolvedValue(candidate);
     const executeGenerationAttempt = vi.fn().mockImplementation((_project: string, _run: string, input: { operation_key: string }) => Promise.resolve({ ...succeeded, operation_key: input.operation_key }));
-    renderPage({ executeGenerationAttempt, getGenerationCandidate });
+    renderPage({
+      executeGenerationAttempt,
+      getGenerationCandidate,
+      listGenerationCandidateVersions: vi.fn().mockResolvedValue(versionList(candidate)),
+      getGenerationCandidateVersion: vi.fn().mockResolvedValue(versionDetail(candidate)),
+    });
     await userEvent.click(await screen.findByRole("button", { name: "检查生成上下文" }));
     await screen.findByText("检查记录已保存");
     await userEvent.click(screen.getByRole("button", { name: "查看模型信息并确认生成" }));
