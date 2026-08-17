@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useId, useMemo, useRef } from "react";
+import TechnicalDemoExecution from "@/components/TechnicalDemoExecution";
 import type {
   GenerationAttemptResponse,
   GenerationCandidateAuditResponse,
@@ -47,6 +48,9 @@ interface Props {
   confirmationUsesOriginalRequest: boolean;
   originalRetryAllowed: boolean;
   newAttemptDisabled: boolean;
+  executionMode?: "real" | "technical" | "hidden";
+  technicalDemoUserId?: string;
+  onTechnicalDemoLockChange?: (locked: boolean) => void;
   onPrepare: () => void;
   onCheckPending: () => void;
   onRetryOriginal: () => void;
@@ -128,6 +132,9 @@ export default function PlanningGenerationPreflight({
   confirmationUsesOriginalRequest,
   originalRetryAllowed,
   newAttemptDisabled,
+  executionMode = "real",
+  technicalDemoUserId,
+  onTechnicalDemoLockChange,
   onPrepare,
   onCheckPending,
   onRetryOriginal,
@@ -152,6 +159,7 @@ export default function PlanningGenerationPreflight({
   const candidateHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const previousCandidateId = useRef<string | null>(null);
   const previousTerminalKey = useRef<string | null>(null);
+  const warningHeadingId = useId();
   useEffect(() => {
     if (focusResultToken > 0) resultHeadingRef.current?.focus();
   }, [focusResultToken]);
@@ -212,11 +220,15 @@ export default function PlanningGenerationPreflight({
   ), [run]);
 
   return (
-    <section className="planning-generation" aria-busy={busy || loadingSaved}>
+    <section id="demo-technical-generation" className="planning-generation" tabIndex={-1} aria-busy={busy || loadingSaved}>
       <header className="planning-generation__heading">
         <div>
-          <h3>第一步：生成前上下文检查</h3>
-          <p>第一步只检查并保存本章将使用的上下文，不调用 AI、不产生模型费用，也不会创建或修改章节正文。下方“生成候选正文”是另一个需要单独付费确认的步骤。</p>
+          <h3>{executionMode === "technical" ? `技术模拟前：冻结《${chapter.title}》上下文` : "生成前上下文检查"}</h3>
+          <p>{executionMode === "technical"
+            ? "先检查并保存本章将使用的上下文；之后可运行固定内容技术模拟，全程不调用 AI、不产生模型费用，也不会覆盖正文。"
+            : executionMode === "hidden"
+              ? "这里仅检查并保存本章将使用的上下文，不调用 AI、不产生模型费用，也不会创建或修改正文。"
+              : "第一步只检查并保存本章将使用的上下文，不调用 AI、不产生模型费用，也不会创建或修改章节正文。下方“生成候选正文”是另一个需要单独付费确认的步骤。"}</p>
         </div>
         <span className="planning-generation__zero-cost">上下文检查：零 AI · 零费用</span>
       </header>
@@ -279,7 +291,7 @@ export default function PlanningGenerationPreflight({
           {stale && <div className="planning-generation__warning" role="status">当前规划、章节或设定分配已经变化；此处保留历史快照供核对，请按最新资料重新检查。</div>}
 
           <dl className="planning-generation__receipt">
-            <div><dt>记录编号</dt><dd>{run.id}</dd></div>
+            {executionMode !== "technical" && <div><dt>记录编号</dt><dd>{run.id}</dd></div>}
             <div><dt>记录时间</dt><dd>{new Date(run.created_at).toLocaleString()}</dd></div>
             <div><dt>上下文大小</dt><dd>{run.context_size_bytes.toLocaleString()} / 65,536 字节</dd></div>
             <div><dt>结构 / 分配 / 章节版本</dt><dd>{run.structure_version} / {run.assignment_version} / {run.chapter_lock_version}</dd></div>
@@ -292,8 +304,8 @@ export default function PlanningGenerationPreflight({
           </div>
 
           {run.context_manifest.warnings.length > 0 && (
-            <section className="planning-generation__warnings" aria-labelledby={`generation-warning-${run.id}`}>
-              <h5 id={`generation-warning-${run.id}`}>检查提醒</h5>
+            <section className="planning-generation__warnings" aria-labelledby={warningHeadingId}>
+              <h5 id={warningHeadingId}>检查提醒</h5>
               <ul>{run.context_manifest.warnings.map((warning, index) => <li key={`${warning.code}-${warning.element_id ?? index}`}>{warningText[warning.code] ?? warning.code}{warning.element_id && elementNames.get(warning.element_id) ? `（${elementNames.get(warning.element_id)}）` : ""}</li>)}</ul>
             </section>
           )}
@@ -305,7 +317,7 @@ export default function PlanningGenerationPreflight({
                 <article key={item.element_id} className="planning-generation__item">
                   <header><div><h5>{item.version.name}</h5><span>{item.type.display_name} · 内容版本 {item.version.version_no}</span></div><strong>{item.assignment_sources.length} 个来源</strong></header>
                   <p>{item.version.summary || "未提供摘要"}</p>
-                  <details><summary>查看完整内容快照与字段状态</summary><h6>内容快照</h6><JsonSnapshot value={item.version.payload} /><h6>字段状态</h6><JsonSnapshot value={item.version.field_states} />{item.version.source_id && <p>原始出处编号：{item.version.source_id}</p>}</details>
+                  <details><summary>查看完整内容快照与字段状态</summary><h6>内容快照</h6><JsonSnapshot value={item.version.payload} /><h6>字段状态</h6><JsonSnapshot value={item.version.field_states} />{executionMode !== "technical" && item.version.source_id && <p>原始出处编号：{item.version.source_id}</p>}</details>
                   <details><summary>查看全部分配来源</summary><ul className="planning-generation__sources">{item.assignment_sources.map((source) => <li key={source.assignment_id}><strong>{scopeLabel(source.scope_type, source.scope_title)}</strong><span>分配时内容版本 {source.assigned_at_content_version} · 分配记录版本 {source.assignment_lock_version}</span></li>)}</ul></details>
                 </article>
               ))}
@@ -318,7 +330,19 @@ export default function PlanningGenerationPreflight({
           </details>
 
           <p className="planning-generation__boundary">若后续另行启动生成，这些内容才会成为生成上下文；当前记录本身不是正文，也不是生成任务。本次不安排伏笔埋入、强化或回收。</p>
-          <section className="planning-generation__execution" aria-labelledby={`generation-execution-${run.id}`} aria-busy={executionBusy || candidateLoading}>
+          {executionMode === "technical" && technicalDemoUserId ? (
+            <TechnicalDemoExecution
+              userId={technicalDemoUserId}
+              projectId={plan.project_id}
+              chapterId={chapter.id}
+              chapterTitle={chapter.title}
+              run={run}
+              disabledReason={stale ? "当前检查记录已过期，请先重新检查上下文。" : ""}
+              onLockChange={onTechnicalDemoLockChange}
+            />
+          ) : executionMode === "hidden" ? (
+            <div className="planning-generation__boundary" role="status">当前项目不提供候选执行入口；上下文检查记录仍可只读核对。</div>
+          ) : <section className="planning-generation__execution" aria-labelledby={`generation-execution-${run.id}`} aria-busy={executionBusy || candidateLoading}>
             <header>
               <div>
                 <h5 id={`generation-execution-${run.id}`}>生成候选正文</h5>
@@ -387,7 +411,7 @@ export default function PlanningGenerationPreflight({
                 </section>
               </article>
             )}
-          </section>
+          </section>}
           <div className="planning-generation__actions">
             <button className="btn btn-primary" disabled={busy || disabled || !!runActionsDisabledReason} onClick={onPrepare}>{busy ? "正在检查…" : stale ? "重新检查当前上下文" : "再次检查当前上下文"}</button>
             <button className="btn btn-secondary" disabled={busy || !!runActionsDisabledReason} onClick={hasPendingRecovery ? onAbandonPending : onClearSavedPointer}>{hasPendingRecovery ? "处理未清除的恢复线索" : "关闭这条记录"}</button>
@@ -396,7 +420,7 @@ export default function PlanningGenerationPreflight({
         </div>
       )}
 
-      {confirmationOpen && capability && (
+      {executionMode === "real" && confirmationOpen && capability && (
         <div className="planning-generation-confirm-overlay" role="presentation">
           <div ref={dialogRef} className="planning-generation-confirm" role="alertdialog" aria-modal="true" aria-labelledby="generation-confirm-title" aria-describedby="generation-confirm-description">
             <h4 id="generation-confirm-title">确认调用模型生成候选</h4>

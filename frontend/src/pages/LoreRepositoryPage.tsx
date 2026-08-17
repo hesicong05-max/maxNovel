@@ -9,6 +9,9 @@ import LoreRelationsPanel from "@/components/LoreRelationsPanel";
 import LoreMergeHistory from "@/components/LoreMergeHistory";
 import LoreMigrationPreview from "@/components/LoreMigrationPreview";
 import LoreReviewPanel from "@/components/LoreReviewPanel";
+import DemoGuide from "@/components/DemoGuide";
+import { readDemoFixture } from "@/services/demoFixture";
+import type { DemoFixtureCurrentResponse } from "@/types/demo";
 import { ApiError, api } from "@/services/api";
 import { clearDraft, loadDraft, type DraftScope } from "@/services/maintenanceDrafts";
 import type {
@@ -182,6 +185,7 @@ export default function LoreRepositoryPage() {
   const [actionNotice, setActionNotice] = useState("");
   const [creating, setCreating] = useState(false);
   const [migrationPreviewOpen, setMigrationPreviewOpen] = useState(false);
+  const [demoFixture, setDemoFixture] = useState<DemoFixtureCurrentResponse | null>(null);
   const [initialCreateStored, setInitialCreateStored] = useState<LoreCreateStoredPayload | null>(null);
   const [preservedCandidateDrafts, setPreservedCandidateDrafts] = useState<Record<string, CandidateDraft>>({});
   const requestSequence = useRef(0);
@@ -198,6 +202,7 @@ export default function LoreRepositoryPage() {
   const focusAfterMutation = useRef(false);
   const nextFormalAfterMutation = useRef<string | null>(null);
   const focusFormalAfterMutation = useRef(false);
+  const focusDemoElementAfterLoad = useRef(false);
   const createButtonRef = useRef<HTMLButtonElement | null>(null);
   const createTriggerRef = useRef<HTMLButtonElement | null>(null);
   const migrationPreviewTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -205,6 +210,13 @@ export default function LoreRepositoryPage() {
   const contextKey = `${id ?? ""}?${queryKey}`;
   const contextKeyRef = useRef(contextKey);
   contextKeyRef.current = contextKey;
+
+  useEffect(() => {
+    if (!id) return;
+    const controller = new AbortController();
+    void readDemoFixture(controller.signal).then((value) => setDemoFixture(value.state === "ready" && value.project_id === id ? value : null)).catch(() => setDemoFixture(null));
+    return () => controller.abort();
+  }, [id]);
 
   const selectedCandidate = useMemo(
     () => candidates.find((item) => item.id === selectedCandidateId) ?? null,
@@ -422,6 +434,11 @@ export default function LoreRepositoryPage() {
       if (scope === "formal" && "facets" in data) {
         setFormal(data);
         setFormalFacets(data.facets);
+        const anchoredElement = searchParams.get("element");
+        if (anchoredElement && /^[A-Za-z0-9]{32}$/.test(anchoredElement)) {
+          setSelectedFormalId(anchoredElement);
+          focusDemoElementAfterLoad.current = true;
+        }
         const desired = nextFormalAfterMutation.current;
         if (desired && data.items.some((item) => item.id === desired)) {
           setSelectedFormalId(desired);
@@ -477,9 +494,10 @@ export default function LoreRepositoryPage() {
       .then((data) => {
         if (sequence === detailSequence.current) {
           setDetail(data);
-          if (focusFormalAfterMutation.current) {
+          if (focusFormalAfterMutation.current || focusDemoElementAfterLoad.current) {
             requestAnimationFrame(() => detailRef.current?.focus());
             focusFormalAfterMutation.current = false;
+            focusDemoElementAfterLoad.current = false;
           }
         }
       })
@@ -805,6 +823,7 @@ export default function LoreRepositoryPage() {
           )}
         </div>
       </header>
+      {demoFixture?.state === "ready" && <div id="demo-lore"><DemoGuide projectId={id!} current={2} chapterId={demoFixture.chapter_id} elementId={demoFixture.element_id} foreshadowLifecycleId={demoFixture.foreshadow_lifecycle_id} /></div>}
 
       {overviewError && (
         <div className="lore-alert" role="alert">

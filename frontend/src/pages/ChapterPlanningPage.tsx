@@ -1,13 +1,16 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import PlanningStructurePanel, { type PlanningSelection } from "@/components/PlanningStructurePanel";
 import PlanningLoreAssignments from "@/components/PlanningLoreAssignments";
 import PlanningGenerationPreflight, { type GenerationRecoveryState } from "@/components/PlanningGenerationPreflight";
+import DemoGuide from "@/components/DemoGuide";
+import { readDemoFixture } from "@/services/demoFixture";
 import ForeshadowPlanningSummary from "@/components/ForeshadowPlanningSummary";
 import { useAuth } from "@/components/AuthContext";
 import { ApiError, api } from "@/services/api";
 import { generationRunContractError } from "@/services/generationRuns";
 import { pendingProjectOperationKey } from "@/services/pendingProjectOperations";
+import { loadPendingTechnicalDemoExecution } from "@/services/technicalDemoExecution";
 import {
   clearPendingGenerationExecution,
   createGenerationExecutionKey,
@@ -30,6 +33,7 @@ import {
   type PlanningOperationAction,
 } from "@/services/planningOperations";
 import type { LoreElementListItem } from "@/types/lore";
+import type { DemoFixtureCurrentResponse } from "@/types/demo";
 import type {
   GenerationAttemptResponse,
   GenerationCandidateAuditResponse,
@@ -142,6 +146,7 @@ export default function ChapterPlanningPage() {
   const { id } = useParams<{ id: string }>();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [plan, setPlan] = useState<NovelPlan | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
@@ -160,7 +165,7 @@ export default function ChapterPlanningPage() {
   const [assignmentRefreshRequired, setAssignmentRefreshRequired] = useState(false);
   const [assignmentSearchRefreshToken, setAssignmentSearchRefreshToken] = useState(0);
   const [pendingStorageIssue, setPendingStorageIssue] = useState<"corrupt" | "unavailable" | null>(null);
-  const [foreignPending, setForeignPending] = useState<{ workspace: "foreshadow" | "generation_execution"; chapterId: string | null } | null>(null);
+  const [foreignPending, setForeignPending] = useState<{ workspace: "foreshadow" | "generation_execution" | "technical_demo_execution"; chapterId: string | null } | null>(null);
   const [serverSyncToken, setServerSyncToken] = useState(0);
   const [focusTarget, setFocusTarget] = useState<string | null>(null);
   const [assignmentFocusTarget, setAssignmentFocusTarget] = useState<{ elementId: string; scopeIdentity: string } | null>(null);
@@ -191,6 +196,9 @@ export default function ChapterPlanningPage() {
   const [generationConfirmationIdentity, setGenerationConfirmationIdentity] = useState<{ runId: string; chapterId: string; contextChecksum: string; structureVersion: number; assignmentVersion: number; chapterLockVersion: number; operationKey: string | null } | null>(null);
   const [generationOriginalRetryAllowed, setGenerationOriginalRetryAllowed] = useState(false);
   const [generationExecutionRequiresNewPreflight, setGenerationExecutionRequiresNewPreflight] = useState(false);
+  const [demoDescriptor, setDemoDescriptor] = useState<DemoFixtureCurrentResponse | null>(null);
+  const [demoDescriptorStatus, setDemoDescriptorStatus] = useState<"loading" | "known" | "unknown">("loading");
+  const [technicalDemoLocked, setTechnicalDemoLocked] = useState(false);
   const conflictRef = useRef<HTMLDivElement | null>(null);
   const assignmentConflictRef = useRef<HTMLDivElement | null>(null);
   const globalGenerationFeedbackRef = useRef<HTMLDivElement | null>(null);
@@ -207,6 +215,21 @@ export default function ChapterPlanningPage() {
   const acceptedGenerationRunId = useRef<string | null>(null);
   const generationPointerTransition = useRef<string | null>(null);
   const previousSelectionIdentity = useRef<string | null>(null);
+  const technicalDemoHashFocusIdentity = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!id) return;
+    const controller = new AbortController();
+    setDemoDescriptorStatus("loading"); setDemoDescriptor(null);
+    void readDemoFixture(controller.signal).then((value) => {
+      if (controller.signal.aborted) return;
+      setDemoDescriptor(value); setDemoDescriptorStatus("known");
+    }).catch(() => {
+      if (controller.signal.aborted) return;
+      setDemoDescriptor(null); setDemoDescriptorStatus("unknown");
+    });
+    return () => controller.abort();
+  }, [id]);
   const selectionRef = useRef<PlanningSelection>({ kind: "novel", id: id ?? "" });
   const planRef = useRef<NovelPlan | null>(null);
   planRef.current = plan;
@@ -228,14 +251,59 @@ export default function ChapterPlanningPage() {
   generationRunRef.current = generationRun;
   generationCandidateRef.current = generationCandidate;
   generationIdentityRef.current = { projectId: id ?? "", userId: user?.id ?? "" };
+
+  useEffect(() => {
+    const expectedPath = id ? `/project/${id}/plan/chapters` : "";
+    if (location.pathname !== expectedPath || location.hash !== "#demo-technical-generation") {
+      technicalDemoHashFocusIdentity.current = null;
+      return;
+    }
+    if (
+      !id || !user || loadState !== "ready"
+      || demoDescriptor?.state !== "ready" || demoDescriptor.project_id !== id
+      || selection.kind !== "chapter" || selection.id !== demoDescriptor.chapter_id
+      || located.chapter?.id !== selection.id || !located.part
+    ) return;
+    const identity = `${user.id}:${id}:${selection.id}`;
+    if (technicalDemoHashFocusIdentity.current === identity) return;
+    const target = document.getElementById("demo-technical-generation");
+    if (!target) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (
+        generationIdentityRef.current.projectId !== id
+        || generationIdentityRef.current.userId !== user.id
+        || selectionRef.current.kind !== "chapter" || selectionRef.current.id !== selection.id
+        || !target.isConnected || document.getElementById("demo-technical-generation") !== target
+      ) return;
+      technicalDemoHashFocusIdentity.current = identity;
+      target.scrollIntoView({ block: "start", behavior: "auto" });
+      target.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [id, user?.id, loadState, demoDescriptor, selection.kind, selection.id, located.chapter, located.part, location.pathname, location.hash]);
   const generationFeedbackInlineVisible = !!generationFeedbackChapterId
     && selection.kind === "chapter"
     && selection.id === generationFeedbackChapterId
     && located.chapter?.status === "active"
     && located.part?.status === "active";
   const globalGenerationFeedbackVisible = !!generationError && !generationFeedbackInlineVisible;
-  const planningWriteDisabled = busy || generationBusy || generationExecutionBusy || !!generationExecutionPending || !!pending || maintenance || conflict || assignmentConflict
+  const planningWriteDisabled = busy || generationBusy || generationExecutionBusy || technicalDemoLocked || !!generationExecutionPending || !!pending || maintenance || conflict || assignmentConflict
     || refreshRequired || assignmentRefreshRequired || !!pendingStorageIssue || !!foreignPending;
+
+  const handleTechnicalDemoLockChange = useCallback((locked: boolean) => {
+    if (locked) {
+      setTechnicalDemoLocked(true);
+      return;
+    }
+    if (!id || !user) return;
+    const current = loadPendingPlanningOperation(user.id, id);
+    if (current.status === "foreign" && current.workspace === "technical_demo_execution") {
+      setTechnicalDemoLocked(true);
+      return;
+    }
+    setTechnicalDemoLocked(false);
+    setForeignPending((value) => value?.workspace === "technical_demo_execution" ? null : value);
+  }, [id, user]);
   const assignmentWriteDisabled = planningWriteDisabled || assignmentLoading || !!assignmentError;
   const generationStale = useMemo(() => {
     if (!generationRun || !plan || selection.kind !== "chapter" || !located.chapter || !assignmentResponse) return false;
@@ -284,7 +352,9 @@ export default function ChapterPlanningPage() {
     return "";
   }, [generationRun, generationExecutionRequiresNewPreflight, generationStale, generationExecutionPending, generationBusy, busy, generationExecutionBusy, generationDisabledReason]);
 
-  const generationRunActionsDisabledReason = generationExecutionPending || (generationAttempt && !generationCandidate)
+  const generationRunActionsDisabledReason = technicalDemoLocked
+    ? "技术模拟恢复或候选校验尚未完成；不能重新检查或关闭记录。"
+    : generationExecutionPending || (generationAttempt && !generationCandidate)
     ? "生成执行收据仍在处理中；只能核对或处理当前生成，不能重新检查或关闭记录。"
     : "";
 
@@ -398,6 +468,7 @@ export default function ChapterPlanningPage() {
     setGenerationConfirmationIdentity(null);
     setGenerationOriginalRetryAllowed(false);
     setGenerationExecutionRequiresNewPreflight(false);
+    setTechnicalDemoLocked(false);
     generationExecutionRequest.current += 1;
     generationCandidateRequest.current += 1;
     generationAuditRequest.current += 1;
@@ -845,10 +916,33 @@ export default function ChapterPlanningPage() {
       const generationPending = loaded.workspace === "generation_execution"
         ? loadPendingGenerationExecution(user.id, id)
         : null;
+      const technicalPending = loaded.workspace === "technical_demo_execution"
+        ? loadPendingTechnicalDemoExecution(user.id, id)
+        : null;
+      if (technicalPending?.status === "corrupt" || technicalPending?.status === "unavailable") {
+        setForeignPending(null);
+        setTechnicalDemoLocked(true);
+        setPendingStorageIssue(technicalPending.status);
+        setError(technicalPending.status === "corrupt"
+          ? "检测到损坏或身份不匹配的技术模拟恢复记录，已安全停止全部写入。"
+          : "浏览器恢复存储不可用；已安全停止全部写入。");
+        return;
+      }
       setForeignPending({
         workspace: loaded.workspace,
-        chapterId: generationPending?.status === "available" ? generationPending.operation.chapter_id : null,
+        chapterId: generationPending?.status === "available" ? generationPending.operation.chapter_id
+          : technicalPending?.status === "available" ? technicalPending.operation.chapter_id : null,
       });
+      if (technicalPending?.status === "available") {
+        setTechnicalDemoLocked(true);
+        const operation = technicalPending.operation;
+        const params = new URLSearchParams(searchParams);
+        params.set("scope", "chapter");
+        params.set("target", operation.chapter_id);
+        params.set("generation_run", operation.run_id);
+        setSearchParams(params, { replace: true });
+        setMobileDetail(true);
+      }
       return;
     }
     if (loaded.status === "corrupt" || loaded.status === "unavailable") {
@@ -946,6 +1040,10 @@ export default function ChapterPlanningPage() {
       && (next.kind !== "chapter" || next.id !== generationExecutionPending.chapter_id)
     ) {
       setNotice("生成执行仍等待核对；已保持在发起章节，避免把执行收据显示到其他范围。");
+      return;
+    }
+    if (changingScope && technicalDemoLocked) {
+      setNotice("技术模拟仍在按原编号恢复；已保持在发起章节，避免把候选显示到其他范围。");
       return;
     }
     if (changingScope && !confirmEditorUnload()) return;
@@ -1546,6 +1644,8 @@ export default function ChapterPlanningPage() {
     if (!window.confirm("只清除这条损坏的浏览器会话恢复记录？不会删除任何小说、设定或服务器数据。")) return;
     if (clearPendingPlanningOperation(user.id, id)) {
       setPendingStorageIssue(null);
+      setTechnicalDemoLocked(false);
+      setForeignPending((value) => value?.workspace === "technical_demo_execution" ? null : value);
       setError("");
       setGenerationError("");
       setGenerationFeedbackChapterId(null);
@@ -2042,6 +2142,7 @@ export default function ChapterPlanningPage() {
         <div><h1>章节规划</h1><p>在生成正文前组织篇章、章节和使用范围。</p></div>
         <span className="planning-header-actions"><Link className="btn btn-secondary" to={`/project/${id}/plan/foreshadows`} onClick={(event) => { if (!confirmEditorUnload(undefined, true)) event.preventDefault(); }}>管理伏笔</Link><Link className="btn btn-secondary" to={`/project/${id}/lore`} onClick={(event) => { if (!confirmEditorUnload(undefined, true)) event.preventDefault(); }}>打开设定仓库</Link></span>
       </header>
+      {demoDescriptor?.state === "ready" && demoDescriptor.project_id === id && <div id="demo-planning"><DemoGuide projectId={id} current={location.hash === "#demo-technical-generation" ? 5 : 3} chapterId={demoDescriptor.chapter_id} elementId={demoDescriptor.element_id} foreshadowLifecycleId={demoDescriptor.foreshadow_lifecycle_id} /></div>}
 
       <ForeshadowPlanningSummary projectId={id} />
 
@@ -2056,6 +2157,7 @@ export default function ChapterPlanningPage() {
       {maintenance && <div className="planning-notice" role="status">项目资料正在维护；已保留当前只读内容并暂停写入。</div>}
       {foreignPending?.workspace === "foreshadow" && <div className="planning-notice" role="alert"><span>伏笔管理中还有结果未确认的写入；章节规划写入已暂停。</span><Link className="btn btn-secondary" to={`/project/${id}/plan/foreshadows`}>前往伏笔管理核对</Link></div>}
       {foreignPending?.workspace === "generation_execution" && <div className="planning-notice" role="alert"><span>生成候选中还有结果未确认的模型调用；章节规划写入已暂停，且不会自动重复生成。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${id}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${id}/plan/chapters`}>返回发起章节核对生成</Link></div>}
+      {foreignPending?.workspace === "technical_demo_execution" && <div className="planning-notice" role="alert"><span>技术模拟中还有结果未确认的固定内容请求；章节规划写入已暂停。它不调用 AI，也不会产生模型费用。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${id}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${id}/plan/chapters`}>返回技术模拟发起章节核对</Link></div>}
       {pending && pending.action !== "generation_prepare" && (
         <div className="planning-notice" role="alert">
           <span>检测到结果尚未确认的操作，已暂停新的写入。</span>
@@ -2180,6 +2282,14 @@ export default function ChapterPlanningPage() {
                     confirmationUsesOriginalRequest={generationConfirmationKind === "original_retry"}
                     originalRetryAllowed={generationOriginalRetryAllowed}
                     newAttemptDisabled={generationStale || located.chapter.status !== "active" || located.part.status !== "active" || busy || generationBusy || generationExecutionBusy}
+                    executionMode={demoDescriptorStatus !== "known"
+                      ? "hidden"
+                      : demoDescriptor?.state === "ready" && demoDescriptor.project_id === id
+                        ? demoDescriptor.chapter_id === located.chapter.id ? "technical" : "hidden"
+                        : demoDescriptor?.state === "diverged" && demoDescriptor.project_id === id
+                          ? "hidden" : "real"}
+                    technicalDemoUserId={user?.id}
+                    onTechnicalDemoLockChange={handleTechnicalDemoLockChange}
                     onPrepare={() => void executeGenerationPrepare()}
                     onCheckPending={() => {
                       if (pending?.action === "generation_prepare") void reconcileGenerationPending(pending as unknown as PendingPlanningOperation<GenerationRunPrepareInput>, requestGeneration.current, true);

@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@/services/api";
 import type { Project } from "@/types";
+import { ApiError } from "@/services/api";
+import { bootstrapDemoFixture, readDemoFixture } from "@/services/demoFixture";
+import type { DemoFixtureCurrentResponse } from "@/types/demo";
 
 const STATUS_LABELS: Record<string, string> = {
   draft: "草稿",
@@ -15,21 +18,56 @@ const STATUS_LABELS: Record<string, string> = {
 export default function ProjectList() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const [demo, setDemo] = useState<DemoFixtureCurrentResponse | null>(null);
+  const [demoError, setDemoError] = useState("");
+  const [demoBusy, setDemoBusy] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
-    loadProjects();
+    const controller = new AbortController();
+    void loadProjects();
+    void readDemoFixture(controller.signal).then((current) => {
+      setDemo(current);
+      setDemoError("");
+    }).catch((error) => {
+      if (controller.signal.aborted || (error instanceof ApiError && error.status === 404)) return;
+      setDemo(null);
+      setDemoError("技术演示状态暂时无法核对；已隐藏演示入口，普通项目仍可继续使用。");
+    });
+    return () => controller.abort();
   }, []);
 
   async function loadProjects() {
     try {
-      const data = await api.listProjects();
-      setProjects(data);
+      setProjects(await api.listProjects());
     } catch (e) {
       console.error("Failed to load projects:", e);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function createDemo() {
+    if (demo?.state !== "missing" || demoBusy) return;
+    setDemoBusy(true); setDemoError("");
+    try { const result = await bootstrapDemoFixture(); navigate(`/project/${result.project_id}`); }
+    catch (error) {
+      try {
+        const current = await readDemoFixture();
+        setDemo(current);
+        if (current.state === "ready" && current.project_id) {
+          navigate(`/project/${current.project_id}`);
+        } else if (current.state === "missing") {
+          setDemoError("服务端确认样例尚未建立。可以由你明确再次建立，系统不会自动重复提交。");
+        } else {
+          setDemoError("样例数据已发生变化，已保留现状且不再创建。");
+        }
+      } catch {
+        setDemo(null);
+        setDemoError(`${(error as Error).message || "技术演示建立请求响应不确定。"} 当前无法核对服务端状态，已隐藏建立入口，请稍后刷新。`);
+      }
+    }
+    finally { setDemoBusy(false); }
   }
 
   async function handleDelete(id: string) {
@@ -57,6 +95,15 @@ export default function ProjectList() {
         </Link>
       </div>
 
+      {demo && <section className={`card demo-entry is-${demo.state}`} aria-labelledby="demo-entry-title">
+        <div><h2 id="demo-entry-title">五步技术演示</h2><p>{demo.state === "missing" ? "建立一份隔离的固定样例，体验设定、章节、伏笔和零 AI 技术模拟。" : demo.state === "ready" ? "固定样例已就绪，可以从上次的技术演示继续。" : "样例数据已发生变化。系统会保留现状，不覆盖、不修复，也不提供执行入口。"}</p></div>
+        {demo.state === "missing" && <button className="btn btn-primary" disabled={demoBusy} onClick={() => void createDemo()}>{demoBusy ? "正在建立…" : "建立技术演示样例"}</button>}
+        {demo.state === "ready" && demo.project_id && <Link className="btn btn-primary" to={`/project/${demo.project_id}`}>打开五步技术演示</Link>}
+        {demo.state === "diverged" && <span className="tag tag-gray">已保留，不可执行</span>}
+        {demoError && <p role="alert">{demoError}</p>}
+      </section>}
+      {!demo && demoError && <p className="card demo-entry" role="alert">{demoError}</p>}
+
       {projects.length === 0 ? (
         <div className="card empty-state">
           <h3>还没有项目</h3>
@@ -75,6 +122,7 @@ export default function ProjectList() {
                   <h3 style={{ fontSize: "16px", fontWeight: 600, marginBottom: "0.375rem", color: "var(--text-1)" }}>
                     {project.title}
                   </h3>
+                  {demo?.state === "ready" && demo.project_id === project.id && <span className="tag tag-gold">五步技术演示</span>}
                   <div style={{ display: "flex", gap: "0.625rem", alignItems: "center", flexWrap: "wrap" }}>
                     <span className="tag tag-gold">{project.genre}</span>
                     <span style={{ fontSize: "12px", color: "var(--text-3)" }}>

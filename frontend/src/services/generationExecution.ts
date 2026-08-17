@@ -424,7 +424,8 @@ export interface ExpectedGenerationCandidateAudit {
   projectId: string;
   runId: string;
   chapterId: string;
-  candidate: GenerationCandidateResponse;
+  candidate: Pick<GenerationCandidateResponse,
+    "id" | "version_no" | "content" | "content_checksum" | "content_size_bytes" | "word_count">;
   contextChecksum: string;
   targetWordCount: number | null;
   elements: Array<{
@@ -659,7 +660,7 @@ export interface PendingGenerationExecution {
 export type PendingGenerationExecutionLoad =
   | { status: "missing" }
   | { status: "available"; operation: PendingGenerationExecution }
-  | { status: "foreign"; workspace: "planning" | "foreshadow" }
+  | { status: "foreign"; workspace: "planning" | "foreshadow" | "technical_demo_execution" }
   | { status: "corrupt" }
   | { status: "unavailable" };
 
@@ -734,6 +735,9 @@ export function loadPendingGenerationExecution(
     }
     if (value.schema_version === 2 && value.workspace === "foreshadow") {
       return { status: "foreign", workspace: "foreshadow" };
+    }
+    if (value.schema_version === 4 && value.workspace === "technical_demo_execution") {
+      return { status: "foreign", workspace: "technical_demo_execution" };
     }
     if (!isPendingGenerationExecution(value, userId, projectId)) {
       return { status: "corrupt" };

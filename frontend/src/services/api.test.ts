@@ -93,6 +93,34 @@ describe("Unauthorized Callback", () => {
   });
 });
 
+describe("API - technical demo adapters", () => {
+  beforeEach(() => { localStorage.clear(); vi.restoreAllMocks(); });
+
+  it("uses exact fixture GET/POST methods and bootstrap body", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+    const signal = new AbortController().signal;
+    await api.getDemoFixture(signal);
+    expect(fetchSpy).toHaveBeenNthCalledWith(1, "/api/demo/v1/fixture", expect.objectContaining({ signal }));
+    const body = { fixture_version: 1 as const, operation_key: "demo:v1:bootstrap" as const };
+    await api.bootstrapDemoFixture(body);
+    expect(fetchSpy).toHaveBeenNthCalledWith(2, "/api/demo/v1/bootstrap", expect.objectContaining({ method: "POST", body: JSON.stringify(body) }));
+  });
+
+  it("encodes all technical execution path identities and preserves signal/body", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+    const signal = new AbortController().signal;
+    await api.getTechnicalDemoCapability("project/id", "run/id", signal);
+    expect(fetchSpy).toHaveBeenNthCalledWith(1, "/api/demo/v1/projects/project%2Fid/planning/generation-runs/run%2Fid/technical-generation-capability", expect.objectContaining({ signal }));
+    const body = { operation_key: "technical-demo:key", expected_context_checksum: "a".repeat(64), expected_capability_checksum: "b".repeat(64), fixture_version: 1 as const, confirm_technical_demo: true as const };
+    await api.executeTechnicalDemo("project/id", "run/id", body);
+    expect(fetchSpy).toHaveBeenNthCalledWith(2, "/api/demo/v1/projects/project%2Fid/planning/generation-runs/run%2Fid/technical-demo-executions", expect.objectContaining({ method: "POST", body: JSON.stringify(body) }));
+    await api.getTechnicalDemoExecutionByKey("project/id", "operation/key", signal);
+    expect(fetchSpy).toHaveBeenNthCalledWith(3, "/api/demo/v1/projects/project%2Fid/planning/technical-demo-executions/by-key/operation%2Fkey", expect.objectContaining({ signal }));
+    await api.getTechnicalDemoCandidate("project/id", "candidate/id", signal);
+    expect(fetchSpy).toHaveBeenNthCalledWith(4, "/api/demo/v1/projects/project%2Fid/planning/technical-demo-candidates/candidate%2Fid", expect.objectContaining({ signal }));
+  });
+});
+
 describe("API - Auth", () => {
   beforeEach(() => {
     localStorage.clear();
