@@ -1,0 +1,418 @@
+.planning-page--studio {
+  --planning-panel-border: color-mix(in srgb, var(--studio-border) 78%, white);
+  display: grid;
+  min-width: 0;
+  gap: var(--studio-space-4);
+  color: var(--studio-ink);
+}
+
+.planning-page--studio .planning-page__back {
+  justify-self: start;
+  margin: 0;
+}
+
+.planning-page--studio .planning-header {
+  align-items: flex-end;
+  gap: var(--studio-space-5);
+  margin: 0;
+  padding: var(--studio-space-5) 0 var(--studio-space-4);
+  border-bottom: 1px solid var(--studio-border);
+}
+
+.planning-page--studio .planning-header__copy {
+  display: grid;
+  min-width: 0;
+  gap: var(--studio-space-1);
+}
+
+.planning-page--studio .planning-header__eyebrow {
+  color: var(--studio-mist);
+  font-size: 0.7rem;
+  font-weight: 750;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.planning-page--studio .planning-header h1,
+.planning-page--studio .planning-header p {
+  margin: 0;
+}
+
+.planning-page--studio .planning-header h1 {
+  color: var(--studio-ink);
+  font-family: var(--font-serif);
+  font-size: clamp(1.75rem, 3vw, 2.5rem);
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+}
+
+.planning-page--studio .planning-header p {
+  max-width: 42rem;
+  color: var(--studio-ink-muted);
+  line-height: 1.65;
+}
+
+.planning-page--studio .planning-header-actions {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+
+.planning-page--studio .btn-primary {
+  border-color: var(--studio-accent-strong);
+  background: var(--studio-accent-strong);
+  color: #fff;
+}
+
+.planning-page--studio .btn-secondary {
+  border-color: var(--studio-border-strong);
+  background: var(--studio-surface);
+  color: var(--studio-ink);
+}
+
+.planning-page--studio .btn:active,
+.planning-page--studio .btn-back:active,
+.planning-page--studio .planning-node:active,
+.planning-page--studio .planning-tree__moves button:active {
+  transform: translateY(1px) scale(0.985);
+}
+
+.planning-page--studio .btn:focus-visible,
+.planning-page--studio .btn-back:focus-visible,
+.planning-page--studio .planning-node:focus-visible,
+.planning-page--studio .planning-tree__moves button:focus-visible,
+.planning-page--studio .planning-mobile-back:focus-visible {
+  outline: 3px solid var(--studio-focus);
+  outline-offset: 3px;
+}
+
+.planning-page--studio .btn,
+.planning-page--studio .btn-back,
+.planning-page--studio .planning-node,
+.planning-page--studio .planning-tree__moves button {
+  transition: transform var(--studio-duration-press) ease;
+}
+
+.planning-page--studio .planning-status-stack {
+  display: grid;
+  min-width: 0;
+  gap: var(--studio-space-2);
+}
+
+.planning-page--studio .planning-status-stack:empty {
+  display: none;
+}
+
+.planning-page--studio .planning-live,
+.planning-page--studio .planning-notice {
+  min-width: 0;
+  margin: 0;
+  border-color: var(--studio-border);
+  border-radius: var(--studio-radius-md);
+  background: var(--studio-surface-muted);
+  color: var(--studio-ink);
+}
+
+.planning-page--studio .planning-status-stack > .planning-notice:nth-child(2) {
+  border-left: 4px solid var(--studio-accent);
+}
+
+.planning-page--studio .planning-notice.is-error {
+  border-color: #dbaaaa;
+  border-left: 4px solid #a64646;
+  background: #fff4f2;
+}
+
+.planning-page--studio .planning-notice span,
+.planning-page--studio .planning-notice small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.planning-page--studio .planning-state-card {
+  min-height: 13rem;
+  margin: 0;
+  border-color: var(--planning-panel-border);
+  border-radius: var(--studio-radius-lg);
+  background: var(--studio-surface);
+  box-shadow: none;
+}
+
+.planning-page--studio .planning-workspace {
+  grid-template-columns: 272px minmax(0, 1fr);
+  gap: var(--studio-space-5);
+}
+
+.planning-page--studio .planning-workspace__tree,
+.planning-page--studio .planning-workspace__detail {
+  border-color: var(--planning-panel-border);
+  border-radius: var(--studio-radius-lg);
+  background: var(--studio-surface);
+  box-shadow: none;
+}
+
+.planning-page--studio .planning-workspace__tree {
+  padding: var(--studio-space-3);
+}
+
+.planning-page--studio .planning-workspace__detail {
+  padding: clamp(1rem, 2.4vw, 2rem);
+}
+
+.planning-page--studio .planning-section-heading {
+  align-items: center;
+  margin-bottom: var(--studio-space-3);
+  padding: 0 var(--studio-space-1) var(--studio-space-3);
+  border-bottom: 1px solid var(--studio-border);
+}
+
+.planning-page--studio .planning-section-heading h2,
+.planning-page--studio .planning-workspace__detail h2 {
+  color: var(--studio-ink);
+  font-family: var(--font-serif);
+  font-size: clamp(1.15rem, 2vw, 1.45rem);
+  line-height: 1.25;
+}
+
+.planning-page--studio .planning-tree__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--studio-space-1) var(--studio-space-2);
+  margin: 0 0 var(--studio-space-3);
+  padding: 0 var(--studio-space-1);
+  color: var(--studio-mist);
+  font-size: 0.75rem;
+}
+
+.planning-page--studio .planning-tree__summary span + span::before {
+  margin-right: var(--studio-space-2);
+  content: "·";
+}
+
+.planning-page--studio .planning-tree__part {
+  margin-top: var(--studio-space-2);
+  border-color: var(--studio-border);
+  padding-top: var(--studio-space-2);
+}
+
+.planning-page--studio .planning-tree__part-row,
+.planning-page--studio .planning-tree__chapter {
+  align-items: stretch;
+  gap: var(--studio-space-1);
+}
+
+.planning-page--studio .planning-tree__chapters {
+  margin-left: var(--studio-space-3) !important;
+  border-color: var(--studio-border);
+  padding-left: var(--studio-space-2) !important;
+}
+
+.planning-page--studio .planning-node {
+  border-radius: var(--studio-radius-md);
+  color: var(--studio-ink);
+  font-weight: 620;
+  line-height: 1.35;
+}
+
+.planning-page--studio .planning-node span {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.planning-page--studio .planning-node small {
+  flex: 0 0 auto;
+  color: var(--studio-mist);
+  font-size: 0.7rem;
+}
+
+.planning-page--studio .planning-node:hover {
+  border-color: var(--studio-border-strong);
+  background: var(--studio-surface-muted);
+}
+
+.planning-page--studio .planning-node.is-selected {
+  border-color: color-mix(in srgb, var(--studio-accent) 42%, var(--studio-border));
+  background: var(--studio-accent-soft);
+  color: var(--studio-accent-strong);
+}
+
+.planning-page--studio .planning-node.is-archived {
+  border-style: dashed;
+}
+
+.planning-page--studio .planning-tree__moves {
+  align-self: center;
+}
+
+.planning-page--studio .planning-tree__moves button {
+  border-color: var(--studio-border);
+  border-radius: var(--studio-radius-sm);
+  background: var(--studio-surface);
+  color: var(--studio-ink-muted);
+}
+
+.planning-page--studio .planning-tree__moves button:not(:disabled):hover {
+  border-color: var(--studio-accent);
+  color: var(--studio-accent-strong);
+}
+
+.planning-page--studio .planning-tree__archived {
+  border-color: var(--studio-border);
+}
+
+.planning-page--studio .planning-tree__archived summary {
+  display: flex;
+  align-items: center;
+  color: var(--studio-ink-muted);
+  font-weight: 650;
+}
+
+.planning-page--studio .planning-scope-meta {
+  margin-top: var(--studio-space-1);
+  color: var(--studio-mist);
+}
+
+.planning-page--studio .planning-workspace__detail > section,
+.planning-page--studio .planning-workspace__detail > .planning-assignments,
+.planning-page--studio .planning-workspace__detail > .planning-generation {
+  min-width: 0;
+}
+
+.planning-page--studio .planning-workspace__detail > section + section,
+.planning-page--studio .planning-workspace__detail > section + .planning-assignments,
+.planning-page--studio .planning-workspace__detail > section + .planning-generation,
+.planning-page--studio .planning-workspace__detail > .planning-generation + .planning-assignments {
+  margin-top: var(--studio-space-5);
+  border-top: 1px solid var(--studio-border);
+  padding-top: var(--studio-space-5);
+}
+
+.planning-page--studio .planning-danger-zone {
+  border-color: #dbaaaa;
+  border-radius: var(--studio-radius-md);
+  background: #fff8f6;
+}
+
+.planning-page--studio .planning-page__support {
+  min-width: 0;
+  margin-top: var(--studio-space-2);
+}
+
+.planning-page--studio .planning-page__support .planning-foreshadow-summary {
+  margin: 0;
+  border-color: var(--planning-panel-border);
+  border-radius: var(--studio-radius-lg);
+  background: color-mix(in srgb, var(--studio-surface-muted) 62%, white);
+}
+
+@media (min-width: 861px) {
+  .planning-page--studio .planning-workspace__tree {
+    position: sticky;
+    top: var(--studio-space-4);
+    max-height: calc(100dvh - 2rem);
+    overflow: auto;
+    scrollbar-gutter: stable;
+  }
+}
+
+@media (max-width: 860px) {
+  .planning-page--studio .planning-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .planning-page--studio .planning-header-actions {
+    justify-content: flex-start;
+  }
+
+  .planning-page--studio .planning-workspace {
+    display: block;
+  }
+
+  .planning-page--studio .planning-workspace__detail {
+    display: none;
+  }
+
+  .planning-page--studio .planning-workspace.show-detail .planning-workspace__tree {
+    display: none;
+  }
+
+  .planning-page--studio .planning-workspace.show-detail .planning-workspace__detail,
+  .planning-page--studio .planning-mobile-back {
+    display: block;
+  }
+
+  .planning-page--studio .planning-workspace.show-detail .planning-workspace__detail {
+    animation: planning-detail-enter var(--studio-duration-panel) var(--studio-ease);
+  }
+}
+
+@media (max-width: 640px) {
+  .planning-page--studio {
+    gap: var(--studio-space-3);
+  }
+
+  .planning-page--studio .planning-header {
+    padding-top: var(--studio-space-3);
+  }
+
+  .planning-page--studio .planning-header-actions,
+  .planning-page--studio .planning-notice,
+  .planning-page--studio .planning-notice__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .planning-page--studio .planning-header-actions .btn,
+  .planning-page--studio .planning-notice .btn,
+  .planning-page--studio .planning-notice__actions .btn {
+    width: 100%;
+  }
+
+  .planning-page--studio .planning-workspace__tree,
+  .planning-page--studio .planning-workspace__detail {
+    padding: var(--studio-space-3);
+  }
+
+  .planning-page--studio .planning-tree__chapter,
+  .planning-page--studio .planning-tree__part-row {
+    align-items: stretch;
+  }
+
+  .planning-page--studio .planning-tree__moves {
+    align-self: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .planning-page--studio .btn,
+  .planning-page--studio .btn-back,
+  .planning-page--studio .planning-node,
+  .planning-page--studio .planning-tree__moves button {
+    transition: none;
+  }
+
+  .planning-page--studio .btn:active,
+  .planning-page--studio .btn-back:active,
+  .planning-page--studio .planning-node:active,
+  .planning-page--studio .planning-tree__moves button:active {
+    transform: none;
+  }
+
+  .planning-page--studio .planning-workspace.show-detail .planning-workspace__detail {
+    animation: none;
+  }
+}
+
+@keyframes planning-detail-enter {
+  from {
+    opacity: 0;
+    transform: translateX(0.75rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}

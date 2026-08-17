@@ -2267,17 +2267,16 @@ export default function ChapterPlanningPage() {
   if (!id) return <div className="card empty-state" role="alert">项目地址无效。</div>;
 
   return (
-    <div className="planning-page" aria-busy={loadState === "loading" || busy}>
-      <button className="btn-back" onClick={() => confirmEditorUnload(undefined, true) && navigate(`/project/${id}`)}>← 返回项目</button>
+    <div className="planning-page planning-page--studio" aria-busy={loadState === "loading" || busy}>
+      <button className="btn-back planning-page__back" onClick={() => confirmEditorUnload(undefined, true) && navigate(`/project/${id}`)}>← 返回项目</button>
       <header className="page-header planning-header">
-        <div><h1>章节规划</h1><p>在生成正文前组织篇章、章节和使用范围。</p></div>
+        <div className="planning-header__copy"><span className="planning-header__eyebrow">Story architecture</span><h1>章节规划</h1><p>先组织故事结构与设定范围，再进入生成、候选与采用流程。</p></div>
         <span className="planning-header-actions"><Link className="btn btn-secondary" to={`/project/${id}/plan/foreshadows`} onClick={(event) => { if (!confirmEditorUnload(undefined, true)) event.preventDefault(); }}>管理伏笔</Link><Link className="btn btn-secondary" to={`/project/${id}/lore`} onClick={(event) => { if (!confirmEditorUnload(undefined, true)) event.preventDefault(); }}>打开设定仓库</Link></span>
       </header>
       {demoDescriptor?.state === "ready" && demoDescriptor.project_id === id && <div id="demo-planning"><DemoGuide projectId={id} current={location.hash === "#demo-technical-generation" ? 5 : 3} chapterId={demoDescriptor.chapter_id} elementId={demoDescriptor.element_id} foreshadowLifecycleId={demoDescriptor.foreshadow_lifecycle_id} /></div>}
 
-      <ForeshadowPlanningSummary projectId={id} />
-
-      <div className="planning-live" aria-live="polite">{notice}</div>
+      <div className="planning-status-stack">
+        <div className="planning-live" aria-live="polite">{notice}</div>
       {error && <div className="planning-notice is-error" role="alert" tabIndex={-1} ref={conflictRef}><span>{error}{errorHint && <small className="planning-notice__hint">{errorHint}</small>}</span>{conflict ? <span className="planning-notice__actions"><button className="btn btn-secondary" onClick={() => { setServerSyncToken((value) => value + 1); setConflict(false); setError(""); setNotice("已载入服务器最新字段。"); }}>载入服务器最新值</button><button className="btn btn-secondary" onClick={() => { setConflict(false); setError(""); setNotice("旧草稿已保留；请与服务器最新值核对后再保存。"); }}>保留草稿并继续核对</button></span> : pendingStorageIssue === "corrupt" ? <button className="btn btn-secondary" onClick={clearCorruptRecoveryRecord}>确认清除损坏恢复记录</button> : (refreshRequired || assignmentRefreshRequired) ? <button className="btn btn-secondary" onClick={() => void reloadPlanningAndCurrentAssignments()}>重新读取规划与设定</button> : <button className="btn btn-secondary" onClick={() => loadPlan(false)}>刷新规划</button>}</div>}
       {globalGenerationFeedbackVisible && (
         <div className="planning-notice is-error" role="alert" tabIndex={-1} ref={globalGenerationFeedbackRef}>
@@ -2329,21 +2328,22 @@ export default function ChapterPlanningPage() {
           </span>
         </div>
       )}
+      </div>
 
-      {loadState === "loading" && <div className="card empty-state">正在加载章节规划…</div>}
-      {loadState === "error" && <div className="card empty-state"><h2>规划暂时无法加载</h2><button className="btn btn-primary" onClick={() => loadPlan()}>重新加载</button></div>}
+      {loadState === "loading" && <div className="card empty-state planning-state-card">正在加载章节规划…</div>}
+      {loadState === "error" && <div className="card empty-state planning-state-card"><h2>规划暂时无法加载</h2><button className="btn btn-primary" onClick={() => loadPlan()}>重新加载</button></div>}
       {loadState === "uninitialized" && (
-        <section className="card empty-state"><h2>创建空白章节规划</h2><p>系统不会生成大纲，也不会覆盖现有正文。你可以自行建立篇章和章节。</p><button className="btn btn-primary" disabled={busy} onClick={initialize}>{busy ? "正在创建…" : "创建章节规划"}</button></section>
+        <section className="card empty-state planning-state-card"><h2>创建空白章节规划</h2><p>系统不会生成大纲，也不会覆盖现有正文。你可以自行建立篇章和章节。</p><button className="btn btn-primary" disabled={busy} onClick={initialize}>{busy ? "正在创建…" : "创建章节规划"}</button></section>
       )}
       {loadState === "migration" && (
-        <section className="card empty-state"><h2>请先升级设定仓库</h2><p>章节规划只会引用已确认的模块化设定。</p><Link className="btn btn-primary" to={`/project/${id}/lore?migration=preview`}>打开设定仓库</Link></section>
+        <section className="card empty-state planning-state-card"><h2>请先升级设定仓库</h2><p>章节规划只会引用已确认的模块化设定。</p><Link className="btn btn-primary" to={`/project/${id}/lore?migration=preview`}>打开设定仓库</Link></section>
       )}
       {loadState === "legacy" && (
-        <section className="card empty-state"><h2>检测到历史章节资料</h2><p>系统不会自动迁移或覆盖旧大纲、章节正文和故事记忆。</p><Link className="btn btn-primary" to={`/project/${id}`}>返回项目继续兼容流程</Link></section>
+        <section className="card empty-state planning-state-card"><h2>检测到历史章节资料</h2><p>系统不会自动迁移或覆盖旧大纲、章节正文和故事记忆。</p><Link className="btn btn-primary" to={`/project/${id}`}>返回项目继续兼容流程</Link></section>
       )}
 
       {loadState === "ready" && plan && (
-        <div className={`planning-workspace${mobileDetail ? " show-detail" : ""}`}>
+        <div className={`planning-workspace planning-workspace--studio${mobileDetail ? " show-detail" : ""}`}>
           <aside className="card planning-workspace__tree">
             <div className="planning-section-heading"><h2>篇章结构</h2><CreatePartForm plan={plan} busy={planningWriteDisabled} onDirtyChange={setHasUnsavedPartCreationDraft} onCreate={(body) => execute("part_create", null, body, (value) => api.createPlanningPart(id, value), "篇章已创建。")} /></div>
             <PlanningStructurePanel plan={plan} selected={selection} busy={planningWriteDisabled} onSelect={selectScope} onMovePart={movePart} onMoveChapter={moveChapter} />
@@ -2475,6 +2475,10 @@ export default function ChapterPlanningPage() {
           </main>
         </div>
       )}
+
+      <div className="planning-page__support">
+        <ForeshadowPlanningSummary projectId={id} />
+      </div>
     </div>
   );
 }
