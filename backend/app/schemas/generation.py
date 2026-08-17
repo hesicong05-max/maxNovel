@@ -347,6 +347,148 @@ class GenerationCandidateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class GenerationCandidateManualEditCommand(BaseModel):
+    operation_key: str = Field(
+        min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"
+    )
+    parent_candidate_id: str = Field(min_length=32, max_length=32)
+    expected_parent_version_no: int = Field(ge=1)
+    expected_parent_checksum: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    expected_context_checksum: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    content: str = Field(min_length=1, max_length=262_144)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class GenerationCandidateVersionProvenance(BaseModel):
+    origin_kind: Literal["generated", "technical_demo", "manual_edit"]
+    parent_candidate_id: str | None = Field(default=None, min_length=32, max_length=32)
+    parent_version_no: int | None = Field(default=None, ge=1)
+    root_candidate_id: str = Field(min_length=32, max_length=32)
+    root_origin_kind: Literal["generated", "technical_demo"]
+    ai_invoked_for_this_version: bool
+    billing_effect_for_this_version: Literal["none", "possible"]
+    usage_status_for_this_version: Literal["reported", "unavailable", "not_applicable"]
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_origin_shape(self):
+        if self.origin_kind == "manual_edit":
+            if (
+                self.parent_candidate_id is None
+                or self.parent_version_no is None
+                or self.ai_invoked_for_this_version
+                or self.billing_effect_for_this_version != "none"
+                or self.usage_status_for_this_version != "not_applicable"
+            ):
+                raise ValueError("手工候选来源形态无效")
+        elif (
+            self.parent_candidate_id is not None
+            or self.parent_version_no is not None
+            or self.root_candidate_id == ""
+        ):
+            raise ValueError("根候选不能引用父版本")
+        elif self.origin_kind == "generated":
+            if (
+                self.root_origin_kind != "generated"
+                or not self.ai_invoked_for_this_version
+                or self.billing_effect_for_this_version != "possible"
+                or self.usage_status_for_this_version not in {"reported", "unavailable"}
+            ):
+                raise ValueError("模型候选来源形态无效")
+        elif (
+            self.root_origin_kind != "technical_demo"
+            or self.ai_invoked_for_this_version
+            or self.billing_effect_for_this_version != "none"
+            or self.usage_status_for_this_version != "not_applicable"
+        ):
+            raise ValueError("技术模拟候选来源形态无效")
+        return self
+
+
+class GenerationCandidateVersionListItem(GenerationCandidateVersionProvenance):
+    id: str = Field(min_length=32, max_length=32)
+    version_no: int = Field(ge=1)
+    title: str
+    content_checksum: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    content_size_bytes: int = Field(ge=1, le=262_144)
+    word_count: int = Field(ge=1)
+    created_by: str = Field(min_length=32, max_length=32)
+    created_at: datetime
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_lineage_identity(self):
+        if self.origin_kind == "manual_edit":
+            if (
+                self.parent_candidate_id == self.id
+                or self.root_candidate_id == self.id
+                or self.parent_version_no is None
+                or self.parent_version_no >= self.version_no
+            ):
+                raise ValueError("手工候选版本链身份无效")
+        elif self.root_candidate_id != self.id:
+            raise ValueError("根候选身份与版本不一致")
+        return self
+
+
+class GenerationCandidateVersionDetail(GenerationCandidateVersionListItem):
+    project_id: str = Field(min_length=32, max_length=32)
+    run_id: str = Field(min_length=32, max_length=32)
+    planning_chapter_id: str = Field(min_length=32, max_length=32)
+    content: str
+    content_format: Literal["plain_text"]
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class GenerationCandidateVersionListResponse(BaseModel):
+    schema_version: Literal[1] = 1
+    project_id: str = Field(min_length=32, max_length=32)
+    run_id: str = Field(min_length=32, max_length=32)
+    planning_chapter_id: str = Field(min_length=32, max_length=32)
+    items: list[GenerationCandidateVersionListItem] = Field(max_length=50)
+    next_cursor: str | None = None
+    has_more: bool
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_page(self):
+        versions = [item.version_no for item in self.items]
+        if versions != sorted(versions, reverse=True) or len(versions) != len(
+            set(versions)
+        ):
+            raise ValueError("候选版本列表顺序无效")
+        if self.has_more != (self.next_cursor is not None):
+            raise ValueError("候选版本游标形态无效")
+        if self.next_cursor is not None:
+            if not self.next_cursor.isdigit() or int(self.next_cursor) < 1:
+                raise ValueError("候选版本游标无效")
+            if not versions or int(self.next_cursor) != versions[-1]:
+                raise ValueError("候选版本游标与页面不一致")
+        return self
+
+
+class GenerationCandidateManualEditResponse(BaseModel):
+    schema_version: Literal[1] = 1
+    replayed: bool
+    ai_invoked: Literal[False] = False
+    billing_effect: Literal["none"] = "none"
+    usage_status: Literal["not_applicable"] = "not_applicable"
+    candidate: GenerationCandidateVersionDetail
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class GenerationCandidateAuditIntegrity(BaseModel):
     status: Literal["pass", "review"]
     content_size_bytes: int = Field(ge=1, le=262_144)

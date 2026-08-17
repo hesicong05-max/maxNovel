@@ -734,21 +734,9 @@ async def generation_candidate_response(
         if attempt_response["candidate_id"] != candidate.id:
             raise _corrupt()
     elif candidate.origin_kind == "manual_edit":
-        if (
-            candidate.source_attempt_id is not None
-            or candidate.source_technical_demo_execution_id is not None
-            or candidate.parent_candidate_id is None
-        ):
-            raise _corrupt()
-        parent = await db.scalar(
-            select(ChapterGenerationCandidate).where(
-                ChapterGenerationCandidate.project_id == candidate.project_id,
-                ChapterGenerationCandidate.id == candidate.parent_candidate_id,
-                ChapterGenerationCandidate.run_id == candidate.run_id,
-            )
-        )
-        if parent is None:
-            raise _corrupt()
+        from app.core.generation_candidates import validate_candidate_lineage
+
+        await validate_candidate_lineage(db, candidate, user_id=user_id)
     else:
         raise _corrupt()
     snapshot = {
@@ -769,7 +757,7 @@ async def generation_candidate_response(
         "created_by": candidate.created_by,
         "created_at": candidate.created_at,
     }
-    if candidate.origin_kind == "generated" and candidate.title != manifest["chapter"]["title"]:
+    if candidate.title != manifest["chapter"]["title"]:
         raise _corrupt()
     try:
         return GenerationCandidateResponse.model_validate(snapshot).model_dump(

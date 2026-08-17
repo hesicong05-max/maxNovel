@@ -139,6 +139,14 @@ jobs:
           tests/test_demo_generation.py
           -vv --tb=short
 
+      - name: Run candidate version tests on PostgreSQL
+        timeout-minutes: 3
+        run: >-
+          timeout --signal=TERM --kill-after=10s 120s
+          python -u -m pytest
+          tests/test_generation_candidate_versions.py
+          -vv --tb=short
+
   docker-build:
     needs: [backend-test, frontend-test, postgres-lore]
     runs-on: ubuntu-latest
