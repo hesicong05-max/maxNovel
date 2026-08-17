@@ -30,7 +30,7 @@ function NodeButton({
   return (
     <button
       type="button"
-      className={`planning-node${selected ? " is-selected" : ""}`}
+      className={`planning-node${selected ? " is-selected" : ""}${status === "archived" ? " is-archived" : ""}`}
       aria-current={selected ? "true" : undefined}
       data-node-id={nodeId}
       aria-label={status === "archived" ? `${label}，已归档` : label}
@@ -82,6 +82,10 @@ export default function PlanningStructurePanel({
 }: Props) {
   const activeParts = plan.parts.filter((part) => part.status === "active");
   const archivedParts = plan.parts.filter((part) => part.status === "archived");
+  const activeChapterCount = activeParts.reduce(
+    (total, part) => total + part.chapters.filter((chapter) => chapter.status === "active").length,
+    0
+  );
 
   const renderPart = (part: PlanningPart, index: number, active: boolean) => {
     const activeChapters = part.chapters.filter((chapter) => chapter.status === "active");
@@ -137,6 +141,10 @@ export default function PlanningStructurePanel({
 
   return (
     <nav className="planning-tree" aria-label="篇章与章节结构">
+      <p className="planning-tree__summary">
+        <span>{activeParts.length} 个活动篇章</span>
+        <span>{activeChapterCount} 个活动章节</span>
+      </p>
       <NodeButton
         selected={selected.kind === "novel"}
         label="整部小说"

@@ -71,6 +71,21 @@ function renderPage(overrides: Record<string, unknown> = {}) {
 describe("ChapterPlanningPage", () => {
   beforeEach(() => { vi.restoreAllMocks(); sessionStorage.clear(); });
 
+  it("keeps status semantics and supporting context around the visual workspace", async () => {
+    renderPage();
+
+    await screen.findByRole("navigation", { name: "篇章与章节结构" });
+    const workspace = document.querySelector(".planning-workspace--studio");
+    const support = document.querySelector(".planning-page__support");
+    const statusStack = document.querySelector(".planning-status-stack");
+
+    expect(workspace).toBeInTheDocument();
+    expect(statusStack).toContainElement(document.querySelector(".planning-live"));
+    expect(workspace?.compareDocumentPosition(support as Node) ?? 0).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+  });
+
   it("shows explicit initialization and never creates planning automatically", async () => {
     const getPlanning = vi.fn().mockRejectedValue(new ApiError(404, { detail: "章节规划尚未创建。", code: "PLANNING_NOT_INITIALIZED" }));
     const initializePlanning = vi.fn().mockResolvedValue({ ...plan, parts: [] });

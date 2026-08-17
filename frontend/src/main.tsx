@@ -6,6 +6,7 @@ import { initSentry } from "./sentry";
 import "@/styles/tokens.css";
 import "@/styles/global.css";
 import "@/styles/workspace-shell.css";
+import "@/styles/chapter-planning.css";
 
 // Initialize Sentry error monitoring (no-op if DSN not set)
 initSentry();
