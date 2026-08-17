@@ -478,6 +478,115 @@ class GenerationCandidateVersionListResponse(BaseModel):
         return self
 
 
+class GenerationCandidateSelectionCurrentResponse(BaseModel):
+    schema_version: Literal[1] = 1
+    project_id: str = Field(min_length=32, max_length=32)
+    planning_chapter_id: str = Field(min_length=32, max_length=32)
+    state: Literal["none", "selected"]
+    selection_version: int = Field(ge=0)
+    run_id: str | None = Field(default=None, min_length=32, max_length=32)
+    context_checksum: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    candidate: GenerationCandidateVersionListItem | None = None
+    selected_at: datetime | None = None
+    changed_by: str | None = Field(default=None, min_length=32, max_length=32)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_state_shape(self):
+        selected_fields = (
+            self.run_id,
+            self.context_checksum,
+            self.candidate,
+            self.selected_at,
+            self.changed_by,
+        )
+        if self.state == "none":
+            if self.selection_version != 0 or any(
+                value is not None for value in selected_fields
+            ):
+                raise ValueError("未采用状态形态无效")
+        elif self.selection_version < 1 or any(
+            value is None for value in selected_fields
+        ):
+            raise ValueError("已采用状态形态无效")
+        return self
+
+
+class GenerationCandidateSelectionCommand(BaseModel):
+    operation_key: str = Field(
+        min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"
+    )
+    expected_selection_version: int = Field(ge=0)
+    target_run_id: str = Field(min_length=32, max_length=32)
+    target_candidate_id: str = Field(min_length=32, max_length=32)
+    expected_candidate_version_no: int = Field(ge=1)
+    expected_candidate_checksum: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    expected_context_checksum: str = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class GenerationCandidateSelectionSnapshot(BaseModel):
+    state: Literal["none", "selected"]
+    selection_version: int = Field(ge=0)
+    run_id: str | None = Field(default=None, min_length=32, max_length=32)
+    context_checksum: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    candidate: GenerationCandidateVersionListItem | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_state_shape(self):
+        selected_fields = (self.run_id, self.context_checksum, self.candidate)
+        if self.state == "none":
+            if self.selection_version != 0 or any(
+                value is not None for value in selected_fields
+            ):
+                raise ValueError("未采用快照形态无效")
+        elif self.selection_version < 1 or any(
+            value is None for value in selected_fields
+        ):
+            raise ValueError("已采用快照形态无效")
+        return self
+
+
+class GenerationCandidateSelectionOperationResponse(BaseModel):
+    schema_version: Literal[1] = 1
+    project_id: str = Field(min_length=32, max_length=32)
+    planning_chapter_id: str = Field(min_length=32, max_length=32)
+    operation_key: str = Field(
+        min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"
+    )
+    replayed: bool
+    changed: Literal[True] = True
+    ai_invoked: Literal[False] = False
+    billing_effect: Literal["none"] = "none"
+    usage_status: Literal["not_applicable"] = "not_applicable"
+    previous: GenerationCandidateSelectionSnapshot
+    result: GenerationCandidateSelectionSnapshot
+    selected_at: datetime
+    changed_by: str = Field(min_length=32, max_length=32)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_transition(self):
+        if self.result.state != "selected" or (
+            self.result.selection_version != self.previous.selection_version + 1
+        ):
+            raise ValueError("采用版本操作迁移无效")
+        return self
+
+
 class GenerationCandidateManualEditResponse(BaseModel):
     schema_version: Literal[1] = 1
     replayed: bool

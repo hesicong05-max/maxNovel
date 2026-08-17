@@ -24,6 +24,12 @@ from app.core.generation_candidates import (
     list_candidate_versions,
     manual_edit_response,
 )
+from app.core.generation_candidate_selection import (
+    candidate_selection_operation_response,
+    candidate_selection_current_response,
+    find_candidate_selection_operation_by_key,
+    select_generation_candidate,
+)
 from app.core.generation_audit import generation_candidate_audit_response
 from app.core.generation_preflight import (
     GenerationPreparationError,
@@ -40,6 +46,9 @@ from app.schemas.generation import (
     GenerationCandidateAuditResponse,
     GenerationCandidateManualEditCommand,
     GenerationCandidateManualEditResponse,
+    GenerationCandidateSelectionCurrentResponse,
+    GenerationCandidateSelectionCommand,
+    GenerationCandidateSelectionOperationResponse,
     GenerationCandidateVersionDetail,
     GenerationCandidateVersionListResponse,
     GenerationCapabilityResponse,
@@ -231,6 +240,98 @@ async def get_generation_candidate(
     try:
         return await generation_candidate_response(
             db, candidate, user_id=current_user.id
+        )
+    except GenerationExecutionError as exc:
+        _raise_execution(exc)
+
+
+@router.get(
+    "/chapters/{chapter_id}/candidate-selection",
+    response_model=GenerationCandidateSelectionCurrentResponse,
+)
+async def get_chapter_candidate_selection(
+    project_id: str,
+    chapter_id: Annotated[str, Path(min_length=32, max_length=32)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    await get_project_for_owner(project_id, current_user, db)
+    try:
+        return await candidate_selection_current_response(
+            db,
+            project_id=project_id,
+            planning_chapter_id=chapter_id,
+            user_id=current_user.id,
+        )
+    except GenerationExecutionError as exc:
+        _raise_execution(exc)
+
+
+@router.post(
+    "/chapters/{chapter_id}/candidate-selection-operations",
+    response_model=GenerationCandidateSelectionOperationResponse,
+)
+async def select_chapter_generation_candidate(
+    project_id: str,
+    chapter_id: Annotated[str, Path(min_length=32, max_length=32)],
+    body: GenerationCandidateSelectionCommand,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    await get_project_for_owner(project_id, current_user, db)
+    try:
+        return await select_generation_candidate(
+            db=db,
+            project_id=project_id,
+            planning_chapter_id=chapter_id,
+            user_id=current_user.id,
+            operation_key=body.operation_key,
+            expected_selection_version=body.expected_selection_version,
+            target_run_id=body.target_run_id,
+            target_candidate_id=body.target_candidate_id,
+            expected_candidate_version_no=body.expected_candidate_version_no,
+            expected_candidate_checksum=body.expected_candidate_checksum,
+            expected_context_checksum=body.expected_context_checksum,
+        )
+    except GenerationExecutionError as exc:
+        _raise_execution(exc)
+
+
+@router.get(
+    "/chapters/{chapter_id}/candidate-selection-operations/by-key/{operation_key}",
+    response_model=GenerationCandidateSelectionOperationResponse,
+)
+async def get_candidate_selection_operation_by_key(
+    project_id: str,
+    chapter_id: Annotated[str, Path(min_length=32, max_length=32)],
+    operation_key: Annotated[
+        str,
+        Path(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"),
+    ],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    await get_project_for_owner(project_id, current_user, db)
+    operation = await find_candidate_selection_operation_by_key(
+        db,
+        project_id=project_id,
+        planning_chapter_id=chapter_id,
+        user_id=current_user.id,
+        operation_key=operation_key,
+    )
+    if operation is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "GENERATION_CANDIDATE_SELECTION_OPERATION_NOT_FOUND",
+                "message": "尚未找到该章节采用操作。",
+                "retryable": True,
+                "recommended_action": "retry_original_candidate_selection",
+            },
+        )
+    try:
+        return await candidate_selection_operation_response(
+            db, operation, user_id=current_user.id, replayed=True
         )
     except GenerationExecutionError as exc:
         _raise_execution(exc)

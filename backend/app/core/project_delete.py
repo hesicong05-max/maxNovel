@@ -16,6 +16,10 @@ from app.models.foreshadow import (
     ForeshadowLifecycleEvent,
     ForeshadowPlanItem,
 )
+from app.models.generation import (
+    ChapterGenerationCandidateSelection,
+    ChapterGenerationCandidateSelectionOperation,
+)
 from app.models.lore import LoreElementCreateOperation
 from app.models.planning import PlanningLoreAssignment
 
@@ -32,6 +36,8 @@ async def delete_project_relational_dependents(
     """
 
     child_first_models = (
+        ChapterGenerationCandidateSelection,
+        ChapterGenerationCandidateSelectionOperation,
         ForeshadowLifecycleEvent,
         ForeshadowFact,
         ForeshadowPlanItem,

@@ -505,3 +505,200 @@ class ChapterGenerationCandidate(Base):
         index=True,
     )
     created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+
+class ChapterGenerationCandidateSelectionOperation(Base):
+    """Immutable receipt for one explicit chapter candidate selection."""
+
+    __tablename__ = "chapter_generation_candidate_selection_operations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "planning_chapter_id"],
+            ["planning_chapters.project_id", "planning_chapters.id"],
+            name="fk_candidate_selection_operation_chapter",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "previous_candidate_id", "previous_run_id"],
+            [
+                "chapter_generation_candidates.project_id",
+                "chapter_generation_candidates.id",
+                "chapter_generation_candidates.run_id",
+            ],
+            name="fk_candidate_selection_operation_previous_candidate",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "result_candidate_id", "result_run_id"],
+            [
+                "chapter_generation_candidates.project_id",
+                "chapter_generation_candidates.id",
+                "chapter_generation_candidates.run_id",
+            ],
+            name="fk_candidate_selection_operation_result_candidate",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "requested_by",
+            "operation_key",
+            name="uq_candidate_selection_operation_key",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "id",
+            name="uq_candidate_selection_operation_project_id_id",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "planning_chapter_id",
+            "result_selection_version",
+            name="uq_candidate_selection_operation_chapter_version",
+        ),
+        CheckConstraint(
+            "length(request_fingerprint) = 64",
+            name="ck_candidate_selection_operation_fingerprint",
+        ),
+        CheckConstraint(
+            "previous_selection_version >= 0 "
+            "AND result_selection_version = previous_selection_version + 1",
+            name="ck_candidate_selection_operation_versions",
+        ),
+        CheckConstraint(
+            "(previous_selection_version = 0 "
+            "AND previous_run_id IS NULL "
+            "AND previous_candidate_id IS NULL "
+            "AND previous_candidate_version_no IS NULL "
+            "AND previous_candidate_checksum IS NULL "
+            "AND previous_context_checksum IS NULL) OR "
+            "(previous_selection_version >= 1 "
+            "AND previous_run_id IS NOT NULL "
+            "AND previous_candidate_id IS NOT NULL "
+            "AND previous_candidate_version_no >= 1 "
+            "AND length(previous_candidate_checksum) = 64 "
+            "AND length(previous_context_checksum) = 64)",
+            name="ck_candidate_selection_operation_previous_shape",
+        ),
+        CheckConstraint(
+            "result_candidate_version_no >= 1 "
+            "AND length(result_candidate_checksum) = 64 "
+            "AND length(result_context_checksum) = 64",
+            name="ck_candidate_selection_operation_result_shape",
+        ),
+        Index(
+            "ix_candidate_selection_operations_chapter_created",
+            "project_id",
+            "planning_chapter_id",
+            "created_at",
+            "id",
+        ),
+    )
+
+    id = Column(String(32), primary_key=True)
+    project_id = Column(
+        String(32),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    planning_chapter_id = Column(String(32), nullable=False, index=True)
+    requested_by = Column(
+        String(32),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    operation_key = Column(String(128), nullable=False)
+    request_fingerprint = Column(String(64), nullable=False)
+    previous_selection_version = Column(Integer, nullable=False)
+    previous_run_id = Column(String(32), nullable=True)
+    previous_candidate_id = Column(String(32), nullable=True)
+    previous_candidate_version_no = Column(Integer, nullable=True)
+    previous_candidate_checksum = Column(String(64), nullable=True)
+    previous_context_checksum = Column(String(64), nullable=True)
+    result_selection_version = Column(Integer, nullable=False)
+    result_run_id = Column(String(32), nullable=False)
+    result_candidate_id = Column(String(32), nullable=False)
+    result_candidate_version_no = Column(Integer, nullable=False)
+    result_candidate_checksum = Column(String(64), nullable=False)
+    result_context_checksum = Column(String(64), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+
+class ChapterGenerationCandidateSelection(Base):
+    """The single author-selected immutable candidate for a planning chapter."""
+
+    __tablename__ = "chapter_generation_candidate_selections"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "planning_chapter_id"],
+            ["planning_chapters.project_id", "planning_chapters.id"],
+            name="fk_candidate_selection_chapter",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "candidate_id", "run_id"],
+            [
+                "chapter_generation_candidates.project_id",
+                "chapter_generation_candidates.id",
+                "chapter_generation_candidates.run_id",
+            ],
+            name="fk_candidate_selection_candidate",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "last_operation_id"],
+            [
+                "chapter_generation_candidate_selection_operations.project_id",
+                "chapter_generation_candidate_selection_operations.id",
+            ],
+            name="fk_candidate_selection_last_operation",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "planning_chapter_id",
+            name="uq_candidate_selection_project_chapter",
+        ),
+        UniqueConstraint(
+            "project_id", "id", name="uq_candidate_selection_project_id_id"
+        ),
+        CheckConstraint(
+            "selection_version >= 1 AND candidate_version_no >= 1",
+            name="ck_candidate_selection_versions",
+        ),
+        CheckConstraint(
+            "length(candidate_checksum) = 64 " "AND length(context_checksum) = 64",
+            name="ck_candidate_selection_checksums",
+        ),
+        Index(
+            "ix_candidate_selections_candidate",
+            "project_id",
+            "candidate_id",
+        ),
+    )
+
+    id = Column(String(32), primary_key=True)
+    project_id = Column(
+        String(32),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    planning_chapter_id = Column(String(32), nullable=False, index=True)
+    run_id = Column(String(32), nullable=False, index=True)
+    candidate_id = Column(String(32), nullable=False, index=True)
+    candidate_version_no = Column(Integer, nullable=False)
+    candidate_checksum = Column(String(64), nullable=False)
+    context_checksum = Column(String(64), nullable=False)
+    selection_version = Column(Integer, nullable=False)
+    changed_by = Column(
+        String(32),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    last_operation_id = Column(String(32), nullable=False)
+    selected_at = Column(DateTime, nullable=False, default=_utcnow)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
