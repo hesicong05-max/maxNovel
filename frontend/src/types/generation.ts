@@ -361,3 +361,71 @@ export interface GenerationCandidateManualEditResponse {
   usage_status: "not_applicable";
   candidate: GenerationCandidateVersionDetail;
 }
+
+export interface GenerationCandidateSelectionInput {
+  operation_key: string;
+  expected_selection_version: number;
+  target_run_id: string;
+  target_candidate_id: string;
+  expected_candidate_version_no: number;
+  expected_candidate_checksum: string;
+  expected_context_checksum: string;
+}
+
+export type GenerationCandidateSelectionSnapshot =
+  | {
+      state: "none";
+      selection_version: 0;
+      run_id: null;
+      context_checksum: null;
+      candidate: null;
+    }
+  | {
+      state: "selected";
+      selection_version: number;
+      run_id: string;
+      context_checksum: string;
+      candidate: GenerationCandidateVersionListItem;
+    };
+
+export type GenerationCandidateSelectionCurrentResponse =
+  | {
+      schema_version: 1;
+      project_id: string;
+      planning_chapter_id: string;
+      state: "none";
+      selection_version: 0;
+      run_id: null;
+      context_checksum: null;
+      candidate: null;
+      selected_at: null;
+      changed_by: null;
+    }
+  | {
+      schema_version: 1;
+      project_id: string;
+      planning_chapter_id: string;
+      state: "selected";
+      selection_version: number;
+      run_id: string;
+      context_checksum: string;
+      candidate: GenerationCandidateVersionListItem;
+      selected_at: string;
+      changed_by: string;
+    };
+
+export interface GenerationCandidateSelectionOperationResponse {
+  schema_version: 1;
+  project_id: string;
+  planning_chapter_id: string;
+  operation_key: string;
+  replayed: boolean;
+  changed: true;
+  ai_invoked: false;
+  billing_effect: "none";
+  usage_status: "not_applicable";
+  previous: GenerationCandidateSelectionSnapshot;
+  result: Extract<GenerationCandidateSelectionSnapshot, { state: "selected" }>;
+  selected_at: string;
+  changed_by: string;
+}

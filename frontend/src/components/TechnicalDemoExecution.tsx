@@ -15,7 +15,7 @@ import {
   type PendingTechnicalDemoExecution,
   type TechnicalIdentity,
 } from "@/services/technicalDemoExecution";
-import type { GenerationRunResponse } from "@/types/generation";
+import type { GenerationCandidateSelectionCurrentResponse, GenerationRunResponse } from "@/types/generation";
 import type { TechnicalDemoCandidateResponse, TechnicalDemoCapabilityResponse, TechnicalDemoExecutionResponse } from "@/types/demo";
 
 interface Props {
@@ -28,6 +28,14 @@ interface Props {
   onLockChange?: (locked: boolean) => void;
   onCandidateVersionLockChange?: (locked: boolean) => void;
   hideCandidateVersionWorkspace?: boolean;
+  candidateVersionRecoveryId?: string;
+  candidateSelectionCurrent?: GenerationCandidateSelectionCurrentResponse | null;
+  candidateSelectionLoading?: boolean;
+  candidateSelectionError?: string;
+  onRefreshCandidateSelection?: () => Promise<GenerationCandidateSelectionCurrentResponse>;
+  selectionWarning?: string;
+  selectionDisabledReason?: string;
+  selectionRecoveryRevision?: number;
 }
 
 type ConfirmKind = "new" | "original" | null;
@@ -49,7 +57,7 @@ function exactAdapterUnavailable(error: unknown): error is ApiError {
     && error.retryable && error.recommendedAction === "start_new_confirmed_technical_demo";
 }
 
-export default function TechnicalDemoExecution({ userId, projectId, chapterId, chapterTitle, run, disabledReason = "", onLockChange, onCandidateVersionLockChange, hideCandidateVersionWorkspace = false }: Props) {
+export default function TechnicalDemoExecution({ userId, projectId, chapterId, chapterTitle, run, disabledReason = "", onLockChange, onCandidateVersionLockChange, hideCandidateVersionWorkspace = false, candidateVersionRecoveryId, candidateSelectionCurrent, candidateSelectionLoading, candidateSelectionError, onRefreshCandidateSelection, selectionWarning = "", selectionDisabledReason = "", selectionRecoveryRevision = 0 }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [pending, setPending] = useState<PendingTechnicalDemoExecution | null>(null);
   const [capability, setCapability] = useState<TechnicalDemoCapabilityResponse | null>(null);
@@ -69,7 +77,8 @@ export default function TechnicalDemoExecution({ userId, projectId, chapterId, c
   const candidateHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const headingId = useId();
 
-  const baseIdentity: TechnicalIdentity = { projectId, chapterId, runId: run.id, contextChecksum: run.context_checksum, userId, chapterTitle };
+  const baseIdentity: TechnicalIdentity = { projectId, chapterId, runId: run.id, contextChecksum: run.context_checksum, userId, chapterTitle: run.context_manifest.chapter.title };
+  const candidateWorkspacePointer = candidateVersionRecoveryId ?? candidate?.id;
 
   const readCandidate = useCallback(async (receipt: TechnicalDemoExecutionResponse, operation: PendingTechnicalDemoExecution | null, request: number) => {
     setCandidateBusy(true); setError("");
@@ -87,14 +96,14 @@ export default function TechnicalDemoExecution({ userId, projectId, chapterId, c
       } else if (operation) {
         setError("候选已严格校验，但本地恢复线索未能安全清除。请不要开始新操作。");
       }
-      window.setTimeout(() => candidateHeadingRef.current?.focus(), 0);
+      if (!candidateVersionRecoveryId) window.setTimeout(() => candidateHeadingRef.current?.focus(), 0);
     } catch (cause) {
       if (request === requestGeneration.current) setError(`${errorMessage(cause)} 只允许重新读取候选，不会再次执行技术模拟。`);
     } finally {
       if (request === requestGeneration.current) setCandidateBusy(false);
     }
   // searchParams is intentionally captured to preserve unrelated URL state at the accepted response boundary.
-  }, [baseIdentity.projectId, baseIdentity.chapterId, baseIdentity.runId, baseIdentity.contextChecksum, baseIdentity.userId, baseIdentity.chapterTitle, userId, projectId, run.id, searchParams, setSearchParams, onLockChange]);
+  }, [baseIdentity.projectId, baseIdentity.chapterId, baseIdentity.runId, baseIdentity.contextChecksum, baseIdentity.userId, baseIdentity.chapterTitle, userId, projectId, run.id, searchParams, setSearchParams, onLockChange, candidateVersionRecoveryId]);
 
   const acceptExecution = useCallback((value: TechnicalDemoExecutionResponse, operation: PendingTechnicalDemoExecution | null, request: number) => {
     if (request !== requestGeneration.current || value.project_id !== projectId || value.planning_chapter_id !== chapterId || value.run_id !== run.id) return;
@@ -147,7 +156,8 @@ export default function TechnicalDemoExecution({ userId, projectId, chapterId, c
       setCandidateBusy(true);
       void readTechnicalDemoCandidate({ ...baseIdentity, executionId: pointerExecution, candidateId: pointerCandidate }).then((value) => {
         if (request !== requestGeneration.current) return;
-        setCandidate(value); window.setTimeout(() => candidateHeadingRef.current?.focus(), 0);
+        setCandidate(value);
+        if (!candidateVersionRecoveryId) window.setTimeout(() => candidateHeadingRef.current?.focus(), 0);
       }).catch((cause) => { if (request === requestGeneration.current) setError(`${errorMessage(cause)} 地址只用于只读恢复，不会触发技术模拟。`); }).finally(() => { if (request === requestGeneration.current) setCandidateBusy(false); });
     }
     return cleanup;
@@ -264,13 +274,13 @@ export default function TechnicalDemoExecution({ userId, projectId, chapterId, c
       {error && <div className="planning-generation__error" role="alert" tabIndex={-1}><strong>技术模拟需要处理</strong><span>{error}</span></div>}
       {storageRecovery === "corrupt" && <div className="planning-generation__actions"><button className="btn btn-secondary" onClick={clearCorruptRecovery}>确认清除损坏恢复记录</button></div>}
       {(busy || candidateBusy) && <p className="planning-generation__status" role="status">{candidateBusy ? "正在严格校验固定候选…" : "正在核对技术模拟状态…"}</p>}
-      {!candidate && !execution && !pending && <div className="planning-generation__actions"><button className="btn btn-primary" disabled={busy || !!disabledReason} onClick={(event) => void openNewConfirmation(event.currentTarget)}>查看边界并确认技术模拟</button>{disabledReason && <p role="status">{disabledReason}</p>}</div>}
+      {!candidate && !execution && !pending && !candidateWorkspacePointer && <div className="planning-generation__actions"><button className="btn btn-primary" disabled={busy || !!disabledReason} onClick={(event) => void openNewConfirmation(event.currentTarget)}>查看边界并确认技术模拟</button>{disabledReason && <p role="status">{disabledReason}</p>}</div>}
       {pending && !candidate && <div className="planning-generation__warning" role="status"><span>已保存一条本地恢复线索。只允许按原编号核对，不会自动重复执行。</span><button className="btn btn-secondary" disabled={busy} onClick={reconcile}>按原编号核对</button></div>}
       {originalRetryAllowed && <div className="planning-generation__warning" role="alert"><span>只有再次核对能力并弹出确认框后，才能使用原编号、原载荷重试。</span><button className="btn btn-secondary" disabled={busy} onClick={(event) => void openOriginalConfirmation(event.currentTarget)}>重新核对并确认原请求</button></div>}
       {newAttemptAllowed && <div className="planning-generation__actions"><button className="btn btn-secondary" disabled={busy} onClick={(event) => void openNewConfirmation(event.currentTarget)}>使用新编号重新确认</button></div>}
       {execution && !candidate && <div className="planning-generation__warning" role="alert"><span>服务端已完成技术模拟，但候选尚未通过本地严格校验。只允许重新读取候选。</span><button className="btn btn-secondary" disabled={candidateBusy} onClick={() => { const request = ++requestGeneration.current; void readCandidate(execution, pending, request); }}>重新读取固定候选</button></div>}
       {candidate && <article className="planning-generation__candidate technical-demo-candidate"><header><div><h6 ref={candidateHeadingRef} tabIndex={-1}>固定技术模拟执行已完成</h6><span>候选版本 {candidate.version_no} 已保存；正文与确定性审计统一在下方候选版本工作区查看。</span></div><strong>未覆盖原稿</strong></header><p>本次来源为服务端固定技术模拟，不调用 AI、不产生模型费用，也没有自动确认伏笔。</p></article>}
-      {candidate && !hideCandidateVersionWorkspace && <CandidateVersionWorkspace userId={userId} projectId={projectId} chapterId={chapterId} chapterTitle={chapterTitle} run={run} initialCandidateId={candidate.id} disabledReason={disabledReason} onLockChange={onCandidateVersionLockChange} />}
+      {candidateWorkspacePointer && !hideCandidateVersionWorkspace && <CandidateVersionWorkspace userId={userId} projectId={projectId} chapterId={chapterId} chapterTitle={chapterTitle} run={run} initialCandidateId={candidateWorkspacePointer} focusInitialCandidate={!!candidateVersionRecoveryId} disabledReason={disabledReason} selectionWarning={selectionWarning} selectionDisabledReason={selectionDisabledReason} selectionRecoveryRevision={selectionRecoveryRevision} onLockChange={onCandidateVersionLockChange} selectionCurrent={candidateSelectionCurrent} selectionLoading={candidateSelectionLoading} selectionError={candidateSelectionError} onRefreshSelection={onRefreshCandidateSelection} />}
       {confirmKind && capability && <div className="planning-generation-confirm-overlay" role="presentation"><div ref={dialogRef} className="planning-generation-confirm" role="alertdialog" aria-modal="true" aria-labelledby="technical-confirm-title" aria-describedby="technical-confirm-description"><h4 id="technical-confirm-title">确认运行固定技术模拟</h4><p id="technical-confirm-description">{confirmKind === "original" ? "确认后仅使用原编号和原载荷重试一次。" : "确认后会先保存本地恢复线索，再提交一次固定技术模拟。"} 本流程不调用 AI，不产生模型费用。</p><ul><li>内容由固定技术适配器返回。</li><li>候选独立保存，不覆盖原稿。</li><li>不会自动埋入、强化或回收伏笔。</li></ul><div className="planning-generation__actions"><button ref={cancelRef} className="btn btn-secondary" disabled={busy} onClick={() => setConfirmKind(null)}>取消，不执行</button><button className="btn btn-primary" disabled={busy} onClick={confirm}>{confirmKind === "original" ? "确认原请求重试" : "确认运行技术模拟"}</button></div></div></div>}
     </section>
   );

@@ -88,4 +88,14 @@ describe("foreshadow pending operations", () => {
     vi.restoreAllMocks();
     expect(createForeshadowOperationKey("foreshadow_bind")).toMatch(/^foreshadow_bind:/);
   });
+
+  it("recognizes candidate selection v6 as foreign", () => {
+    sessionStorage.setItem(
+      "novel_pending_planning_operation_v1:user-1:project-1",
+      JSON.stringify({ schema_version: 6, workspace: "candidate_selection" })
+    );
+    expect(loadPendingForeshadowOperation("user-1", "project-1")).toEqual({
+      status: "foreign", workspace: "candidate_selection",
+    });
+  });
 });

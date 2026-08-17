@@ -122,6 +122,8 @@ describe("PlanningGenerationPreflight", () => {
     expect(screen.queryByText(run.context_checksum)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText("查看 2 项设定"));
+    expect(document.body).not.toHaveTextContent("原始出处编号");
+    expect(document.body).not.toHaveTextContent(id("沈星-source"));
     fireEvent.click(screen.getAllByText("查看全部分配来源")[0]);
     expect(screen.getByText("继承自整部小说")).toBeInTheDocument();
     expect(screen.getByText("本章节直接分配")).toBeInTheDocument();

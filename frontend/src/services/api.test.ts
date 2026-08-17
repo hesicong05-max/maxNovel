@@ -1248,4 +1248,44 @@ describe("API - durable generation execution", () => {
       expect.objectContaining({ signal })
     );
   });
+
+  it("uses encoded candidate selection current/POST/by-key routes and exact body/signal", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }))
+    );
+    const signal = new AbortController().signal;
+    const body = {
+      operation_key: "candidate:select/key",
+      expected_selection_version: 2,
+      target_run_id: "r".repeat(32),
+      target_candidate_id: "c".repeat(32),
+      expected_candidate_version_no: 3,
+      expected_candidate_checksum: "a".repeat(64),
+      expected_context_checksum: "b".repeat(64),
+    };
+
+    await api.getGenerationCandidateSelection("project/one", "chapter/one", signal);
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      1,
+      "/api/projects/project%2Fone/planning/chapters/chapter%2Fone/candidate-selection",
+      expect.objectContaining({ signal })
+    );
+    await api.selectGenerationCandidate("project/one", "chapter/one", body, signal);
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      2,
+      "/api/projects/project%2Fone/planning/chapters/chapter%2Fone/candidate-selection-operations",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(body), signal })
+    );
+    await api.getGenerationCandidateSelectionByKey(
+      "project/one", "chapter/one", "candidate:select/key", signal
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      3,
+      "/api/projects/project%2Fone/planning/chapters/chapter%2Fone/candidate-selection-operations/by-key/candidate%3Aselect%2Fkey",
+      expect.objectContaining({ signal })
+    );
+  });
 });

@@ -87,7 +87,7 @@ export type PendingCandidateManualEditLoad =
   | { status: "available"; operation: PendingCandidateManualEdit }
   | {
       status: "foreign";
-      workspace: "planning" | "foreshadow" | "generation_execution" | "technical_demo_execution";
+      workspace: "planning" | "foreshadow" | "generation_execution" | "technical_demo_execution" | "candidate_selection";
     }
   | { status: "corrupt" }
   | { status: "unavailable" };
@@ -296,7 +296,7 @@ export function parseCandidateManualEditInput(
   return value as unknown as GenerationCandidateManualEditInput;
 }
 
-function parseVersionItem(
+export function parseCandidateVersionListItem(
   value: unknown,
   expected: CandidateVersionIdentity
 ): GenerationCandidateVersionListItem {
@@ -352,7 +352,7 @@ export function parseCandidateVersionList(
     || value.items.length > 50 || typeof value.has_more !== "boolean") {
     return fail("候选版本列表响应无效。");
   }
-  const items = value.items.map((item) => parseVersionItem(item, expected));
+  const items = value.items.map((item) => parseCandidateVersionListItem(item, expected));
   const versions = items.map((item) => item.version_no);
   if (versions.some((version, index) => index > 0 && versions[index - 1] <= version)
     || new Set(versions).size !== versions.length) {
@@ -381,7 +381,7 @@ export async function parseCandidateVersionDetail(
     || value.content_format !== "plain_text") {
     return fail("候选版本详情身份或正文无效。");
   }
-  const item = parseVersionItem(
+  const item = parseCandidateVersionListItem(
     Object.fromEntries(ITEM_KEYS.map((key) => [key, value[key]])),
     expected
   );
@@ -491,6 +491,9 @@ export function loadPendingCandidateManualEdit(
     }
     if (value.schema_version === 4 && value.workspace === "technical_demo_execution") {
       return { status: "foreign", workspace: "technical_demo_execution" };
+    }
+    if (value.schema_version === 6 && value.workspace === "candidate_selection") {
+      return { status: "foreign", workspace: "candidate_selection" };
     }
     return isPendingCandidateManualEdit(value, userId, projectId)
       ? { status: "available", operation: value }

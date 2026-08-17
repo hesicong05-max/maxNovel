@@ -4,6 +4,7 @@ import CandidateVersionWorkspace from "@/components/CandidateVersionWorkspace";
 import type {
   GenerationAttemptResponse,
   GenerationCandidateAuditResponse,
+  GenerationCandidateSelectionCurrentResponse,
   GenerationCandidateResponse,
   GenerationCapabilityResponse,
   GenerationRunResponse,
@@ -54,6 +55,12 @@ interface Props {
   onTechnicalDemoLockChange?: (locked: boolean) => void;
   candidateVersionRecoveryId?: string;
   onCandidateVersionLockChange?: (locked: boolean) => void;
+  candidateSelectionCurrent?: GenerationCandidateSelectionCurrentResponse | null;
+  candidateSelectionLoading?: boolean;
+  candidateSelectionError?: string;
+  onRefreshCandidateSelection?: () => Promise<GenerationCandidateSelectionCurrentResponse>;
+  selectionDisabledReason?: string;
+  candidateSelectionRecoveryRevision?: number;
   onPrepare: () => void;
   onCheckPending: () => void;
   onRetryOriginal: () => void;
@@ -137,6 +144,12 @@ export default function PlanningGenerationPreflight({
   onTechnicalDemoLockChange,
   candidateVersionRecoveryId,
   onCandidateVersionLockChange,
+  candidateSelectionCurrent,
+  candidateSelectionLoading,
+  candidateSelectionError,
+  onRefreshCandidateSelection,
+  selectionDisabledReason = "",
+  candidateSelectionRecoveryRevision = 0,
   onPrepare,
   onCheckPending,
   onRetryOriginal,
@@ -318,7 +331,7 @@ export default function PlanningGenerationPreflight({
                 <article key={item.element_id} className="planning-generation__item">
                   <header><div><h5>{item.version.name}</h5><span>{item.type.display_name} · 内容版本 {item.version.version_no}</span></div><strong>{item.assignment_sources.length} 个来源</strong></header>
                   <p>{item.version.summary || "未提供摘要"}</p>
-                  <details><summary>查看完整内容快照与字段状态</summary><h6>内容快照</h6><JsonSnapshot value={item.version.payload} /><h6>字段状态</h6><JsonSnapshot value={item.version.field_states} />{executionMode !== "technical" && item.version.source_id && <p>原始出处编号：{item.version.source_id}</p>}</details>
+                  <details><summary>查看完整内容快照与字段状态</summary><h6>内容快照</h6><JsonSnapshot value={item.version.payload} /><h6>字段状态</h6><JsonSnapshot value={item.version.field_states} /></details>
                   <details><summary>查看全部分配来源</summary><ul className="planning-generation__sources">{item.assignment_sources.map((source) => <li key={source.assignment_id}><strong>{scopeLabel(source.scope_type, source.scope_title)}</strong><span>分配时内容版本 {source.assigned_at_content_version} · 分配记录版本 {source.assignment_lock_version}</span></li>)}</ul></details>
                 </article>
               ))}
@@ -341,7 +354,14 @@ export default function PlanningGenerationPreflight({
               disabledReason={stale ? "当前检查记录已过期，请先重新检查上下文。" : ""}
               onLockChange={onTechnicalDemoLockChange}
               onCandidateVersionLockChange={onCandidateVersionLockChange}
-              hideCandidateVersionWorkspace={!!candidateVersionRecoveryId}
+              candidateVersionRecoveryId={candidateVersionRecoveryId}
+              candidateSelectionCurrent={candidateSelectionCurrent}
+              candidateSelectionLoading={candidateSelectionLoading}
+              candidateSelectionError={candidateSelectionError}
+              onRefreshCandidateSelection={onRefreshCandidateSelection}
+              selectionDisabledReason={selectionDisabledReason}
+              selectionRecoveryRevision={candidateSelectionRecoveryRevision}
+              selectionWarning={stale ? "这条检查记录基于旧冻结上下文；仍可明确采用候选，但采用不表示内容符合当前规划或设定。" : ""}
             />
           ) : executionMode === "hidden" ? (
             <div className="planning-generation__boundary" role="status">当前项目不提供候选执行入口；上下文检查记录仍可只读核对。</div>
@@ -389,7 +409,7 @@ export default function PlanningGenerationPreflight({
               </article>
             )}
           </section>}
-          {technicalDemoUserId && (candidateVersionRecoveryId || (executionMode === "real" && candidate)) && (
+          {technicalDemoUserId && executionMode !== "technical" && (candidateVersionRecoveryId || (executionMode === "real" && candidate)) && (
             <CandidateVersionWorkspace
               userId={technicalDemoUserId}
               projectId={plan.project_id}
@@ -397,6 +417,13 @@ export default function PlanningGenerationPreflight({
               chapterTitle={chapter.title}
               run={run}
               initialCandidateId={candidateVersionRecoveryId ?? candidate!.id}
+              selectionCurrent={candidateSelectionCurrent}
+              selectionLoading={candidateSelectionLoading}
+              selectionError={candidateSelectionError}
+              onRefreshSelection={onRefreshCandidateSelection}
+              selectionDisabledReason={selectionDisabledReason}
+              selectionRecoveryRevision={candidateSelectionRecoveryRevision}
+              selectionWarning={stale ? "这条检查记录基于旧冻结上下文；仍可明确采用候选，但采用不表示内容符合当前规划或设定。" : ""}
               disabledReason={stale ? "当前检查记录已过期，请先重新检查上下文。" : ""}
               onLockChange={onCandidateVersionLockChange}
             />

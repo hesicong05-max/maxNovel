@@ -11,7 +11,11 @@ import { ApiError, api } from "@/services/api";
 import { generationRunContractError } from "@/services/generationRuns";
 import { pendingProjectOperationKey } from "@/services/pendingProjectOperations";
 import { loadPendingTechnicalDemoExecution } from "@/services/technicalDemoExecution";
-import { loadPendingCandidateManualEdit } from "@/services/candidateVersionOperations";
+import { loadPendingCandidateManualEdit, readCandidateVersion } from "@/services/candidateVersionOperations";
+import {
+  loadPendingCandidateSelection,
+  readCandidateSelectionCurrent,
+} from "@/services/candidateSelectionOperations";
 import {
   clearPendingGenerationExecution,
   createGenerationExecutionKey,
@@ -37,6 +41,7 @@ import type { DemoFixtureCurrentResponse } from "@/types/demo";
 import type {
   GenerationAttemptResponse,
   GenerationCandidateResponse,
+  GenerationCandidateSelectionCurrentResponse,
   GenerationCapabilityResponse,
   GenerationRunPrepareInput,
   GenerationRunResponse,
@@ -164,7 +169,7 @@ export default function ChapterPlanningPage() {
   const [assignmentRefreshRequired, setAssignmentRefreshRequired] = useState(false);
   const [assignmentSearchRefreshToken, setAssignmentSearchRefreshToken] = useState(0);
   const [pendingStorageIssue, setPendingStorageIssue] = useState<"corrupt" | "unavailable" | null>(null);
-  const [foreignPending, setForeignPending] = useState<{ workspace: "foreshadow" | "generation_execution" | "technical_demo_execution" | "candidate_manual_edit"; chapterId: string | null } | null>(null);
+  const [foreignPending, setForeignPending] = useState<{ workspace: "foreshadow" | "generation_execution" | "technical_demo_execution" | "candidate_manual_edit" | "candidate_selection"; chapterId: string | null } | null>(null);
   const [serverSyncToken, setServerSyncToken] = useState(0);
   const [focusTarget, setFocusTarget] = useState<string | null>(null);
   const [assignmentFocusTarget, setAssignmentFocusTarget] = useState<{ elementId: string; scopeIdentity: string } | null>(null);
@@ -195,8 +200,14 @@ export default function ChapterPlanningPage() {
   const [demoDescriptor, setDemoDescriptor] = useState<DemoFixtureCurrentResponse | null>(null);
   const [demoDescriptorStatus, setDemoDescriptorStatus] = useState<"loading" | "known" | "unknown">("loading");
   const [technicalDemoLocked, setTechnicalDemoLocked] = useState(false);
-  const [candidateVersionLocked, setCandidateVersionLocked] = useState(true);
+  const [candidateWorkspaceLocked, setCandidateWorkspaceLocked] = useState(true);
+  const [candidateManualEditLocked, setCandidateManualEditLocked] = useState(false);
+  const [candidateSelectionLocked, setCandidateSelectionLocked] = useState(false);
+  const [candidateSelectionRecoveryRevision, setCandidateSelectionRecoveryRevision] = useState(0);
   const [candidateVersionRecoveryId, setCandidateVersionRecoveryId] = useState<string | null>(null);
+  const [candidateSelectionCurrent, setCandidateSelectionCurrent] = useState<GenerationCandidateSelectionCurrentResponse | null>(null);
+  const [candidateSelectionLoading, setCandidateSelectionLoading] = useState(false);
+  const [candidateSelectionError, setCandidateSelectionError] = useState("");
   const conflictRef = useRef<HTMLDivElement | null>(null);
   const assignmentConflictRef = useRef<HTMLDivElement | null>(null);
   const globalGenerationFeedbackRef = useRef<HTMLDivElement | null>(null);
@@ -214,6 +225,8 @@ export default function ChapterPlanningPage() {
   const generationPointerTransition = useRef<string | null>(null);
   const previousSelectionIdentity = useRef<string | null>(null);
   const technicalDemoHashFocusIdentity = useRef<string | null>(null);
+  const candidateSelectionRequest = useRef(0);
+  const candidateSelectionController = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -250,6 +263,78 @@ export default function ChapterPlanningPage() {
   generationCandidateRef.current = generationCandidate;
   generationIdentityRef.current = { projectId: id ?? "", userId: user?.id ?? "" };
 
+  const refreshCandidateSelection = useCallback(async () => {
+    const selected = selectionRef.current;
+    if (!id || !user || selected.kind !== "chapter") {
+      throw new Error("当前未定位可读取的章节采用状态。");
+    }
+    const request = ++candidateSelectionRequest.current;
+    candidateSelectionController.current?.abort();
+    const controller = new AbortController();
+    candidateSelectionController.current = controller;
+    const expected = { userId: user.id, projectId: id, chapterId: selected.id };
+    setCandidateSelectionLoading(true);
+    setCandidateSelectionError("");
+    try {
+      const value = await readCandidateSelectionCurrent(expected, controller.signal);
+      if (value.state === "selected") {
+        const rawRun = await api.getGenerationRun(id, value.run_id, controller.signal);
+        const contractError = generationRunContractError(rawRun, {
+          projectId: id,
+          chapterId: selected.id,
+          runId: value.run_id,
+        });
+        if (contractError) throw new Error(contractError);
+        if (rawRun.context_checksum !== value.context_checksum) {
+          throw new Error("章节采用状态与对应检查记录的冻结上下文不一致。");
+        }
+        const detail = await readCandidateVersion({
+          userId: user.id,
+          projectId: id,
+          chapterId: selected.id,
+          runId: value.run_id,
+          chapterTitle: rawRun.context_manifest.chapter.title,
+          candidateId: value.candidate.id,
+        }, controller.signal);
+        if (!Object.entries(value.candidate).every(([key, item]) =>
+          detail[key as keyof typeof detail] === item
+        )) throw new Error("章节采用版本与权威候选详情不一致。");
+      }
+      const currentSelection = selectionRef.current;
+      if (request !== candidateSelectionRequest.current || controller.signal.aborted
+        || generationIdentityRef.current.projectId !== expected.projectId
+        || generationIdentityRef.current.userId !== expected.userId
+        || currentSelection.kind !== "chapter" || currentSelection.id !== expected.chapterId) {
+        throw new Error("章节已变化，已忽略迟到的采用状态。");
+      }
+      setCandidateSelectionCurrent(value);
+      return value;
+    } catch (cause) {
+      if (!controller.signal.aborted && request === candidateSelectionRequest.current) {
+        setCandidateSelectionError(`${errorMessage(cause)} 只会重新读取采用状态，不会提交候选。`);
+      }
+      throw cause;
+    } finally {
+      if (!controller.signal.aborted && request === candidateSelectionRequest.current) {
+        setCandidateSelectionLoading(false);
+      }
+    }
+  }, [id, user?.id]);
+
+  useEffect(() => {
+    candidateSelectionRequest.current += 1;
+    candidateSelectionController.current?.abort();
+    setCandidateSelectionCurrent(null);
+    setCandidateSelectionError("");
+    setCandidateSelectionLoading(false);
+    if (!id || !user || loadState !== "ready" || selection.kind !== "chapter" || !located.chapter) return;
+    void refreshCandidateSelection().catch(() => {});
+    return () => {
+      candidateSelectionRequest.current += 1;
+      candidateSelectionController.current?.abort();
+    };
+  }, [id, user?.id, loadState, selection.kind, selection.id, located.chapter?.id, refreshCandidateSelection]);
+
   useEffect(() => {
     const expectedPath = id ? `/project/${id}/plan/chapters` : "";
     if (location.pathname !== expectedPath || location.hash !== "#demo-technical-generation") {
@@ -285,6 +370,8 @@ export default function ChapterPlanningPage() {
     && located.chapter?.status === "active"
     && located.part?.status === "active";
   const globalGenerationFeedbackVisible = !!generationError && !generationFeedbackInlineVisible;
+  const candidateVersionLocked = candidateWorkspaceLocked
+    || candidateManualEditLocked || candidateSelectionLocked;
   const planningWriteDisabled = busy || generationBusy || generationExecutionBusy || technicalDemoLocked || candidateVersionLocked || !!generationExecutionPending || !!pending || maintenance || conflict || assignmentConflict
     || refreshRequired || assignmentRefreshRequired || !!pendingStorageIssue || !!foreignPending;
 
@@ -303,19 +390,19 @@ export default function ChapterPlanningPage() {
     setForeignPending((value) => value?.workspace === "technical_demo_execution" ? null : value);
   }, [id, user]);
   const handleCandidateVersionLockChange = useCallback((locked: boolean) => {
-    if (locked) {
-      setCandidateVersionLocked(true);
-      return;
-    }
+    setCandidateWorkspaceLocked(locked);
     if (!id || !user) return;
-    const current = loadPendingCandidateManualEdit(user.id, id);
-    if (current.status !== "missing") {
-      setCandidateVersionLocked(true);
-      return;
+    const manualCurrent = loadPendingCandidateManualEdit(user.id, id);
+    const selectionCurrent = loadPendingCandidateSelection(user.id, id);
+    setCandidateManualEditLocked(manualCurrent.status === "available"
+      || manualCurrent.status === "corrupt" || manualCurrent.status === "unavailable");
+    setCandidateSelectionLocked(selectionCurrent.status === "available"
+      || selectionCurrent.status === "corrupt" || selectionCurrent.status === "unavailable");
+    if (!locked && manualCurrent.status === "missing" && selectionCurrent.status === "missing") {
+      setCandidateVersionRecoveryId(null);
+      setForeignPending((value) => value?.workspace === "candidate_manual_edit"
+        || value?.workspace === "candidate_selection" ? null : value);
     }
-    setCandidateVersionLocked(false);
-    setCandidateVersionRecoveryId(null);
-    setForeignPending((value) => value?.workspace === "candidate_manual_edit" ? null : value);
   }, [id, user]);
   const assignmentWriteDisabled = planningWriteDisabled || assignmentLoading || !!assignmentError;
   const generationStale = useMemo(() => {
@@ -364,6 +451,19 @@ export default function ChapterPlanningPage() {
     if (generationDisabledReason) return generationDisabledReason;
     return "";
   }, [generationRun, generationExecutionRequiresNewPreflight, generationStale, generationExecutionPending, generationBusy, busy, generationExecutionBusy, generationDisabledReason]);
+
+  const candidateSelectionDisabledReason = useMemo(() => {
+    if (selection.kind !== "chapter" || !located.chapter || !located.part) return "请选择要采用候选的章节。";
+    if (located.chapter.status !== "active" || located.part.status !== "active") return "归档章节不能修改采用版本；请先恢复章节。";
+    if (pendingStorageIssue) return "浏览器恢复存储尚未恢复，不能提交候选采用。";
+    if (maintenance) return "项目正在维护，候选采用暂不可提交。";
+    if (refreshRequired || assignmentRefreshRequired || conflict || assignmentConflict) return "当前规划或设定尚未完成权威同步，不能提交候选采用。";
+    if (candidateSelectionLoading || !candidateSelectionCurrent) return "正在读取章节权威采用状态。";
+    if (candidateSelectionError) return "章节权威采用状态读取失败，请先重新读取。";
+    return "";
+  }, [selection.kind, located.chapter, located.part, pendingStorageIssue, maintenance,
+    refreshRequired, assignmentRefreshRequired, conflict, assignmentConflict,
+    candidateSelectionLoading, candidateSelectionCurrent, candidateSelectionError]);
 
   const generationRunActionsDisabledReason = candidateVersionLocked
     ? "候选版本另存、草稿恢复或严格校验尚未完成；不能重新检查或关闭记录。"
@@ -481,7 +581,9 @@ export default function ChapterPlanningPage() {
     setGenerationOriginalRetryAllowed(false);
     setGenerationExecutionRequiresNewPreflight(false);
     setTechnicalDemoLocked(false);
-    setCandidateVersionLocked(true);
+    setCandidateWorkspaceLocked(true);
+    setCandidateManualEditLocked(false);
+    setCandidateSelectionLocked(false);
     setCandidateVersionRecoveryId(null);
     corruptRecoverySnapshot.current = null;
     generationExecutionRequest.current += 1;
@@ -783,12 +885,12 @@ export default function ChapterPlanningPage() {
     if (!id || !user || loadState !== "ready") return;
     const sharedGate = loadPendingPlanningOperation(user.id, id);
     const candidateGate = loadPendingCandidateManualEdit(user.id, id);
-    setCandidateVersionLocked(
-      candidateGate.status === "available"
-      || (sharedGate.status === "foreign"
-        && sharedGate.workspace === "candidate_manual_edit"
-        && (candidateGate.status === "corrupt" || candidateGate.status === "unavailable"))
-    );
+    const selectionGate = loadPendingCandidateSelection(user.id, id);
+    setCandidateWorkspaceLocked(false);
+    setCandidateManualEditLocked(candidateGate.status === "available"
+      || candidateGate.status === "corrupt" || candidateGate.status === "unavailable");
+    setCandidateSelectionLocked(selectionGate.status === "available"
+      || selectionGate.status === "corrupt" || selectionGate.status === "unavailable");
     const executionLoaded = loadPendingGenerationExecution(user.id, id);
     if (executionLoaded.status === "available") {
       const operation = executionLoaded.operation;
@@ -869,14 +971,20 @@ export default function ChapterPlanningPage() {
     if (loaded.status === "missing") {
       corruptRecoverySnapshot.current = null;
       setPending(null); setPendingStorageIssue(null); setForeignPending(null);
-      setCandidateVersionLocked(false); setCandidateVersionRecoveryId(null);
+      setCandidateWorkspaceLocked(false);
+      setCandidateManualEditLocked(false);
+      setCandidateSelectionLocked(false);
+      setCandidateSelectionRecoveryRevision((value) => value + 1);
+      setCandidateVersionRecoveryId(null);
       return;
     }
     if (loaded.status === "foreign") {
       setPending(null);
       setPendingStorageIssue(null);
-      if (loaded.workspace !== "candidate_manual_edit") {
-        setCandidateVersionLocked(false);
+      if (loaded.workspace !== "candidate_manual_edit" && loaded.workspace !== "candidate_selection") {
+        setCandidateWorkspaceLocked(false);
+        setCandidateManualEditLocked(false);
+        setCandidateSelectionLocked(false);
         setCandidateVersionRecoveryId(null);
       }
       const generationPending = loaded.workspace === "generation_execution"
@@ -887,6 +995,9 @@ export default function ChapterPlanningPage() {
         : null;
       const candidatePending = loaded.workspace === "candidate_manual_edit"
         ? loadPendingCandidateManualEdit(user.id, id)
+        : null;
+      const selectionPending = loaded.workspace === "candidate_selection"
+        ? loadPendingCandidateSelection(user.id, id)
         : null;
       if (technicalPending?.status === "corrupt" || technicalPending?.status === "unavailable") {
         corruptRecoverySnapshot.current = technicalPending.status === "corrupt"
@@ -905,10 +1016,22 @@ export default function ChapterPlanningPage() {
           ? sessionStorage.getItem(pendingProjectOperationKey(user.id, id))
           : null;
         setForeignPending(null);
-        setCandidateVersionLocked(true);
+        setCandidateManualEditLocked(true);
         setPendingStorageIssue(candidatePending.status);
         setError(candidatePending.status === "corrupt"
           ? "检测到损坏或身份不匹配的候选版本恢复记录，已安全停止全部写入。"
+          : "浏览器恢复存储不可用；已安全停止全部写入。");
+        return;
+      }
+      if (selectionPending?.status === "corrupt" || selectionPending?.status === "unavailable") {
+        corruptRecoverySnapshot.current = selectionPending.status === "corrupt"
+          ? sessionStorage.getItem(pendingProjectOperationKey(user.id, id))
+          : null;
+        setForeignPending(null);
+        setCandidateSelectionLocked(true);
+        setPendingStorageIssue(selectionPending.status);
+        setError(selectionPending.status === "corrupt"
+          ? "检测到损坏或身份不匹配的候选采用恢复记录，已安全停止全部写入。"
           : "浏览器恢复存储不可用；已安全停止全部写入。");
         return;
       }
@@ -916,7 +1039,8 @@ export default function ChapterPlanningPage() {
         workspace: loaded.workspace,
         chapterId: generationPending?.status === "available" ? generationPending.operation.chapter_id
           : technicalPending?.status === "available" ? technicalPending.operation.chapter_id
-            : candidatePending?.status === "available" ? candidatePending.operation.chapter_id : null,
+            : candidatePending?.status === "available" ? candidatePending.operation.chapter_id
+              : selectionPending?.status === "available" ? selectionPending.operation.chapter_id : null,
       });
       if (technicalPending?.status === "available") {
         setTechnicalDemoLocked(true);
@@ -929,7 +1053,7 @@ export default function ChapterPlanningPage() {
         setMobileDetail(true);
       }
       if (candidatePending?.status === "available") {
-        setCandidateVersionLocked(true);
+        setCandidateManualEditLocked(true);
         const operation = candidatePending.operation;
         setCandidateVersionRecoveryId(operation.payload.parent_candidate_id);
         const params = new URLSearchParams(searchParams);
@@ -937,6 +1061,18 @@ export default function ChapterPlanningPage() {
         params.set("target", operation.chapter_id);
         params.set("generation_run", operation.run_id);
         params.set("candidate_version", operation.payload.parent_candidate_id);
+        setSearchParams(params, { replace: true });
+        setMobileDetail(true);
+      }
+      if (selectionPending?.status === "available") {
+        setCandidateSelectionLocked(true);
+        const operation = selectionPending.operation;
+        setCandidateVersionRecoveryId(operation.expected_target.id);
+        const params = new URLSearchParams(searchParams);
+        params.set("scope", "chapter");
+        params.set("target", operation.chapter_id);
+        params.set("generation_run", operation.run_id);
+        params.set("candidate_version", operation.expected_target.id);
         setSearchParams(params, { replace: true });
         setMobileDetail(true);
       }
@@ -1659,6 +1795,8 @@ export default function ChapterPlanningPage() {
     const corruptWorkspace = shared.status === "foreign" ? shared.workspace : "planning";
     const stillCorrupt = corruptWorkspace === "candidate_manual_edit"
       ? loadPendingCandidateManualEdit(user.id, id).status === "corrupt"
+      : corruptWorkspace === "candidate_selection"
+        ? loadPendingCandidateSelection(user.id, id).status === "corrupt"
       : corruptWorkspace === "technical_demo_execution"
         ? loadPendingTechnicalDemoExecution(user.id, id).status === "corrupt"
         : corruptWorkspace === "generation_execution"
@@ -1672,20 +1810,28 @@ export default function ChapterPlanningPage() {
       const confirmedMissing = loadPendingPlanningOperation(user.id, id).status === "missing"
         && loadPendingGenerationExecution(user.id, id).status === "missing"
         && loadPendingTechnicalDemoExecution(user.id, id).status === "missing"
-        && loadPendingCandidateManualEdit(user.id, id).status === "missing";
+        && loadPendingCandidateManualEdit(user.id, id).status === "missing"
+        && loadPendingCandidateSelection(user.id, id).status === "missing";
       if (!confirmedMissing) {
         setError("清理后无法确认浏览器恢复槽为空；继续保持禁写。");
         return;
       }
       corruptRecoverySnapshot.current = null;
       setPendingStorageIssue(null);
+      setCandidateManualEditLocked(false);
+      setCandidateSelectionLocked(false);
+      setCandidateSelectionRecoveryRevision((value) => value + 1);
       if (corruptWorkspace === "technical_demo_execution") {
         setTechnicalDemoLocked(false);
         setForeignPending((value) => value?.workspace === "technical_demo_execution" ? null : value);
       } else if (corruptWorkspace === "candidate_manual_edit") {
-        setCandidateVersionLocked(false);
+        setCandidateManualEditLocked(false);
         setCandidateVersionRecoveryId(null);
         setForeignPending((value) => value?.workspace === "candidate_manual_edit" ? null : value);
+      } else if (corruptWorkspace === "candidate_selection") {
+        setCandidateSelectionLocked(false);
+        setCandidateVersionRecoveryId(null);
+        setForeignPending((value) => value?.workspace === "candidate_selection" ? null : value);
       } else if (corruptWorkspace === "generation_execution") {
         setForeignPending((value) => value?.workspace === "generation_execution" ? null : value);
       }
@@ -2144,6 +2290,7 @@ export default function ChapterPlanningPage() {
       {foreignPending?.workspace === "generation_execution" && <div className="planning-notice" role="alert"><span>生成候选中还有结果未确认的模型调用；章节规划写入已暂停，且不会自动重复生成。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${id}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${id}/plan/chapters`}>返回发起章节核对生成</Link></div>}
       {foreignPending?.workspace === "technical_demo_execution" && <div className="planning-notice" role="alert"><span>技术模拟中还有结果未确认的固定内容请求；章节规划写入已暂停。它不调用 AI，也不会产生模型费用。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${id}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${id}/plan/chapters`}>返回技术模拟发起章节核对</Link></div>}
       {foreignPending?.workspace === "candidate_manual_edit" && <div className="planning-notice" role="alert"><span>候选版本还有手工另存结果未确认；章节规划写入已暂停。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${id}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${id}/plan/chapters`}>返回原章节核对候选版本</Link></div>}
+      {foreignPending?.workspace === "candidate_selection" && <div className="planning-notice" role="alert"><span>候选采用还有结果未确认；章节规划写入已暂停，且不会自动重复提交。</span><Link className="btn btn-secondary" to={foreignPending.chapterId ? `/project/${id}/plan/chapters?scope=chapter&target=${encodeURIComponent(foreignPending.chapterId)}` : `/project/${id}/plan/chapters`}>返回原章核对采用状态</Link></div>}
       {pending && pending.action !== "generation_prepare" && (
         <div className="planning-notice" role="alert">
           <span>检测到结果尚未确认的操作，已暂停新的写入。</span>
@@ -2278,6 +2425,12 @@ export default function ChapterPlanningPage() {
                     onTechnicalDemoLockChange={handleTechnicalDemoLockChange}
                     candidateVersionRecoveryId={candidateVersionRecoveryId ?? searchParams.get("candidate_version") ?? undefined}
                     onCandidateVersionLockChange={handleCandidateVersionLockChange}
+                    candidateSelectionCurrent={candidateSelectionCurrent}
+                    candidateSelectionLoading={candidateSelectionLoading}
+                    candidateSelectionError={candidateSelectionError}
+                    onRefreshCandidateSelection={refreshCandidateSelection}
+                    selectionDisabledReason={candidateSelectionDisabledReason}
+                    candidateSelectionRecoveryRevision={candidateSelectionRecoveryRevision}
                     onPrepare={() => void executeGenerationPrepare()}
                     onCheckPending={() => {
                       if (pending?.action === "generation_prepare") void reconcileGenerationPending(pending as unknown as PendingPlanningOperation<GenerationRunPrepareInput>, requestGeneration.current, true);

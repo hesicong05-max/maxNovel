@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "./api";
+import { pendingProjectOperationKey } from "./pendingProjectOperations";
 import {
   GenerationExecutionContractError,
   clearPendingGenerationExecution,
@@ -591,5 +592,15 @@ describe("shared generation execution pending v3", () => {
       .mockImplementation(() => { throw new DOMException("blocked", "SecurityError"); });
     expect(savePendingGenerationExecution(pending())).toBe(false);
     expect(clearPendingGenerationExecution(userId, projectId, operationKey)).toBe(false);
+  });
+
+  it("recognizes candidate selection v6 as foreign", () => {
+    sessionStorage.setItem(
+      pendingProjectOperationKey(userId, projectId),
+      JSON.stringify({ schema_version: 6, workspace: "candidate_selection" })
+    );
+    expect(loadPendingGenerationExecution(userId, projectId)).toEqual({
+      status: "foreign", workspace: "candidate_selection",
+    });
   });
 });

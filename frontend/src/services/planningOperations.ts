@@ -29,7 +29,7 @@ export interface PendingPlanningOperation<T extends object = Record<string, unkn
 export type PendingPlanningOperationLoad =
   | { status: "missing" }
   | { status: "available"; operation: PendingPlanningOperation }
-  | { status: "foreign"; workspace: "foreshadow" | "generation_execution" | "technical_demo_execution" | "candidate_manual_edit" }
+  | { status: "foreign"; workspace: "foreshadow" | "generation_execution" | "technical_demo_execution" | "candidate_manual_edit" | "candidate_selection" }
   | { status: "corrupt" }
   | { status: "unavailable" };
 
@@ -205,6 +205,9 @@ export function loadPendingPlanningOperation(
     }
     if (parsed.schema_version === 5 && parsed.workspace === "candidate_manual_edit") {
       return { status: "foreign", workspace: "candidate_manual_edit" };
+    }
+    if (parsed.schema_version === 6 && parsed.workspace === "candidate_selection") {
+      return { status: "foreign", workspace: "candidate_selection" };
     }
     const value = parsed as Partial<PendingPlanningOperation>;
     if (
