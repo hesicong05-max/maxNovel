@@ -1,0 +1,36 @@
+:root {
+  color-scheme: light;
+
+  --studio-canvas: #f3f1eb;
+  --studio-surface: #fffefa;
+  --studio-surface-muted: #e9eeeb;
+  --studio-ink: #1f2926;
+  --studio-ink-muted: #64716c;
+  --studio-border: #d9ded9;
+  --studio-border-strong: #aebbb6;
+  --studio-accent: #455ca8;
+  --studio-accent-strong: #30427f;
+  --studio-accent-soft: #e7eafa;
+  --studio-mist: #4f625c;
+  --studio-focus: #334fb4;
+
+  --studio-space-1: 0.25rem;
+  --studio-space-2: 0.5rem;
+  --studio-space-3: 0.75rem;
+  --studio-space-4: 1rem;
+  --studio-space-5: 1.5rem;
+  --studio-space-6: 2rem;
+
+  --studio-radius-sm: 0.5rem;
+  --studio-radius-md: 0.875rem;
+  --studio-radius-lg: 1.25rem;
+  --studio-shadow-soft: 0 12px 32px rgba(38, 59, 53, 0.08);
+  --studio-duration-press: 120ms;
+  --studio-duration-panel: 190ms;
+  --studio-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Existing components already reference these semantic names. */
+  --primary: var(--studio-focus);
+  --surface: var(--studio-surface);
+  --border-strong: var(--studio-border-strong);
+}
