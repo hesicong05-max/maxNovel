@@ -12,6 +12,7 @@ import Settings from "@/pages/Settings";
 import Community from "@/pages/Community";
 import CommunityNovelDetail from "@/pages/CommunityNovelDetail";
 import CommunityEdit from "@/pages/CommunityEdit";
+import ProjectWorkspaceShell from "@/components/ProjectWorkspaceShell";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { loading, isAuthenticated } = useAuth();
@@ -96,10 +97,12 @@ function AppRoutes() {
                 <Routes>
                   <Route path="/" element={<ProjectList />} />
                   <Route path="/new" element={<NewProject />} />
-                  <Route path="/project/:id" element={<ProjectDetail />} />
-                  <Route path="/project/:id/lore" element={<LoreRepositoryPage />} />
-                  <Route path="/project/:id/plan/chapters" element={<ChapterPlanningPage />} />
-                  <Route path="/project/:id/plan/foreshadows" element={<ForeshadowPlanningPage />} />
+                  <Route path="/project/:id" element={<ProjectWorkspaceShell />}>
+                    <Route index element={<ProjectDetail />} />
+                    <Route path="lore" element={<LoreRepositoryPage />} />
+                    <Route path="plan/chapters" element={<ChapterPlanningPage />} />
+                    <Route path="plan/foreshadows" element={<ForeshadowPlanningPage />} />
+                  </Route>
                   <Route
                     path="/settings"
                     element={
