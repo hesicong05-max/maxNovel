@@ -8,6 +8,7 @@ import "@/styles/global.css";
 import "@/styles/workspace-shell.css";
 import "@/styles/chapter-planning.css";
 import "@/styles/project-hub.css";
+import "@/styles/lore-repository.css";
 
 // Initialize Sentry error monitoring (no-op if DSN not set)
 initSentry();
