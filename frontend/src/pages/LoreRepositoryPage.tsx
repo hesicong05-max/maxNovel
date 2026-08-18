@@ -514,7 +514,7 @@ export default function LoreRepositoryPage() {
 
   useEffect(() => {
     if (!selectedFormalId && !selectedCandidateId && !creating) return;
-    if (!window.matchMedia("(max-width: 480px)").matches) return;
+    if (!window.matchMedia("(max-width: 640px)").matches) return;
     requestAnimationFrame(() => detailRef.current?.focus());
   }, [creating, selectedCandidateId, selectedFormalId]);
 
@@ -791,7 +791,7 @@ export default function LoreRepositoryPage() {
   const activeFilters = Array.from(searchParams.keys()).some((key) => key !== "scope");
 
   return (
-    <div className="lore-page">
+    <div className="lore-page lore-page--studio">
       <button className="btn-back" onClick={() => {
         if (confirmDiscardDrafts()) navigate(`/project/${id}`);
       }}>← 返回创作项目</button>

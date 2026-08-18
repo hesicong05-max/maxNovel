@@ -260,6 +260,20 @@ describe("LoreRepositoryPage", () => {
     });
   });
 
+  it("renders the studio directory shell without adding initial requests", async () => {
+    const { container } = renderPage();
+
+    expect(await screen.findByText("林渊")).toBeInTheDocument();
+    expect(container.querySelector(".lore-page--studio")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "设定概况" })).toHaveClass("lore-overview");
+    expect(within(screen.getByRole("region", { name: "设定概况" })).getAllByRole("button")).toHaveLength(6);
+    expect(screen.getByRole("navigation", { name: "设定范围" })).toHaveClass("lore-scope-tabs");
+    expect(screen.getByRole("form", { name: "筛选设定" })).toHaveClass("lore-filters");
+    expect(apiModule.api.getLoreOverview).toHaveBeenCalledTimes(1);
+    expect(apiModule.api.listLoreElements).toHaveBeenCalledTimes(1);
+    expect(apiModule.api.getLoreElement).not.toHaveBeenCalled();
+  });
+
   it("reopens a stored migration request after refresh and only checks its original key", async () => {
     const scope: DraftScope = {
       userId: "user-1",
@@ -1059,16 +1073,20 @@ describe("LoreRepositoryPage", () => {
     expect(list).toHaveBeenCalledTimes(3);
   });
 
-  it("moves focus to the selected detail on a 390px viewport", async () => {
+  it("moves focus to the selected detail at the shared 640px step breakpoint", async () => {
+    const matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query === "(max-width: 640px)",
+    }));
     Object.defineProperty(window, "matchMedia", {
       configurable: true,
-      value: vi.fn().mockImplementation(() => ({ matches: true })),
+      value: matchMedia,
     });
     renderPage();
     await userEvent.click(await screen.findByRole("button", { name: /林渊/ }));
 
     const detailRegion = screen.getByRole("complementary", { name: "设定详情" });
     await waitFor(() => expect(detailRegion).toHaveFocus());
+    expect(matchMedia).toHaveBeenCalledWith("(max-width: 640px)");
     expect(screen.getByRole("button", { name: /返回设定列表/ })).toBeInTheDocument();
   });
 
