@@ -88,6 +88,40 @@ describe("ProjectDetail outline retirement", () => {
     expect(await screen.findByText("设定仓库页面")).toBeInTheDocument();
   });
 
+  it("presents project identity and workspace destinations as semantic navigation", async () => {
+    const getProject = renderPage(baseProject);
+
+    expect(await screen.findByRole("heading", { level: 1, name: baseProject.title })).toBeInTheDocument();
+    expect(document.querySelector(".project-overview")).toBeInTheDocument();
+    expect(screen.queryByRole("main")).not.toBeInTheDocument();
+    const workspaceNav = screen.getByRole("navigation", { name: "项目工作区入口" });
+    expect(workspaceNav).toContainElement(screen.getByRole("link", { name: "打开设定仓库" }));
+    expect(screen.getByRole("link", { name: "打开设定仓库" })).toHaveAttribute("href", "/project/project-1/lore");
+    expect(screen.getAllByRole("link", { name: "打开章节规划" })[0]).toHaveAttribute("href", "/project/project-1/plan/chapters");
+    expect(screen.getByRole("link", { name: "← 返回全部项目" })).toHaveAttribute("href", "/");
+    expect(getProject).toHaveBeenCalledTimes(1);
+  });
+
+  it("provides a safe exit when the project no longer exists", async () => {
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getProject: vi.fn().mockRejectedValue(new apiModule.ApiError(404, {
+        detail: "项目不存在",
+        code: "PROJECT_NOT_FOUND",
+        retryable: false,
+      })),
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/project/project-1"]}>
+        <Routes><Route path="/project/:id" element={<ProjectDetail />} /></Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole("heading", { name: "没有找到这个项目" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "返回全部项目" })).toHaveAttribute("href", "/");
+  });
+
   it("opens historical outline projects directly in compatible chapter writing", async () => {
     renderPage({
       ...baseProject,
@@ -134,9 +168,13 @@ describe("ProjectDetail outline retirement", () => {
   });
 
   it("shows a retryable load error instead of reporting a missing project", async () => {
+    let resolveRetry!: (project: Project) => void;
+    const retryResult = new Promise<Project>((resolve) => {
+      resolveRetry = resolve;
+    });
     const getProject = vi.fn()
       .mockRejectedValueOnce(new Error("网络暂时不可用"))
-      .mockResolvedValueOnce(baseProject);
+      .mockReturnValueOnce(retryResult);
     vi.spyOn(apiModule, "api", "get").mockReturnValue({
       ...apiModule.api,
       getProject,
@@ -156,6 +194,10 @@ describe("ProjectDetail outline retirement", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "重新加载" }));
     await waitFor(() => expect(getProject).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("status")).toHaveTextContent("正在打开项目工作台…");
+    expect(screen.queryByRole("heading", { name: "没有找到这个项目" })).not.toBeInTheDocument();
+
+    resolveRetry(baseProject);
     expect(await screen.findByText("测试小说")).toBeInTheDocument();
   });
 });
