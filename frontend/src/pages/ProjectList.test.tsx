@@ -10,6 +10,7 @@ const missing = { schema_version: 1, fixture_version: 1, mode: "technical_demo_f
 const counts = { setting_type_count: 6, element_count: 7, source_count: 7, relation_count: 3, part_count: 1, chapter_count: 2, assignment_count: 7, foreshadow_lifecycle_count: 1, foreshadow_plan_count: 2, foreshadow_fact_count: 0 } as const;
 const ready = { ...missing, state: "ready", can_bootstrap: false, project_id: id("project"), plan_id: id("plan"), part_id: id("part"), chapter_id: id("chapter"), element_id: id("element"), assignment_id: id("assignment"), second_chapter_id: id("second"), foreshadow_element_id: id("foreshadow"), foreshadow_lifecycle_id: id("lifecycle"), counts, next_path: `/project/${id("project")}/lore`, recommended_action: "open_fixture" } as const;
 const ordinaryProject = { id: id("ordinary"), title: "普通长篇项目", genre: "科幻", status: "draft", total_chapters: 20, chapter_word_count: 2000, style_intensity: "standard", created_at: "2026-08-13T08:00:00Z", updated_at: "2026-08-13T08:00:00Z", has_worldview: true, has_outline: false, chapter_count: 0 } as const;
+const secondProject = { ...ordinaryProject, id: id("second-project"), title: "第二个创作项目" } as const;
 
 function Location() { return <output>{useLocation().pathname}</output>; }
 function renderPage() {
@@ -58,6 +59,59 @@ describe("ProjectList technical demo bootstrap recovery", () => {
     expect(await screen.findByText(ordinaryProject.title)).toBeInTheDocument();
     expect(screen.queryByText("还没有项目")).not.toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("普通项目仍可继续使用");
+  });
+
+  it("shows a retryable project-list error instead of a false empty state", async () => {
+    const listProjects = vi.fn()
+      .mockRejectedValueOnce(new Error("项目服务暂时不可用"))
+      .mockResolvedValueOnce([ordinaryProject]);
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      listProjects,
+      getDemoFixture: vi.fn().mockResolvedValue(missing),
+    });
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "项目列表暂时无法加载" })).toBeInTheDocument();
+    expect(screen.queryByText("第一部故事，正等你命名")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "重新加载项目" }));
+
+    expect(await screen.findByRole("link", { name: `打开项目《${ordinaryProject.title}》` })).toHaveAttribute(
+      "href",
+      `/project/${ordinaryProject.id}`
+    );
+    expect(listProjects).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps project navigation and deletion as independent actions", async () => {
+    const deleteProject = vi.fn().mockResolvedValue(undefined);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      listProjects: vi.fn().mockResolvedValue([ordinaryProject, secondProject]),
+      getDemoFixture: vi.fn().mockResolvedValue(missing),
+      deleteProject,
+    });
+    renderPage();
+
+    const projectLink = await screen.findByRole("link", { name: `打开项目《${ordinaryProject.title}》` });
+    expect(projectLink).toHaveAttribute("href", `/project/${ordinaryProject.id}`);
+    expect(screen.getAllByRole("link", { name: `打开项目《${ordinaryProject.title}》` })).toHaveLength(1);
+    expect(screen.queryByRole("main")).not.toBeInTheDocument();
+    const deleteButton = screen.getByRole("button", { name: `删除项目《${ordinaryProject.title}》` });
+
+    await userEvent.click(deleteButton);
+    expect(deleteProject).not.toHaveBeenCalled();
+    expect(document.querySelector("output")).toHaveTextContent("/");
+
+    confirmSpy.mockReturnValue(true);
+    await userEvent.click(deleteButton);
+    await waitFor(() => expect(deleteProject).toHaveBeenCalledTimes(1));
+    expect(deleteProject).toHaveBeenCalledWith(ordinaryProject.id);
+    expect(screen.queryByRole("link", { name: `打开项目《${ordinaryProject.title}》` })).not.toBeInTheDocument();
+    expect(screen.getByText(`已删除项目《${ordinaryProject.title}》。`)).toHaveAttribute("role", "status");
+    await waitFor(() => expect(screen.getByRole("link", { name: `打开项目《${secondProject.title}》` })).toHaveFocus());
+    expect(document.querySelector("output")).toHaveTextContent("/");
   });
 
   it("enters authoritative project overview after successful bootstrap and from a ready CTA", async () => {
