@@ -1,0 +1,338 @@
+.foreshadow-page--studio {
+  display: grid;
+  width: min(100%, 76rem);
+  min-width: 0;
+  margin: 0 auto;
+  gap: var(--studio-space-4);
+  color: var(--studio-ink);
+}
+
+.foreshadow-page--studio > .btn-back {
+  min-height: 2.75rem;
+  justify-self: start;
+  margin: 0;
+}
+
+.foreshadow-page--studio :is(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 3px solid var(--studio-focus);
+  outline-offset: 3px;
+}
+
+.foreshadow-page--studio > .foreshadow-header {
+  align-items: end;
+  margin: 0;
+  padding: var(--studio-space-5) 0 var(--studio-space-4);
+  border-bottom: 1px solid var(--studio-border);
+}
+
+.foreshadow-page--studio > .foreshadow-header > div {
+  min-width: 0;
+}
+
+.foreshadow-page--studio > .foreshadow-header h1 {
+  margin: 0;
+  color: var(--studio-ink);
+  font-family: var(--font-serif);
+  font-size: clamp(1.9rem, 4vw, 3.2rem);
+  letter-spacing: -0.045em;
+  line-height: 1.04;
+  overflow-wrap: anywhere;
+}
+
+.foreshadow-page--studio > .foreshadow-header p {
+  max-width: 42rem;
+  margin: var(--studio-space-2) 0 0;
+  color: var(--studio-mist);
+  line-height: 1.65;
+}
+
+.foreshadow-page--studio > .foreshadow-boundary {
+  position: relative;
+  gap: var(--studio-space-2);
+  margin: 0;
+  padding: var(--studio-space-4) var(--studio-space-5);
+  border-color: color-mix(in srgb, var(--studio-accent) 38%, var(--studio-border));
+  border-left: 4px solid var(--studio-accent);
+  border-radius: var(--studio-radius-md);
+  background: var(--studio-accent-soft);
+  color: var(--studio-ink);
+  overflow: hidden;
+}
+
+.foreshadow-page--studio > .foreshadow-boundary strong,
+.foreshadow-page--studio > .foreshadow-boundary span {
+  overflow-wrap: anywhere;
+}
+
+.foreshadow-page--studio > .foreshadow-boundary span {
+  color: var(--studio-mist);
+  line-height: 1.6;
+}
+
+.foreshadow-page--studio > .foreshadow-live,
+.foreshadow-page--studio > .planning-notice {
+  min-width: 0;
+  margin: 0;
+  border-color: var(--studio-border-strong);
+  border-radius: var(--studio-radius-md);
+  background: var(--studio-surface-muted);
+  color: var(--studio-ink);
+  overflow-wrap: anywhere;
+}
+
+.foreshadow-page--studio > .foreshadow-live {
+  border-left: 3px solid var(--studio-accent);
+}
+
+.foreshadow-page--studio > .planning-notice.is-error {
+  border-color: #dbaaaa;
+  border-left: 4px solid #a64646;
+  background: #fff4f2;
+}
+
+.foreshadow-page--studio > .foreshadow-overview {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--studio-space-3);
+  margin: 0;
+}
+
+.foreshadow-page--studio > .foreshadow-overview > button {
+  min-width: 0;
+  min-height: 8.25rem;
+  padding: var(--studio-space-4);
+  border-color: var(--studio-border);
+  border-radius: var(--studio-radius-md);
+  background: var(--studio-surface);
+  color: var(--studio-ink);
+  box-shadow: none;
+  transition: transform 140ms var(--studio-ease);
+}
+
+.foreshadow-page--studio > .foreshadow-overview > button:hover,
+.foreshadow-page--studio > .foreshadow-overview > button:focus-visible {
+  border-color: var(--studio-border-strong);
+}
+
+.foreshadow-page--studio > .foreshadow-overview > button[aria-pressed="true"] {
+  border-color: var(--studio-accent);
+  background: var(--studio-accent-soft);
+  box-shadow: inset 0 3px 0 var(--studio-accent);
+}
+
+.foreshadow-page--studio > .foreshadow-overview strong {
+  color: var(--studio-ink);
+  font-family: var(--font-serif);
+  font-size: clamp(1.5rem, 2.8vw, 2.15rem);
+}
+
+.foreshadow-page--studio > .foreshadow-overview span {
+  color: var(--studio-ink);
+}
+
+.foreshadow-page--studio > .foreshadow-overview small {
+  color: var(--studio-mist);
+  line-height: 1.45;
+}
+
+.foreshadow-page--studio > .foreshadow-workspace {
+  grid-template-columns: minmax(17rem, 20rem) minmax(0, 1fr);
+  gap: var(--studio-space-4);
+}
+
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel,
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-detail-panel {
+  min-width: 0;
+  border-color: var(--studio-border);
+  border-radius: var(--studio-radius-lg);
+  background: var(--studio-surface);
+  box-shadow: none;
+}
+
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel {
+  padding: var(--studio-space-3);
+}
+
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-detail-panel {
+  padding: clamp(1rem, 2.5vw, 2rem);
+}
+
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-detail-panel a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+}
+
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list-heading {
+  align-items: center;
+  padding: var(--studio-space-1) var(--studio-space-1) var(--studio-space-3);
+  border-bottom: 1px solid var(--studio-border);
+}
+
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list-heading h2 {
+  color: var(--studio-ink);
+  font-family: var(--font-serif);
+}
+
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-filters {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--studio-space-1);
+  padding: var(--studio-space-1);
+  border: 1px solid var(--studio-border);
+  border-radius: var(--studio-radius-md);
+  background: var(--studio-surface-muted);
+}
+
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-filters > button {
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: var(--studio-space-2);
+  border-color: transparent;
+  background: transparent;
+  color: var(--studio-mist);
+  overflow-wrap: anywhere;
+  transition: transform 140ms var(--studio-ease);
+}
+
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-filters > button[aria-pressed="true"] {
+  border-color: var(--studio-border-strong);
+  background: var(--studio-surface);
+  color: var(--studio-accent-strong);
+  box-shadow: 0 1px 3px rgba(38, 59, 53, 0.08);
+}
+
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list > li > .foreshadow-list-item {
+  min-width: 0;
+  min-height: 4.75rem;
+  border-color: transparent;
+  border-radius: var(--studio-radius-md);
+  background: var(--studio-surface-muted);
+  transition: transform 140ms var(--studio-ease);
+}
+
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list > li > .foreshadow-list-item:hover,
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list > li > .foreshadow-list-item:focus-visible,
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list > li > .foreshadow-list-item.is-selected {
+  border-color: var(--studio-border-strong);
+  background: var(--studio-accent-soft);
+}
+
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list > li > .foreshadow-list-item.is-selected {
+  box-shadow: inset 3px 0 0 var(--studio-accent);
+}
+
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list > li > .foreshadow-list-item > span:first-child,
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list > li > .foreshadow-list-item strong,
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list > li > .foreshadow-list-item small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list > li > .foreshadow-list-item small {
+  color: var(--studio-mist);
+}
+
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel .foreshadow-state-label {
+  border-color: color-mix(in srgb, var(--studio-accent) 35%, var(--studio-border));
+  background: var(--studio-accent-soft);
+  color: var(--studio-accent-strong);
+}
+
+.foreshadow-page--studio > .foreshadow-workspace .foreshadow-empty {
+  min-width: 0;
+  background: var(--studio-surface-muted);
+  color: var(--studio-mist);
+  overflow-wrap: anywhere;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .foreshadow-page--studio > .foreshadow-overview > button:hover,
+  .foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list > li > .foreshadow-list-item:hover {
+    transform: translateY(-2px);
+  }
+}
+
+.foreshadow-page--studio > .foreshadow-overview > button:active,
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-filters > button:active,
+.foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list > li > .foreshadow-list-item:active {
+  transform: translateY(1px);
+}
+
+@media (max-width: 58rem) {
+  .foreshadow-page--studio > .foreshadow-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .foreshadow-page--studio > .foreshadow-workspace {
+    grid-template-columns: minmax(14rem, 16.5rem) minmax(0, 1fr);
+    gap: var(--studio-space-3);
+  }
+}
+
+@media (max-width: 40rem) {
+  .foreshadow-page--studio > .foreshadow-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .foreshadow-page--studio > .foreshadow-header .btn {
+    width: 100%;
+  }
+
+  .foreshadow-page--studio > .foreshadow-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .foreshadow-page--studio > .foreshadow-workspace > .foreshadow-detail-panel {
+    position: static;
+    max-height: none;
+  }
+
+  .foreshadow-page--studio > .foreshadow-workspace.show-detail > .foreshadow-detail-panel {
+    animation: foreshadow-studio-detail 150ms var(--studio-ease);
+  }
+}
+
+@media (max-width: 24.375rem) {
+  .foreshadow-page--studio > .foreshadow-overview {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (pointer: coarse) {
+  .foreshadow-page--studio > .foreshadow-overview > button:hover,
+  .foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list > li > .foreshadow-list-item:hover {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .foreshadow-page--studio > .foreshadow-overview > button,
+  .foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-filters > button,
+  .foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list > li > .foreshadow-list-item {
+    transition: none;
+  }
+
+  .foreshadow-page--studio > .foreshadow-overview > button:hover,
+  .foreshadow-page--studio > .foreshadow-overview > button:active,
+  .foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-filters > button:active,
+  .foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list > li > .foreshadow-list-item:hover,
+  .foreshadow-page--studio > .foreshadow-workspace > .foreshadow-list-panel > .foreshadow-list > li > .foreshadow-list-item:active {
+    transform: none;
+  }
+
+  .foreshadow-page--studio > .foreshadow-workspace.show-detail > .foreshadow-detail-panel {
+    animation: none;
+  }
+}
+
+@keyframes foreshadow-studio-detail {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
