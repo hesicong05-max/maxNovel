@@ -84,6 +84,54 @@ describe("LoreMergeWizard", () => {
     });
   });
 
+  it("keeps the collapsed merge entry passive", () => {
+    renderWizard();
+
+    const entry = screen.getByRole("region", { name: "合并重复设定" });
+    expect(entry).toHaveClass("lore-merge-entry");
+    expect(entry.querySelector(":scope > .lore-note")).toBeInTheDocument();
+    expect(apiModule.api.getLoreElement).not.toHaveBeenCalled();
+    expect(apiModule.api.previewLoreMerge).not.toHaveBeenCalled();
+    expect(apiModule.api.commitLoreMerge).not.toHaveBeenCalled();
+    expect(apiModule.api.getLoreMergeOperationByKey).not.toHaveBeenCalled();
+  });
+
+  it("renders an explicit preview as a read-only impact receipt", async () => {
+    const getLoreElement = vi.fn().mockImplementation((_projectId, elementId) => Promise.resolve(elementId === left.id ? left : right));
+    const previewLoreMerge = vi.fn().mockResolvedValue(preview);
+    const commitLoreMerge = vi.fn();
+    const getLoreMergeOperationByKey = vi.fn();
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      getLoreElement,
+      previewLoreMerge,
+      commitLoreMerge,
+      getLoreMergeOperationByKey,
+    });
+    renderWizard();
+
+    await userEvent.click(screen.getByRole("button", { name: "开始合并" }));
+    await userEvent.click(await screen.findByLabelText(/保留“林岚”/));
+    await userEvent.click(screen.getByLabelText("采用保留项：林岚"));
+    await userEvent.click(screen.getByLabelText("采用保留项：旧摘要"));
+    await userEvent.click(screen.getByLabelText("采用另一项：冲动"));
+    await userEvent.click(screen.getByRole("button", { name: "生成合并预览" }));
+
+    const heading = await screen.findByRole("heading", { name: "检查合并结果" });
+    const receipt = heading.closest(".lore-merge-preview");
+    expect(receipt).not.toBeNull();
+    expect(receipt?.querySelector(":scope > dl")).toBeInTheDocument();
+    expect(receipt?.querySelector(":scope > details")).toBeInTheDocument();
+    expect(receipt?.querySelector(":scope > .lore-merge-relations")).toBeInTheDocument();
+    expect(receipt?.querySelector(":scope > .lore-meta")).toBeInTheDocument();
+    expect(receipt?.querySelector(":scope > .lore-merge-actions")).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(getLoreElement).toHaveBeenCalledTimes(2);
+    expect(previewLoreMerge).toHaveBeenCalledTimes(1);
+    expect(commitLoreMerge).not.toHaveBeenCalled();
+    expect(getLoreMergeOperationByKey).not.toHaveBeenCalled();
+  });
+
   it("requires an explicit keeper and every field choice before preview", async () => {
     renderWizard();
     await userEvent.click(screen.getByRole("button", { name: "开始合并" }));
