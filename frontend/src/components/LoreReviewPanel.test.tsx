@@ -188,6 +188,115 @@ describe("LoreReviewPanel", () => {
     expect(input.expected_version).toBe(1);
     expect(input.expected_evidence_revision).toBe(1);
     expect(await screen.findByText(/人工判断已记录；不会自动合并/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("heading", { name: "核对这条设定线索" })).toHaveFocus());
+  });
+
+  it("traps focus in the decision dialog and returns Escape or cancel to the same trigger", async () => {
+    const api = apiModule.api;
+    renderPanel();
+    await userEvent.click(await screen.findByRole("button", { name: /林岚 ↔ 林岚/ }));
+    await screen.findByRole("heading", { name: "核对这条设定线索" });
+    await userEvent.selectOptions(screen.getByLabelText("判断"), "deferred");
+    const trigger = screen.getByRole("button", { name: "记录判断" });
+    await userEvent.click(trigger);
+
+    const dialog = screen.getByRole("alertdialog");
+    const cancel = within(dialog).getByRole("button", { name: "取消" });
+    const confirm = within(dialog).getByRole("button", { name: "确认记录" });
+    await waitFor(() => expect(cancel).toHaveFocus());
+    await userEvent.tab({ shift: true });
+    expect(confirm).toHaveFocus();
+    await userEvent.tab();
+    expect(cancel).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(api.decideLoreReview).not.toHaveBeenCalled();
+
+    await userEvent.click(trigger);
+    const reopened = screen.getByRole("alertdialog");
+    await userEvent.click(within(reopened).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(screen.getByRole("button", { name: "记录判断" })).toBe(trigger);
+    expect(api.decideLoreReview).not.toHaveBeenCalled();
+  });
+
+  it("returns from detail to the original clue card", async () => {
+    renderPanel();
+    const card = await screen.findByRole("button", { name: /林岚 ↔ 林岚/ });
+    await userEvent.click(card);
+    await screen.findByRole("heading", { name: "核对这条设定线索" });
+    await userEvent.click(screen.getByRole("button", { name: "← 返回线索列表" }));
+    await waitFor(() => expect(card).toHaveFocus());
+    expect(screen.queryByRole("heading", { name: "核对这条设定线索" })).not.toBeInTheDocument();
+  });
+
+  it("falls back to the review-list heading when the original card is disabled", async () => {
+    let finishScan!: () => void;
+    const scan = vi.fn().mockImplementation(() => new Promise<void>((resolve) => { finishScan = resolve; }));
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({ ...apiModule.api, scanLoreReviews: scan });
+    renderPanel();
+    const card = await screen.findByRole("button", { name: /林岚 ↔ 林岚/ });
+    await userEvent.click(card);
+    await screen.findByRole("heading", { name: "核对这条设定线索" });
+    await userEvent.click(screen.getByRole("button", { name: "扫描正式设定" }));
+    expect(card).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "← 返回线索列表" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "复核线索" })).toHaveFocus());
+    finishScan();
+    await waitFor(() => expect(screen.getByRole("button", { name: "扫描正式设定" })).toBeEnabled());
+  });
+
+  it("keeps the selected detail and focuses the error when draft removal fails", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderPanel();
+    await userEvent.click(await screen.findByRole("button", { name: /林岚 ↔ 林岚/ }));
+    await screen.findByRole("heading", { name: "核对这条设定线索" });
+    await userEvent.selectOptions(screen.getByLabelText("判断"), "deferred");
+    const removeItem = vi.spyOn(window.localStorage, "removeItem").mockImplementationOnce(() => {
+      throw new Error("storage blocked");
+    });
+    await userEvent.click(screen.getByRole("button", { name: "← 返回线索列表" }));
+    const alert = await screen.findByRole("alert");
+    await waitFor(() => expect(alert).toHaveFocus());
+    expect(screen.getByRole("heading", { name: "核对这条设定线索" })).toBeInTheDocument();
+    removeItem.mockRestore();
+  });
+
+  it("keeps the frozen request and focuses the error after a maintenance response", async () => {
+    const decide = vi.fn().mockRejectedValue(new apiModule.ApiError(503, { detail: "仓库维护中" }));
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({ ...apiModule.api, decideLoreReview: decide });
+    renderPanel();
+    await userEvent.click(await screen.findByRole("button", { name: /林岚 ↔ 林岚/ }));
+    await screen.findByRole("heading", { name: "核对这条设定线索" });
+    await userEvent.selectOptions(screen.getByLabelText("判断"), "deferred");
+    await userEvent.click(screen.getByRole("button", { name: "记录判断" }));
+    const trigger = screen.getByRole("button", { name: "记录判断" });
+    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认记录" }));
+    const alert = await screen.findByRole("alert");
+    await waitFor(() => expect(alert).toHaveFocus());
+    expect(trigger).not.toHaveFocus();
+    expect(decide).toHaveBeenCalledTimes(1);
+    expect(decide.mock.calls[0][2].operation_key).toMatch(/^review-/);
+    expect(screen.getByRole("button", { name: "使用相同请求安全重试" })).toBe(trigger);
+  });
+
+  it("keeps the selected clue and current focus when discarding the draft is declined", async () => {
+    const decide = apiModule.api.decideLoreReview;
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderPanel();
+    const card = await screen.findByRole("button", { name: /林岚 ↔ 林岚/ });
+    await userEvent.click(card);
+    await screen.findByRole("heading", { name: "核对这条设定线索" });
+    await userEvent.selectOptions(screen.getByLabelText("判断"), "deferred");
+    const back = screen.getByRole("button", { name: "← 返回线索列表" });
+    await userEvent.click(back);
+    expect(back).toHaveFocus();
+    expect(screen.getByRole("heading", { name: "核对这条设定线索" })).toBeInTheDocument();
+    expect(card).toHaveAttribute("aria-current", "true");
+    expect(card).not.toHaveFocus();
+    expect(screen.getByRole("heading", { name: "复核线索" })).not.toHaveFocus();
+    expect(decide).not.toHaveBeenCalled();
   });
 
   it("blocks decisions when evidence is stale", async () => {

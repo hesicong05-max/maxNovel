@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "@/services/api";
 import LoreMergeWizard from "@/components/LoreMergeWizard";
 import {
@@ -129,6 +129,9 @@ export default function LoreReviewPanel({
   const detailHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const errorRef = useRef<HTMLDivElement | null>(null);
   const confirmRef = useRef<HTMLDivElement | null>(null);
+  const decisionTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const decisionCancelRef = useRef<HTMLButtonElement | null>(null);
+  const listHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const cardRefs = useRef(new Map<string, HTMLButtonElement>());
 
   const draftScope = useMemo<DraftScope | null>(() => selectedId ? ({
@@ -150,7 +153,7 @@ export default function LoreReviewPanel({
     if (detailError || storageError) requestAnimationFrame(() => errorRef.current?.focus());
   }, [detailError, storageError]);
   useEffect(() => {
-    if (confirmOpen) requestAnimationFrame(() => confirmRef.current?.focus());
+    if (confirmOpen) requestAnimationFrame(() => decisionCancelRef.current?.focus());
   }, [confirmOpen]);
 
   useEffect(() => {
@@ -273,6 +276,50 @@ export default function LoreReviewPanel({
     if (id !== selectedId && reviewDirty && !discardDraft()) return;
     setNotice("");
     setSelectedId(id);
+  }
+
+  function closeDecisionConfirmation() {
+    if (busy === "decide") return;
+    setConfirmOpen(false);
+    requestAnimationFrame(() => {
+      const trigger = decisionTriggerRef.current;
+      if (trigger?.isConnected) trigger.focus();
+    });
+  }
+
+  function handleDecisionConfirmationKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeDecisionConfirmation();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
+      "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])",
+    ));
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function returnToReviewList() {
+    const returnId = selectedId;
+    if (!returnId) return;
+    if (reviewDirty && !window.confirm("确定放弃当前判断草稿吗？")) return;
+    if (reviewDirty && !discardDraft()) return;
+    setSelectedId(null);
+    requestAnimationFrame(() => {
+      const card = cardRefs.current.get(returnId);
+      if (card?.isConnected && !card.disabled) card.focus();
+      else listHeadingRef.current?.focus();
+    });
   }
 
   async function scan() {
@@ -440,7 +487,7 @@ export default function LoreReviewPanel({
       </form>
       <div className={`lore-workspace lore-review-workspace ${selectedId ? "has-selection" : ""}`}>
         <section className="lore-list" aria-busy={loading} aria-label="设定线索列表">
-          <div className="lore-list-heading"><h3>复核线索</h3><span aria-live="polite">{loading ? "加载中…" : `共 ${total} 项`}</span></div>
+          <div className="lore-list-heading"><h3 ref={listHeadingRef} tabIndex={-1}>复核线索</h3><span aria-live="polite">{loading ? "加载中…" : `共 ${total} 项`}</span></div>
           {!loading && !listError && total === 0 && <div className="lore-empty"><strong>当前没有待核对的线索</strong><span>这不表示仓库一定没有重复或冲突；可扫描正式设定，也可创建人工线索。</span></div>}
           {items.map((item) => <button
             key={item.id}
@@ -459,7 +506,7 @@ export default function LoreReviewPanel({
           {cursor && <button className="btn btn-secondary lore-load-more" type="button" disabled={loadingMore} onClick={loadMore}>{loadingMore ? "加载中…" : "加载更多"}</button>}
         </section>
         <aside className="lore-detail lore-review-detail" aria-label="线索详情">
-          {selectedId && <button className="btn btn-secondary lore-detail-back" type="button" onClick={() => { if (!reviewDirty || window.confirm("确定放弃当前判断草稿吗？")) { if (!reviewDirty || discardDraft()) setSelectedId(null); } }}>← 返回线索列表</button>}
+          {selectedId && <button className="btn btn-secondary lore-detail-back" type="button" onClick={returnToReviewList}>← 返回线索列表</button>}
           {!selectedId && <div className="lore-empty"><strong>选择一条复核线索</strong><span>可对比双方版本、相关字段和原始来源。</span></div>}
           {detailLoading && <div className="lore-empty">线索详情加载中…</div>}
           {(detailError || storageError) && <div ref={errorRef} tabIndex={-1} className="lore-alert" role="alert">{detailError || storageError}{(phase === "outcome_unknown" || phase === "conflict" || phase === "stale") && <button type="button" disabled={busy !== null} onClick={checkLatest}>{busy === "check" ? "核对中…" : "核对最新状态"}</button>}</div>}
@@ -481,7 +528,7 @@ export default function LoreReviewPanel({
               <label><span>判断</span><select className="form-select" value={decision} disabled={readOnly || busy !== null || detail.stale} onChange={(event) => updateDraft(event.target.value as Decision | "", note)}><option value="">请选择</option>{DECISIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
               <label><span>备注（可选，最多 500 字）</span><textarea className="form-textarea" maxLength={500} value={note} disabled={readOnly || busy !== null || detail.stale} onChange={(event) => updateDraft(decision, event.target.value)} /></label>
               <p>提交只记录人工判断，不会自动合并、删除、停用或改写任何设定。</p>
-              <button className="btn btn-primary" type="submit" disabled={readOnly || busy !== null || detail.stale || !decision || Boolean(storageError)}>{busy === "decide" ? "记录中…" : frozenInput ? "使用相同请求安全重试" : "记录判断"}</button>
+              <button ref={decisionTriggerRef} className="btn btn-primary" type="submit" disabled={readOnly || busy !== null || detail.stale || !decision || Boolean(storageError)}>{busy === "decide" ? "记录中…" : frozenInput && phase !== "draft" ? "使用相同请求安全重试" : "记录判断"}</button>
             </form>
             <LoreMergeWizard
               key={`${detail.id}-${detail.evidence_revision}`}
@@ -505,7 +552,7 @@ export default function LoreReviewPanel({
           </>}
         </aside>
       </div>
-      {confirmOpen && frozenInput && <div className="modal-overlay"><div ref={confirmRef} tabIndex={-1} className="modal-content lore-review-confirm" role="alertdialog" aria-modal="true" aria-labelledby="review-confirm-title"><h2 id="review-confirm-title">确认记录“{STATUS_LABEL[frozenInput.decision]}”</h2><p>这只会记录人工判断，不会自动合并、删除、停用或改写任何设定，两项设定及生成权限保持不变。</p><div className="modal-actions"><button className="btn btn-secondary" type="button" onClick={() => setConfirmOpen(false)}>取消</button><button className="btn btn-primary" type="button" onClick={submitDecision}>确认记录</button></div></div></div>}
+      {confirmOpen && frozenInput && <div className="modal-overlay"><div ref={confirmRef} tabIndex={-1} className="modal-content lore-review-confirm" role="alertdialog" aria-modal="true" aria-labelledby="review-confirm-title" onKeyDown={handleDecisionConfirmationKeyDown}><h2 id="review-confirm-title">确认记录“{STATUS_LABEL[frozenInput.decision]}”</h2><p>这只会记录人工判断，不会自动合并、删除、停用或改写任何设定，两项设定及生成权限保持不变。</p><div className="modal-actions"><button ref={decisionCancelRef} className="btn btn-secondary" type="button" onClick={closeDecisionConfirmation}>取消</button><button className="btn btn-primary" type="button" onClick={submitDecision}>确认记录</button></div></div></div>}
     </section>
   );
 }
