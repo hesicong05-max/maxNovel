@@ -114,8 +114,82 @@
   overflow-wrap: anywhere;
 }
 
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  inline-size: 100%;
+  block-size: 100dvh;
+  padding:
+    max(1rem, env(safe-area-inset-top))
+    max(1rem, env(safe-area-inset-right))
+    max(1rem, env(safe-area-inset-bottom))
+    max(1rem, env(safe-area-inset-left));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: rgb(20 18 16 / 58%);
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .modal-overlay > .lore-merge-confirm {
+  box-sizing: border-box;
+  inline-size: min(35rem, 100%);
+  max-inline-size: 100%;
+  max-block-size: calc(
+    100dvh - max(1rem, env(safe-area-inset-top)) - max(1rem, env(safe-area-inset-bottom))
+  );
+  min-inline-size: 0;
+  min-block-size: 0;
+  padding: clamp(1rem, 3vw, 1.25rem);
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--studio-border-strong);
+  border-radius: var(--studio-radius-lg);
+  background: var(--studio-surface);
+  box-shadow: 0 18px 48px rgb(26 46 40 / 24%);
+  overflow-wrap: anywhere;
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .modal-overlay > .lore-merge-confirm > .modal-actions {
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.625rem;
+  margin: 0;
+  padding-top: var(--studio-space-3);
+  border-top: 1px solid var(--studio-border);
+  background: var(--studio-surface);
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .modal-overlay > .lore-merge-confirm > .modal-actions > .btn {
+  min-height: 2.75rem;
+}
+
 @media (max-width: 64rem) {
   .lore-page--studio .lore-review-detail > .lore-merge-wizard > .lore-merge-preview > dl {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 30rem), (max-height: 22rem) {
+  .lore-page--studio .lore-review-detail > .lore-merge-wizard > .modal-overlay {
+    align-items: flex-start;
+  }
+
+  .lore-page--studio .lore-review-detail > .lore-merge-wizard > .modal-overlay > .lore-merge-confirm {
+    inline-size: 100%;
+  }
+
+  .lore-page--studio .lore-review-detail > .lore-merge-wizard > .modal-overlay > .lore-merge-confirm > .modal-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .lore-page--studio .lore-review-detail > .lore-merge-wizard > .modal-overlay > .lore-merge-confirm > .modal-actions > .btn {
+    inline-size: 100%;
   }
 }
