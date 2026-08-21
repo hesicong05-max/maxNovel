@@ -7,6 +7,7 @@ import "@/styles/tokens.css";
 import "@/styles/global.css";
 import "@/styles/workspace-shell.css";
 import "@/styles/chapter-planning.css";
+import "@/styles/generation-workbench.css";
 import "@/styles/project-hub.css";
 import "@/styles/lore-repository.css";
 import "@/styles/foreshadow-planning.css";
