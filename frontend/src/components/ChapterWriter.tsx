@@ -20,6 +20,20 @@ const MAX_WC = 10000;
 
 type BatchStatus = "idle" | "running" | "done" | "error";
 
+interface ActiveStream {
+  token: number;
+  kind: "single" | "batch";
+  projectId: string;
+  chapterNum: number | null;
+  controller: AbortController;
+}
+
+interface ActiveSave {
+  token: number;
+  projectId: string;
+  chapterNum: number;
+}
+
 export default function ChapterWriter({ projectId, totalChapters, onProgress, onBack }: Props) {
   // === Chapter list state ===
   const [chapters, setChapters] = useState<ChapterListItem[]>([]);
@@ -34,6 +48,7 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
   // === Word count config state ===
@@ -57,22 +72,51 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
 
   // === AbortController for SSE streams ===
   const abortRef = useRef<AbortController | null>(null);
+  const activeStreamRef = useRef<ActiveStream | null>(null);
+  const streamTokenRef = useRef(0);
+  const activeSaveRef = useRef<ActiveSave | null>(null);
+  const saveTokenRef = useRef(0);
   const chapterSelectionRequestRef = useRef(0);
+  const mountedRef = useRef(false);
+  const contextRef = useRef({ projectId, totalChapters });
+  contextRef.current = { projectId, totalChapters };
 
   // Cancel any active SSE stream on unmount
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      if (abortRef.current) {
-        abortRef.current.abort();
-        abortRef.current = null;
-      }
+      mountedRef.current = false;
+      streamTokenRef.current += 1;
+      activeStreamRef.current?.controller.abort();
+      activeStreamRef.current = null;
+      abortRef.current = null;
+      saveTokenRef.current += 1;
+      activeSaveRef.current = null;
     };
   }, []);
 
   useEffect(() => {
     chapterSelectionRequestRef.current += 1;
-    loadChapters();
-    loadWordCounts();
+    streamTokenRef.current += 1;
+    activeStreamRef.current?.controller.abort();
+    activeStreamRef.current = null;
+    abortRef.current = null;
+    saveTokenRef.current += 1;
+    activeSaveRef.current = null;
+    setStreaming(false);
+    setBatchStatus("idle");
+    setBatchProgress({ current: 0, total: 0 });
+    setBatchCurrentCh(null);
+    setBatchContent("");
+    setBatchLog([]);
+    setSavingEdit(false);
+    setEditing(false);
+    setChapters([]);
+    setCurrentChapter(null);
+    setStreamContent("");
+    setMeta(null);
+    loadChapters(projectId, totalChapters);
+    loadWordCounts(projectId);
   }, [projectId, totalChapters]);
 
   useEffect(() => {
@@ -85,24 +129,58 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
 
   // === Load functions ===
 
-  async function loadChapters() {
+  function isCurrentContext(expectedProjectId: string, expectedTotalChapters = totalChapters) {
+    return mountedRef.current
+      && contextRef.current.projectId === expectedProjectId
+      && contextRef.current.totalChapters === expectedTotalChapters;
+  }
+
+  function isActiveStream(stream: ActiveStream) {
+    return activeStreamRef.current?.token === stream.token
+      && activeStreamRef.current.controller === stream.controller
+      && isCurrentContext(stream.projectId);
+  }
+
+  function isActiveSave(save: ActiveSave) {
+    return activeSaveRef.current?.token === save.token
+      && activeSaveRef.current.projectId === save.projectId
+      && activeSaveRef.current.chapterNum === save.chapterNum
+      && isCurrentContext(save.projectId);
+  }
+
+  async function loadChapters(
+    expectedProjectId = projectId,
+    expectedTotalChapters = totalChapters,
+    preserveChapter: number | null = null,
+    isStillActive?: () => boolean
+  ) {
     try {
-      const data = await api.listChapters(projectId);
+      const data = await api.listChapters(expectedProjectId);
+      if (!isCurrentContext(expectedProjectId, expectedTotalChapters) || (isStillActive && !isStillActive())) {
+        return false;
+      }
       setChapters(data);
-      if (data.length === 0) {
+      if (preserveChapter !== null && preserveChapter >= 1 && preserveChapter <= expectedTotalChapters) {
+        setCurrentChapter(preserveChapter);
+      } else if (data.length === 0) {
         setCurrentChapter(1);
       } else {
         const maxNum = Math.max(...data.map((c) => c.chapter_num));
-        setCurrentChapter(maxNum < totalChapters ? maxNum + 1 : maxNum);
+        setCurrentChapter(maxNum < expectedTotalChapters ? maxNum + 1 : maxNum);
       }
+      return true;
     } catch (e) {
-      console.error("Failed to load chapters:", e);
+      if (isCurrentContext(expectedProjectId, expectedTotalChapters)) {
+        console.error("Failed to load chapters:", e);
+      }
+      return false;
     }
   }
 
-  async function loadWordCounts() {
+  async function loadWordCounts(expectedProjectId = projectId) {
     try {
-      const config = await api.getWordCounts(projectId);
+      const config = await api.getWordCounts(expectedProjectId);
+      if (!isCurrentContext(expectedProjectId)) return;
       setWcConfig(config);
       setWcTotal(config.total_word_count ? String(config.total_word_count) : "");
       const overrides: Record<number, string> = {};
@@ -113,53 +191,85 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
       }
       setWcOverrides(overrides);
     } catch (e) {
-      console.error("Failed to load word counts:", e);
+      if (isCurrentContext(expectedProjectId)) console.error("Failed to load word counts:", e);
     }
   }
 
   // === Single chapter generation ===
 
   async function handleGenerate() {
-    if (!currentChapter || streaming || batchStatus === "running") return;
+    if (!currentChapter || activeStreamRef.current || activeSaveRef.current) return;
+    const frozenProjectId = projectId;
+    const frozenChapter = currentChapter;
+    const controller = new AbortController();
+    const activeStream: ActiveStream = {
+      token: ++streamTokenRef.current,
+      kind: "single",
+      projectId: frozenProjectId,
+      chapterNum: frozenChapter,
+      controller,
+    };
+    activeStreamRef.current = activeStream;
+    abortRef.current = controller;
     setStreaming(true);
     setStreamContent("");
     setMeta(null);
-    // Create a new AbortController for this stream
-    const controller = new AbortController();
-    abortRef.current = controller;
     try {
       let fullContent = "";
       let receivedTerminalEvent = false;
-      for await (const msg of api.streamChapter(projectId, currentChapter, controller.signal)) {
+      for await (const msg of api.streamChapter(frozenProjectId, frozenChapter, controller.signal)) {
+        if (!isActiveStream(activeStream)) return;
         if (msg.type === "metadata") { setMeta(msg); }
-        else if (msg.type === "content" && msg.text) { fullContent += msg.text; setStreamContent(fullContent); }
+        else if (msg.type === "content" && msg.text) {
+          fullContent += msg.text;
+          setStreamContent(fullContent);
+        }
         else if (msg.type === "complete") {
           receivedTerminalEvent = true;
-          await loadChapters();
+          await loadChapters(
+            frozenProjectId,
+            totalChapters,
+            frozenChapter,
+            () => isActiveStream(activeStream)
+          );
+          if (!isActiveStream(activeStream)) return;
           onProgress();
         }
         else if (msg.type === "error") {
           receivedTerminalEvent = true;
           alert("生成失败: " + msg.error);
-          await loadChapters();
+          await loadChapters(
+            frozenProjectId,
+            totalChapters,
+            frozenChapter,
+            () => isActiveStream(activeStream)
+          );
           break;
         }
       }
-      if (!receivedTerminalEvent && !controller.signal.aborted) {
+      if (isActiveStream(activeStream) && !receivedTerminalEvent && !controller.signal.aborted) {
         alert("生成连接意外中断，未确认章节是否完成，请重试");
-        await loadChapters();
+        await loadChapters(
+          frozenProjectId,
+          totalChapters,
+          frozenChapter,
+          () => isActiveStream(activeStream)
+        );
       }
     } catch (e) {
-      if (controller.signal.aborted) return; // Ignore abort errors
+      if (controller.signal.aborted || !isActiveStream(activeStream)) return;
       alert("生成失败: " + (e as Error).message);
     } finally {
-      setStreaming(false);
-      abortRef.current = null;
+      if (activeStreamRef.current?.token === activeStream.token) {
+        activeStreamRef.current = null;
+        if (abortRef.current === controller) abortRef.current = null;
+        setStreaming(false);
+      }
     }
   }
 
   async function handleSelectChapter(chNum: number) {
-    if (batchStatus === "running") return;
+    if (activeStreamRef.current || activeSaveRef.current) return;
     const requestId = ++chapterSelectionRequestRef.current;
     setCurrentChapter(chNum);
     setStreamContent("");
@@ -173,15 +283,38 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
   }
 
   async function handleSaveEdit() {
-    if (!currentChapter) return;
+    if (!currentChapter || activeStreamRef.current || activeSaveRef.current) return;
+    const frozenProjectId = projectId;
+    const frozenChapter = currentChapter;
+    const frozenTitle = editTitle;
+    const frozenContent = editContent;
+    const activeSave: ActiveSave = {
+      token: ++saveTokenRef.current,
+      projectId: frozenProjectId,
+      chapterNum: frozenChapter,
+    };
+    activeSaveRef.current = activeSave;
+    setSavingEdit(true);
     try {
-      await api.updateChapter(projectId, currentChapter, { title: editTitle, content: editContent });
-      setStreamContent(editContent);
+      await api.updateChapter(frozenProjectId, frozenChapter, { title: frozenTitle, content: frozenContent });
+      if (!isActiveSave(activeSave)) return;
+      setStreamContent(frozenContent);
       setEditing(false);
-      await loadChapters();
+      await loadChapters(
+        frozenProjectId,
+        totalChapters,
+        frozenChapter,
+        () => isActiveSave(activeSave)
+      );
+      if (!isActiveSave(activeSave)) return;
       onProgress();
     } catch (e) {
-      alert("保存失败: " + (e as Error).message);
+      if (isActiveSave(activeSave)) alert("保存失败: " + (e as Error).message);
+    } finally {
+      if (activeSaveRef.current?.token === activeSave.token) {
+        activeSaveRef.current = null;
+        setSavingEdit(false);
+      }
     }
   }
 
@@ -256,21 +389,29 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
   // === Batch generation ===
 
   async function handleBatchGenerate() {
-    if (batchStatus === "running" || streaming) return;
+    if (activeStreamRef.current || activeSaveRef.current) return;
+    const frozenProjectId = projectId;
+    const controller = new AbortController();
+    const activeStream: ActiveStream = {
+      token: ++streamTokenRef.current,
+      kind: "batch",
+      projectId: frozenProjectId,
+      chapterNum: null,
+      controller,
+    };
+    activeStreamRef.current = activeStream;
+    abortRef.current = controller;
     setBatchStatus("running");
     setBatchContent("");
     setBatchLog([]);
     setBatchProgress({ current: 0, total: 0 });
     setBatchCurrentCh(null);
 
-    // Create a new AbortController for this batch stream
-    const controller = new AbortController();
-    abortRef.current = controller;
-
     try {
       let currentChContent = "";
       let receivedBatchComplete = false;
-      for await (const msg of api.streamBatchGenerate(projectId, batchSkipExisting, controller.signal)) {
+      for await (const msg of api.streamBatchGenerate(frozenProjectId, batchSkipExisting, controller.signal)) {
+        if (!isActiveStream(activeStream)) return;
         if (msg.type === "batch_start") {
           setBatchProgress({ current: 0, total: msg.total_to_generate || 0 });
         }
@@ -304,21 +445,32 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
         }
         else if (msg.type === "batch_complete") {
           receivedBatchComplete = true;
-          setBatchStatus("done");
         }
       }
+      if (!isActiveStream(activeStream)) return;
+      const finalStatus: BatchStatus = receivedBatchComplete ? "done" : "error";
       if (!receivedBatchComplete && !controller.signal.aborted) {
-        setBatchStatus("error");
         alert("批量生成连接意外中断，请检查已保存章节后重试");
       }
-      await loadChapters();
+      await loadChapters(
+        frozenProjectId,
+        totalChapters,
+        null,
+        () => isActiveStream(activeStream)
+      );
+      if (!isActiveStream(activeStream)) return;
+      setBatchStatus(finalStatus);
       onProgress();
     } catch (e) {
-      if (controller.signal.aborted) { setBatchStatus("idle"); return; }
+      if (controller.signal.aborted || !isActiveStream(activeStream)) return;
       setBatchStatus("error");
       alert("批量生成失败: " + (e as Error).message);
     } finally {
-      abortRef.current = null;
+      if (activeStreamRef.current?.token === activeStream.token) {
+        activeStreamRef.current = null;
+        if (abortRef.current === controller) abortRef.current = null;
+        if (controller.signal.aborted) setBatchStatus("idle");
+      }
     }
   }
 
@@ -326,7 +478,14 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
 
   const generatedChapters = chapters.filter((c) => c.status !== "pending").length;
   const totalWords = chapters.reduce((sum, c) => sum + c.word_count, 0);
-  const isBusy = streaming || batchStatus === "running";
+  const isBusy = streaming || batchStatus === "running" || savingEdit;
+  const chapterBusyMessage = streaming
+    ? `正在生成第 ${currentChapter} 章；当前预览和新增内容均属于第 ${currentChapter} 章，完成或失败后可切换章节。`
+    : savingEdit
+      ? `正在保存第 ${currentChapter} 章；保存完成或失败后可切换章节。`
+      : batchStatus === "running"
+        ? "正在批量生成章节，完成或失败后可切换章节。"
+        : "";
 
   return (
     <div>
@@ -499,13 +658,31 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
             <span>章节</span>
             <span style={{ color: "var(--text-3)" }}>{generatedChapters}/{totalChapters}</span>
           </div>
+          {chapterBusyMessage && (
+            <p
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              style={{ margin: "0 0 0.625rem", fontSize: "11px", lineHeight: 1.6, color: "var(--text-2)", overflowWrap: "anywhere" }}
+            >
+              {chapterBusyMessage}
+            </p>
+          )}
           <ul className="chapter-list">
             {Array.from({ length: totalChapters }, (_, i) => i + 1).map((num) => {
               const ch = chapters.find((c) => c.chapter_num === num);
               const isGenerated = ch && ch.status !== "pending";
               const isCurrent = currentChapter === num;
               return (
-                <li key={num} onClick={() => handleSelectChapter(num)} style={{ background: isCurrent ? "var(--gold-light)" : undefined }}>
+                <li
+                  key={num}
+                  aria-disabled={isBusy || undefined}
+                  onClick={() => handleSelectChapter(num)}
+                  style={{
+                    background: isCurrent ? "var(--gold-light)" : undefined,
+                    cursor: isBusy ? "not-allowed" : undefined,
+                  }}
+                >
                   <div className={`chapter-num ${isGenerated ? "completed" : ""} ${isCurrent ? "current" : ""}`}>{num}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: "12px", fontWeight: isCurrent ? 600 : 400, color: isCurrent ? "var(--gold-dark)" : "var(--text-2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -549,9 +726,11 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
             ) : (
               <>
                 <button className="btn btn-primary" onClick={handleGenerate} disabled={!currentChapter || isBusy}>
-                  {chapters.find((c) => c.chapter_num === currentChapter)?.status === "generated" || chapters.find((c) => c.chapter_num === currentChapter)?.status === "edited"
-                    ? `重新生成第${currentChapter}章`
-                    : `生成第${currentChapter}章`}
+                  {!currentChapter
+                    ? "读取章节中..."
+                    : chapters.find((c) => c.chapter_num === currentChapter)?.status === "generated" || chapters.find((c) => c.chapter_num === currentChapter)?.status === "edited"
+                      ? `重新生成第${currentChapter}章`
+                      : `生成第${currentChapter}章`}
                 </button>
                 {streamContent && !editing && (
                   <button className="btn" onClick={() => { setEditing(true); setEditTitle(meta?.title || `第${currentChapter}章`); setEditContent(streamContent); }}>
@@ -582,23 +761,30 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
           {/* Content display */}
           {editing ? (
             <div>
-              <input className="form-input" style={{ marginBottom: "0.5rem", fontWeight: 600 }} value={editTitle} onChange={(e) => setEditTitle(e.target.value)} />
+              <input className="form-input" style={{ marginBottom: "0.5rem", fontWeight: 600 }} value={editTitle} onChange={(e) => setEditTitle(e.target.value)} disabled={savingEdit} />
               <textarea
                 className="form-textarea"
                 style={{ minHeight: "500px", fontFamily: "var(--font-serif)", fontSize: "16px", lineHeight: "2.1" }}
                 value={editContent}
                 onChange={(e) => setEditContent(e.target.value)}
+                disabled={savingEdit}
               />
               <div style={{ display: "flex", gap: "0.375rem", marginTop: "0.5rem" }}>
-                <button className="btn btn-primary" onClick={handleSaveEdit}>保存修改</button>
-                <button className="btn" onClick={() => setEditing(false)}>取消</button>
+                <button className="btn btn-primary" onClick={handleSaveEdit} disabled={savingEdit}>
+                  {savingEdit ? "保存中..." : "保存修改"}
+                </button>
+                <button className="btn" onClick={() => setEditing(false)} disabled={savingEdit}>取消</button>
               </div>
             </div>
           ) : (
             <div ref={contentRef} className="stream-content" style={{ maxHeight: "600px", overflowY: "auto" }}>
               {streamContent || (
                 <span style={{ color: "var(--text-3)" }}>
-                  {isBusy ? "批量生成进行中..." : `点击「生成第${currentChapter}章」开始写作`}
+                  {streaming
+                    ? `第${currentChapter}章生成中...`
+                    : batchStatus === "running"
+                      ? "批量生成进行中..."
+                      : `点击「生成第${currentChapter}章」开始写作`}
                 </span>
               )}
               {streaming && <span className="cursor-blink" />}
