@@ -1,6 +1,7 @@
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "@/services/api";
 import { clearDraft, loadDraft, saveDraft, type DraftScope } from "@/services/maintenanceDrafts";
+import "@/styles/lore-merge-preview.css";
 import type {
   LoreElementDetail,
   LoreFieldDefinition,

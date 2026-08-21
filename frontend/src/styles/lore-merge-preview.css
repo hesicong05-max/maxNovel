@@ -1,0 +1,195 @@
+.lore-page--studio .lore-review-detail > .lore-merge-entry {
+  min-width: 0;
+  border-color: var(--studio-border);
+  border-radius: var(--studio-radius-lg);
+  background: var(--studio-surface-muted);
+  box-shadow: none;
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-entry > :is(h3, p:not(.lore-note)) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-entry > h3 {
+  color: var(--studio-ink);
+  font-family: var(--font-serif);
+  font-size: clamp(1.05rem, 2vw, 1.3rem);
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .lore-merge-preview {
+  min-width: 0;
+  gap: var(--studio-space-4);
+  padding: clamp(1rem, 2.5vw, 1.5rem);
+  border-color: var(--studio-border-strong);
+  border-left: 4px solid var(--studio-accent);
+  border-radius: var(--studio-radius-lg);
+  background: var(--studio-surface);
+  box-shadow: none;
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .lore-merge-preview > h4 {
+  min-width: 0;
+  color: var(--studio-ink);
+  font-family: var(--font-serif);
+  font-size: clamp(1.15rem, 2.2vw, 1.5rem);
+  overflow-wrap: anywhere;
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .lore-merge-preview > dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--studio-space-2);
+  min-width: 0;
+  margin: 0;
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .lore-merge-preview > dl > div {
+  min-width: 0;
+  padding: var(--studio-space-3);
+  border: 1px solid var(--studio-border);
+  border-radius: var(--studio-radius-md);
+  background: var(--studio-surface-muted);
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .lore-merge-preview > dl > div > dt {
+  color: var(--studio-mist);
+  font-size: 0.76rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .lore-merge-preview > dl > div > dd {
+  min-width: 0;
+  color: var(--studio-ink);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .lore-merge-preview > details {
+  min-width: 0;
+  padding: 0 var(--studio-space-3) var(--studio-space-3);
+  border: 1px solid var(--studio-border);
+  border-radius: var(--studio-radius-md);
+  background: var(--studio-surface-muted);
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .lore-merge-preview > details > summary {
+  min-width: 0;
+  min-height: 2.75rem;
+  color: var(--studio-accent-strong);
+  overflow-wrap: anywhere;
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .lore-merge-preview > details > p {
+  min-width: 0;
+  padding-top: var(--studio-space-2);
+  border-top: 1px solid var(--studio-border);
+  color: var(--studio-ink);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .lore-merge-preview > .lore-merge-relations {
+  min-width: 0;
+  padding-top: var(--studio-space-1);
+  border-top: 1px solid var(--studio-border);
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .lore-merge-preview > .lore-merge-relations > :is(h4, p),
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .lore-merge-preview > .lore-merge-relations > article:not(.is-blocker) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .lore-merge-preview > .lore-merge-relations > article:not(.is-blocker) {
+  border-color: var(--studio-border);
+  background: var(--studio-surface-muted);
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .lore-merge-preview > .lore-meta {
+  min-width: 0;
+  color: var(--studio-mist);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  inline-size: 100%;
+  block-size: 100dvh;
+  padding:
+    max(1rem, env(safe-area-inset-top))
+    max(1rem, env(safe-area-inset-right))
+    max(1rem, env(safe-area-inset-bottom))
+    max(1rem, env(safe-area-inset-left));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: rgb(20 18 16 / 58%);
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .modal-overlay > .lore-merge-confirm {
+  box-sizing: border-box;
+  inline-size: min(35rem, 100%);
+  max-inline-size: 100%;
+  max-block-size: calc(
+    100dvh - max(1rem, env(safe-area-inset-top)) - max(1rem, env(safe-area-inset-bottom))
+  );
+  min-inline-size: 0;
+  min-block-size: 0;
+  padding: clamp(1rem, 3vw, 1.25rem);
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--studio-border-strong);
+  border-radius: var(--studio-radius-lg);
+  background: var(--studio-surface);
+  box-shadow: 0 18px 48px rgb(26 46 40 / 24%);
+  overflow-wrap: anywhere;
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .modal-overlay > .lore-merge-confirm > .modal-actions {
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.625rem;
+  margin: 0;
+  padding-top: var(--studio-space-3);
+  border-top: 1px solid var(--studio-border);
+  background: var(--studio-surface);
+}
+
+.lore-page--studio .lore-review-detail > .lore-merge-wizard > .modal-overlay > .lore-merge-confirm > .modal-actions > .btn {
+  min-height: 2.75rem;
+}
+
+@media (max-width: 64rem) {
+  .lore-page--studio .lore-review-detail > .lore-merge-wizard > .lore-merge-preview > dl {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 30rem), (max-height: 22rem) {
+  .lore-page--studio .lore-review-detail > .lore-merge-wizard > .modal-overlay {
+    align-items: flex-start;
+  }
+
+  .lore-page--studio .lore-review-detail > .lore-merge-wizard > .modal-overlay > .lore-merge-confirm {
+    inline-size: 100%;
+  }
+
+  .lore-page--studio .lore-review-detail > .lore-merge-wizard > .modal-overlay > .lore-merge-confirm > .modal-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .lore-page--studio .lore-review-detail > .lore-merge-wizard > .modal-overlay > .lore-merge-confirm > .modal-actions > .btn {
+    inline-size: 100%;
+  }
+}
