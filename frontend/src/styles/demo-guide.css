@@ -1,0 +1,155 @@
+.project-workspace-shell .demo-guide {
+  min-width: 0;
+  padding: var(--studio-space-4);
+  border-color: var(--studio-border);
+  border-radius: var(--studio-radius-lg);
+  background: var(--studio-surface);
+  box-shadow: none;
+}
+
+.project-workspace-shell .demo-guide > p {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--studio-space-3) var(--studio-space-5);
+  color: var(--studio-mist);
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.project-workspace-shell .demo-guide > p strong {
+  color: var(--studio-ink);
+  font-family: var(--font-serif);
+  font-size: clamp(1rem, 1.6vw, 1.2rem);
+  line-height: 1.3;
+}
+
+.project-workspace-shell .demo-guide > p span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.project-workspace-shell .demo-guide ol {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--studio-space-2);
+  margin-top: var(--studio-space-4);
+}
+
+.project-workspace-shell .demo-guide li {
+  min-width: 0;
+}
+
+.project-workspace-shell .demo-guide a {
+  position: relative;
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  align-items: center;
+  min-width: 0;
+  min-height: 44px;
+  gap: var(--studio-space-2);
+  padding: 0.65rem 0.75rem;
+  border-color: var(--studio-border);
+  border-radius: var(--studio-radius-md);
+  background: var(--studio-surface-muted);
+  color: var(--studio-mist);
+  font-size: 0.84rem;
+  font-weight: 650;
+  line-height: 1.3;
+  transition: transform 140ms var(--studio-ease);
+}
+
+.project-workspace-shell .demo-guide a > span {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border: 1px solid var(--studio-border-strong);
+  border-radius: 999px;
+  color: var(--studio-accent-strong);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.project-workspace-shell .demo-guide a:hover {
+  border-color: var(--studio-border-strong);
+  background: var(--studio-surface);
+  color: var(--studio-accent-strong);
+}
+
+.project-workspace-shell .demo-guide a:active {
+  transform: translateY(1px);
+}
+
+.project-workspace-shell .demo-guide a[aria-current="step"] {
+  border-color: color-mix(in srgb, var(--studio-accent) 42%, var(--studio-border));
+  background: var(--studio-accent-soft);
+  color: var(--studio-accent-strong);
+  font-weight: 750;
+}
+
+.project-workspace-shell .demo-guide a[aria-current="step"]::after {
+  position: absolute;
+  right: 0.65rem;
+  bottom: 0.35rem;
+  left: 0.65rem;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--studio-accent);
+  content: "";
+}
+
+.project-workspace-shell .demo-guide a[aria-current="step"] > span {
+  border-color: var(--studio-accent);
+  background: var(--studio-surface);
+}
+
+.project-workspace-shell .demo-guide a:focus-visible {
+  outline: 3px solid var(--studio-focus);
+  outline-offset: 3px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .project-workspace-shell .demo-guide a:hover {
+    transform: translateY(-2px);
+  }
+
+  .project-workspace-shell .demo-guide a:active {
+    transform: translateY(1px);
+  }
+}
+
+@media (max-width: 640px) {
+  .project-workspace-shell .demo-guide > p {
+    grid-template-columns: 1fr;
+    gap: var(--studio-space-1);
+  }
+
+  .project-workspace-shell .demo-guide ol {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 340px) {
+  .project-workspace-shell .demo-guide ol {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .project-workspace-shell .demo-guide a:hover,
+  .project-workspace-shell .demo-guide a:active {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-workspace-shell .demo-guide a {
+    transition: none;
+  }
+
+  .project-workspace-shell .demo-guide a:hover,
+  .project-workspace-shell .demo-guide a:active {
+    transform: none;
+  }
+}

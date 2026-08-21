@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import "@/styles/demo-guide.css";
 
 interface Props { projectId: string; current: 1 | 2 | 3 | 4 | 5; chapterId?: string | null; elementId?: string | null; foreshadowLifecycleId?: string | null; }
 const labels = ["项目总览", "设定仓库", "章节规划", "伏笔计划", "技术模拟"] as const;
