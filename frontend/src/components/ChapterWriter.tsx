@@ -41,6 +41,7 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
 
   // === Single chapter generation state ===
   const [streamContent, setStreamContent] = useState("");
+  const [contentTitle, setContentTitle] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [meta, setMeta] = useState<StreamMessage | null>(null);
 
@@ -114,6 +115,7 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
     setChapters([]);
     setCurrentChapter(null);
     setStreamContent("");
+    setContentTitle(null);
     setMeta(null);
     loadChapters(projectId, totalChapters);
     loadWordCounts(projectId);
@@ -219,7 +221,18 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
       let receivedTerminalEvent = false;
       for await (const msg of api.streamChapter(frozenProjectId, frozenChapter, controller.signal)) {
         if (!isActiveStream(activeStream)) return;
-        if (msg.type === "metadata") { setMeta(msg); }
+        if (msg.type === "metadata") {
+          if (msg.chapter_num === undefined || msg.chapter_num === frozenChapter) {
+            setMeta(msg);
+          }
+          if (
+            msg.chapter_num === frozenChapter
+            && typeof msg.title === "string"
+            && msg.title.trim().length > 0
+          ) {
+            setContentTitle(msg.title);
+          }
+        }
         else if (msg.type === "content" && msg.text) {
           fullContent += msg.text;
           setStreamContent(fullContent);
@@ -273,12 +286,18 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
     const requestId = ++chapterSelectionRequestRef.current;
     setCurrentChapter(chNum);
     setStreamContent("");
+    setContentTitle(null);
     setMeta(null);
     setEditing(false);
     try {
       const ch = await api.getChapter(projectId, chNum);
       if (requestId !== chapterSelectionRequestRef.current) return;
-      if (ch.content) { setStreamContent(ch.content); setEditTitle(ch.title); setEditContent(ch.content); }
+      if (ch.content) {
+        setStreamContent(ch.content);
+        setContentTitle(ch.title);
+        setEditTitle(ch.title);
+        setEditContent(ch.content);
+      }
     } catch { /* chapter doesn't exist yet */ }
   }
 
@@ -299,6 +318,7 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
       await api.updateChapter(frozenProjectId, frozenChapter, { title: frozenTitle, content: frozenContent });
       if (!isActiveSave(activeSave)) return;
       setStreamContent(frozenContent);
+      setContentTitle(frozenTitle);
       setEditing(false);
       await loadChapters(
         frozenProjectId,
@@ -733,7 +753,7 @@ export default function ChapterWriter({ projectId, totalChapters, onProgress, on
                       : `生成第${currentChapter}章`}
                 </button>
                 {streamContent && !editing && (
-                  <button className="btn" onClick={() => { setEditing(true); setEditTitle(meta?.title || `第${currentChapter}章`); setEditContent(streamContent); }}>
+                  <button className="btn" onClick={() => { setEditing(true); setEditTitle(contentTitle ?? `第${currentChapter}章`); setEditContent(streamContent); }}>
                     编辑
                   </button>
                 )}

@@ -186,6 +186,8 @@ describe("ChapterWriter legacy compatibility characterization", () => {
     await act(async () => one.resolve(chapterDetail(1, "潮汐门限", "迟到的第一章")));
     expect(screen.queryByText("迟到的第一章")).not.toBeInTheDocument();
     expect(getChapter).toHaveBeenCalledTimes(2);
+    await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+    expect(screen.getByDisplayValue("禁航令")).toBeInTheDocument();
   });
 
   it("renders a single chapter stream in order and refreshes once after complete", async () => {
@@ -206,6 +208,70 @@ describe("ChapterWriter legacy compatibility characterization", () => {
     expect(streamChapter).toHaveBeenCalledTimes(1);
     expect(streamChapter).toHaveBeenCalledWith("project-1", 1, expect.any(AbortSignal));
     expect(view.onProgress).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+    expect(screen.getByDisplayValue("归潮")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["blank metadata title", { type: "metadata", chapter_num: 1, title: "   " } satisfies StreamMessage],
+    ["wrong chapter metadata", { type: "metadata", chapter_num: 2, title: "串线标题" } satisfies StreamMessage],
+  ])("keeps the loaded title when regeneration receives %s", async (_name, metadata) => {
+    const streamChapter = vi.fn(() => stream<StreamMessage>(
+      metadata,
+      { type: "content", text: "重新生成正文" },
+      { type: "complete", chapter_num: 1, word_count: 6 }
+    ));
+    mockApi({
+      listChapters: vi.fn().mockResolvedValue([chapterOne]),
+      getChapter: vi.fn().mockResolvedValue(chapterDetail(1, chapterOne.title, "原正文")),
+      streamChapter,
+    });
+    renderWriter({ totalChapters: 1 });
+    await userEvent.click(await screen.findByText(chapterOne.title));
+    await screen.findByText("原正文");
+    await userEvent.click(screen.getByRole("button", { name: "重新生成第1章" }));
+    expect(await screen.findByText("重新生成正文")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+
+    expect(screen.getByDisplayValue(chapterOne.title)).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("串线标题")).not.toBeInTheDocument();
+    expect(screen.queryByText("串线标题")).not.toBeInTheDocument();
+  });
+
+  it("uses valid metadata from the active regeneration as the new content title", async () => {
+    mockApi({
+      listChapters: vi.fn().mockResolvedValue([chapterOne]),
+      getChapter: vi.fn().mockResolvedValue(chapterDetail(1, chapterOne.title, "原正文")),
+      streamChapter: vi.fn(() => stream<StreamMessage>(
+        { type: "metadata", chapter_num: 1, title: "归潮新章" },
+        { type: "content", text: "重生成正文" },
+        { type: "complete", chapter_num: 1, word_count: 5 }
+      )),
+    });
+    renderWriter({ totalChapters: 1 });
+    await userEvent.click(await screen.findByText(chapterOne.title));
+    await screen.findByText("原正文");
+    await userEvent.click(screen.getByRole("button", { name: "重新生成第1章" }));
+    expect(await screen.findByText("重生成正文")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+
+    expect(screen.getByDisplayValue("归潮新章")).toBeInTheDocument();
+  });
+
+  it("falls back to the default chapter title when new content has no valid metadata title", async () => {
+    mockApi({
+      streamChapter: vi.fn(() => stream<StreamMessage>(
+        { type: "metadata", chapter_num: 2, title: "其他章节" },
+        { type: "content", text: "新章正文" },
+        { type: "complete", chapter_num: 1, word_count: 4 }
+      )),
+    });
+    renderWriter({ totalChapters: 1 });
+    await userEvent.click(await screen.findByRole("button", { name: "生成第1章" }));
+    expect(await screen.findByText("新章正文")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+
+    expect(screen.getByDisplayValue("第1章")).toBeInTheDocument();
   });
 
   it.each([
@@ -570,10 +636,37 @@ describe("ChapterWriter legacy compatibility characterization", () => {
     expect(updateChapter).toHaveBeenCalledWith("project-1", 1, { title: "新标题", content: "新正文" });
     expect(listChapters).toHaveBeenCalledTimes(2);
     expect(onProgress).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+    expect(screen.getByDisplayValue("新标题")).toBeInTheDocument();
+  });
+
+  it("preserves an authoritative custom title when only the chapter body changes", async () => {
+    const updateChapter = vi.fn().mockResolvedValue(chapterDetail(1, chapterOne.title, "修改后正文"));
+    mockApi({
+      listChapters: vi.fn().mockResolvedValue([chapterOne]),
+      getChapter: vi.fn().mockResolvedValue(chapterDetail(1, chapterOne.title, "修改前正文")),
+      updateChapter,
+    });
+    renderWriter({ totalChapters: 1 });
+    await userEvent.click(await screen.findByText(chapterOne.title));
+    await screen.findByText("修改前正文");
+    await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+    const body = screen.getByDisplayValue("修改前正文");
+    await userEvent.clear(body);
+    await userEvent.type(body, "修改后正文");
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+
+    await waitFor(() => expect(updateChapter).toHaveBeenCalledTimes(1));
+    expect(updateChapter).toHaveBeenCalledWith("project-1", 1, {
+      title: chapterOne.title,
+      content: "修改后正文",
+    });
   });
 
   it("keeps the editor content after a single failed save", async () => {
-    const updateChapter = vi.fn().mockRejectedValue(new Error("写入失败"));
+    const updateChapter = vi.fn()
+      .mockRejectedValueOnce(new Error("写入失败"))
+      .mockResolvedValueOnce(chapterDetail(1, "未保存标题", "保留正文，继续保留"));
     mockApi({
       listChapters: vi.fn().mockResolvedValue([chapterOne]),
       getChapter: vi.fn().mockResolvedValue(chapterDetail(1, chapterOne.title, "保留正文")),
@@ -583,13 +676,48 @@ describe("ChapterWriter legacy compatibility characterization", () => {
     await userEvent.click(await screen.findByText(chapterOne.title));
     await screen.findByText("保留正文");
     await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+    const title = screen.getByDisplayValue(chapterOne.title);
     const body = screen.getByDisplayValue("保留正文");
+    await userEvent.clear(title);
+    await userEvent.type(title, "未保存标题");
     await userEvent.type(body, "，继续保留");
     await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
 
     await waitFor(() => expect(alert).toHaveBeenCalledWith("保存失败: 写入失败"));
     expect(updateChapter).toHaveBeenCalledTimes(1);
+    expect(screen.getByDisplayValue("未保存标题")).toBeInTheDocument();
     expect(screen.getByDisplayValue("保留正文，继续保留")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(updateChapter).toHaveBeenCalledTimes(2));
+    expect(updateChapter).toHaveBeenLastCalledWith("project-1", 1, {
+      title: "未保存标题",
+      content: "保留正文，继续保留",
+    });
+    await screen.findByText("保留正文，继续保留");
+    await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+    expect(screen.getByDisplayValue("未保存标题")).toBeInTheDocument();
+  });
+
+  it("discards a cancelled edit draft and reopens from the authoritative title and body", async () => {
+    mockApi({
+      listChapters: vi.fn().mockResolvedValue([chapterOne]),
+      getChapter: vi.fn().mockResolvedValue(chapterDetail(1, chapterOne.title, "权威正文")),
+    });
+    renderWriter({ totalChapters: 1 });
+    await userEvent.click(await screen.findByText(chapterOne.title));
+    await screen.findByText("权威正文");
+    await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+    const title = screen.getByDisplayValue(chapterOne.title);
+    const body = screen.getByDisplayValue("权威正文");
+    await userEvent.clear(title);
+    await userEvent.type(title, "取消草稿标题");
+    await userEvent.clear(body);
+    await userEvent.type(body, "取消草稿正文");
+    await userEvent.click(screen.getByRole("button", { name: "取消" }));
+    await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+
+    expect(screen.getByDisplayValue(chapterOne.title)).toBeInTheDocument();
+    expect(screen.getByDisplayValue("权威正文")).toBeInTheDocument();
   });
 
   it("freezes one save to its source chapter and blocks duplicate save or chapter selection", async () => {
