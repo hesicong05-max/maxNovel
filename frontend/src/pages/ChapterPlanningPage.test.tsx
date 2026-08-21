@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -115,12 +115,27 @@ describe("ChapterPlanningPage", () => {
     const workspace = document.querySelector(".planning-workspace--studio");
     const support = document.querySelector(".planning-page__support");
     const statusStack = document.querySelector(".planning-status-stack");
+    const detailRegion = screen.getByRole("region", { name: "章节规划详情" });
 
     expect(workspace).toBeInTheDocument();
+    expect(detailRegion).toHaveClass("planning-workspace__detail");
+    expect(detailRegion.querySelector("h2")).toHaveTextContent("整部小说");
+    expect(document.querySelector(".planning-page main")).not.toBeInTheDocument();
     expect(statusStack).toContainElement(document.querySelector(".planning-live"));
     expect(workspace?.compareDocumentPosition(support as Node) ?? 0).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING
     );
+  });
+
+  it("keeps one named detail region while the plan is loading", async () => {
+    let resolvePlan: ((value: NovelPlan) => void) | undefined;
+    const pendingPlan = new Promise<NovelPlan>((resolve) => { resolvePlan = resolve; });
+    renderPage({ getPlanning: vi.fn(() => pendingPlan) });
+
+    expect(screen.getByRole("region", { name: "章节规划详情" })).toHaveTextContent("正在加载章节规划…");
+    expect(document.querySelector(".planning-page main")).not.toBeInTheDocument();
+    await act(async () => { resolvePlan?.(plan); });
+    expect(await screen.findByRole("navigation", { name: "篇章与章节结构" })).toBeInTheDocument();
   });
 
   it("shows explicit initialization and never creates planning automatically", async () => {
@@ -128,6 +143,7 @@ describe("ChapterPlanningPage", () => {
     const initializePlanning = vi.fn().mockResolvedValue({ ...plan, parts: [] });
     renderPage({ getPlanning, initializePlanning });
     expect(await screen.findByRole("heading", { name: "创建空白章节规划" })).toBeInTheDocument();
+    expect(screen.getAllByRole("region", { name: "章节规划详情" })).toHaveLength(1);
     expect(initializePlanning).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "创建章节规划" }));
     await waitFor(() => expect(initializePlanning).toHaveBeenCalledWith("project-1"));
@@ -416,7 +432,20 @@ describe("ChapterPlanningPage", () => {
   it("routes relational migration requirements to the lore repository", async () => {
     renderPage({ getPlanning: vi.fn().mockRejectedValue(new ApiError(409, { detail: "请先升级设定仓库。", code: "PLANNING_LORE_MIGRATION_REQUIRED" })) });
     expect(await screen.findByRole("heading", { name: "请先升级设定仓库" })).toBeInTheDocument();
+    expect(screen.getAllByRole("region", { name: "章节规划详情" })).toHaveLength(1);
     expect(screen.getAllByRole("link", { name: "打开设定仓库" })[1]).toHaveAttribute("href", "/project/project-1/lore?migration=preview");
+  });
+
+  it("keeps the named detail region for legacy planning", async () => {
+    renderPage({ getPlanning: vi.fn().mockRejectedValue(new ApiError(409, { detail: "检测到历史章节资料。", code: "PLANNING_LEGACY_IMPORT_REQUIRED" })) });
+    expect(await screen.findByRole("heading", { name: "检测到历史章节资料" })).toBeInTheDocument();
+    expect(screen.getAllByRole("region", { name: "章节规划详情" })).toHaveLength(1);
+  });
+
+  it("keeps the named detail region when planning fails to load", async () => {
+    renderPage({ getPlanning: vi.fn().mockRejectedValue(new ApiError(500, { detail: "网络错误" })) });
+    expect(await screen.findByRole("heading", { name: "规划暂时无法加载" })).toBeInTheDocument();
+    expect(screen.getAllByRole("region", { name: "章节规划详情" })).toHaveLength(1);
   });
 
   it("blocks new writes when a confirmed mutation cannot refresh the authoritative plan", async () => {

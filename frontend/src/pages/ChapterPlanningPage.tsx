@@ -2499,16 +2499,16 @@ export default function ChapterPlanningPage() {
       )}
       </div>
 
-      {loadState === "loading" && <div className="card empty-state planning-state-card">正在加载章节规划…</div>}
-      {loadState === "error" && <div className="card empty-state planning-state-card"><h2>规划暂时无法加载</h2><button className="btn btn-primary" onClick={() => loadPlan()}>重新加载</button></div>}
+      {loadState === "loading" && <section className="card empty-state planning-state-card" aria-label="章节规划详情">正在加载章节规划…</section>}
+      {loadState === "error" && <section className="card empty-state planning-state-card" aria-label="章节规划详情"><h2>规划暂时无法加载</h2><button className="btn btn-primary" onClick={() => loadPlan()}>重新加载</button></section>}
       {loadState === "uninitialized" && (
-        <section className="card empty-state planning-state-card"><h2>创建空白章节规划</h2><p>系统不会生成大纲，也不会覆盖现有正文。你可以自行建立篇章和章节。</p><button className="btn btn-primary" disabled={busy} onClick={initialize}>{busy ? "正在创建…" : "创建章节规划"}</button></section>
+        <section className="card empty-state planning-state-card" aria-label="章节规划详情"><h2>创建空白章节规划</h2><p>系统不会生成大纲，也不会覆盖现有正文。你可以自行建立篇章和章节。</p><button className="btn btn-primary" disabled={busy} onClick={initialize}>{busy ? "正在创建…" : "创建章节规划"}</button></section>
       )}
       {loadState === "migration" && (
-        <section className="card empty-state planning-state-card"><h2>请先升级设定仓库</h2><p>章节规划只会引用已确认的模块化设定。</p><Link className="btn btn-primary" to={`/project/${id}/lore?migration=preview`}>打开设定仓库</Link></section>
+        <section className="card empty-state planning-state-card" aria-label="章节规划详情"><h2>请先升级设定仓库</h2><p>章节规划只会引用已确认的模块化设定。</p><Link className="btn btn-primary" to={`/project/${id}/lore?migration=preview`}>打开设定仓库</Link></section>
       )}
       {loadState === "legacy" && (
-        <section className="card empty-state planning-state-card"><h2>检测到历史章节资料</h2><p>系统不会自动迁移或覆盖旧大纲、章节正文和故事记忆。</p><Link className="btn btn-primary" to={`/project/${id}`}>返回项目继续兼容流程</Link></section>
+        <section className="card empty-state planning-state-card" aria-label="章节规划详情"><h2>检测到历史章节资料</h2><p>系统不会自动迁移或覆盖旧大纲、章节正文和故事记忆。</p><Link className="btn btn-primary" to={`/project/${id}`}>返回项目继续兼容流程</Link></section>
       )}
 
       {loadState === "ready" && plan && (
@@ -2526,7 +2526,7 @@ export default function ChapterPlanningPage() {
               onDropChapter={dropChapter}
             />
           </aside>
-          <main className="card planning-workspace__detail">
+          <section className="card planning-workspace__detail" aria-label="章节规划详情">
             <button className="btn btn-secondary planning-mobile-back" onClick={returnToMobileStructure}>← 返回结构</button>
             {selection.kind === "novel" && <NovelDetail plan={plan} />}
             {selection.kind === "part" && located.part && (
@@ -2650,7 +2650,7 @@ export default function ChapterPlanningPage() {
               onRemove={(assignment) => changeLoreAssignment(assignment, "remove")}
               onRestore={(assignment) => changeLoreAssignment(assignment, "restore")}
             />
-          </main>
+          </section>
         </div>
       )}
 
