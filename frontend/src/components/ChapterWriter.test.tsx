@@ -66,6 +66,39 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function controlledStream<T>() {
+  type QueueItem = { done: false; value: T } | { done: true };
+  const queue: QueueItem[] = [];
+  let waiter: ((item: QueueItem) => void) | null = null;
+
+  async function* iterable(): AsyncGenerator<T> {
+    while (true) {
+      const item = queue.length > 0
+        ? queue.shift()!
+        : await new Promise<QueueItem>((resolve) => { waiter = resolve; });
+      waiter = null;
+      if (item.done) return;
+      yield item.value;
+    }
+  }
+
+  function enqueue(item: QueueItem) {
+    if (waiter) {
+      const resolve = waiter;
+      waiter = null;
+      resolve(item);
+    } else {
+      queue.push(item);
+    }
+  }
+
+  return {
+    iterable: iterable(),
+    push(value: T) { enqueue({ done: false, value }); },
+    finish() { enqueue({ done: true }); },
+  };
+}
+
 function renderWriter(overrides: Partial<React.ComponentProps<typeof ChapterWriter>> = {}) {
   const onProgress = vi.fn();
   const onBack = vi.fn();
@@ -211,6 +244,160 @@ describe("ChapterWriter legacy compatibility characterization", () => {
     expect(alert).not.toHaveBeenCalled();
   });
 
+  it("keeps the source chapter locked until its single stream completes", async () => {
+    const chapterStream = controlledStream<StreamMessage>();
+    let streamSignal: AbortSignal | undefined;
+    const getChapter = vi.fn((_project: string, chapter: number) => Promise.resolve(
+      chapterDetail(chapter, chapter === 1 ? chapterOne.title : chapterTwo.title, `第${chapter}章正文`)
+    ));
+    const streamChapter = vi.fn((_project: string, _chapter: number, signal: AbortSignal) => {
+      streamSignal = signal;
+      return chapterStream.iterable;
+    });
+    mockApi({
+      listChapters: vi.fn().mockResolvedValue([chapterOne, chapterTwo]),
+      getChapter,
+      streamChapter,
+    });
+    const { onProgress } = renderWriter({ totalChapters: 2 });
+    await userEvent.click(await screen.findByText(chapterOne.title));
+    await screen.findByText("第1章正文");
+    await userEvent.click(screen.getByRole("button", { name: "重新生成第1章" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("正在生成第 1 章");
+    expect(screen.getByText("第1章生成中...")).toBeInTheDocument();
+    expect(screen.queryByText("批量生成进行中...")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByText(chapterTwo.title));
+    expect(getChapter).toHaveBeenCalledTimes(1);
+    expect(streamSignal?.aborted).toBe(false);
+    expect(streamChapter).toHaveBeenCalledTimes(1);
+
+    await act(async () => chapterStream.push({ type: "content", text: "第一章流内容" }));
+    expect(await screen.findByText("第一章流内容")).toBeInTheDocument();
+    await act(async () => {
+      chapterStream.push({ type: "complete", chapter_num: 1, word_count: 7 });
+      chapterStream.finish();
+    });
+    await waitFor(() => expect(onProgress).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: "重新生成第1章" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByText(chapterTwo.title));
+    expect(await screen.findByText("第2章正文")).toBeInTheDocument();
+    expect(getChapter).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["error event", () => stream<StreamMessage>({ type: "error", error: "模型失败" }), "生成失败: 模型失败"],
+    ["missing terminal", () => stream<StreamMessage>({ type: "content", text: "未确认" }), "生成连接意外中断"],
+    ["generator throw", async function* () { throw new Error("网络断开"); }, "生成失败: 网络断开"],
+  ])("unlocks chapter selection after a single stream %s", async (_name, makeStream, message) => {
+    const getChapter = vi.fn((_project: string, chapter: number) => Promise.resolve(
+      chapterDetail(chapter, chapter === 1 ? chapterOne.title : chapterTwo.title, `第${chapter}章正文`)
+    ));
+    mockApi({
+      listChapters: vi.fn().mockResolvedValue([chapterOne, chapterTwo]),
+      getChapter,
+      streamChapter: vi.fn(makeStream),
+    });
+    renderWriter({ totalChapters: 2 });
+    await userEvent.click(await screen.findByText(chapterOne.title));
+    await screen.findByText("第1章正文");
+    await userEvent.click(screen.getByRole("button", { name: "重新生成第1章" }));
+    await waitFor(() => expect(alert).toHaveBeenCalledWith(expect.stringContaining(message)));
+
+    await userEvent.click(screen.getByText(chapterTwo.title));
+    expect(await screen.findByText("第2章正文")).toBeInTheDocument();
+    expect(getChapter).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts and ignores an old project stream even when it yields after abort", async () => {
+    const oldStream = controlledStream<StreamMessage>();
+    const newStream = controlledStream<StreamMessage>();
+    const signals = new Map<string, AbortSignal>();
+    const listChapters = vi.fn().mockResolvedValue([]);
+    const streamChapter = vi.fn((project: string, _chapter: number, signal: AbortSignal) => {
+      signals.set(project, signal);
+      return project === "project-1" ? oldStream.iterable : newStream.iterable;
+    });
+    mockApi({ listChapters, streamChapter });
+    const { rerender, onProgress, onBack } = renderWriter();
+    await userEvent.click(await screen.findByRole("button", { name: "生成第1章" }));
+    await waitFor(() => expect(streamChapter).toHaveBeenCalledTimes(1));
+
+    rerender(<ChapterWriter projectId="project-2" totalChapters={3} onProgress={onProgress} onBack={onBack} />);
+    expect(signals.get("project-1")?.aborted).toBe(true);
+    await userEvent.click(await screen.findByRole("button", { name: "生成第1章" }));
+    await waitFor(() => expect(streamChapter).toHaveBeenCalledTimes(2));
+
+    await act(async () => oldStream.push({ type: "content", text: "旧项目迟到正文" }));
+    expect(screen.queryByText("旧项目迟到正文")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("正在生成第 1 章");
+
+    await act(async () => newStream.push({ type: "content", text: "新项目正文" }));
+    expect(await screen.findByText("新项目正文")).toBeInTheDocument();
+    await act(async () => {
+      newStream.push({ type: "complete", chapter_num: 1, word_count: 5 });
+      newStream.finish();
+    });
+    await waitFor(() => expect(onProgress).toHaveBeenCalledTimes(1));
+    expect(listChapters.mock.calls.filter(([project]) => project === "project-1")).toHaveLength(1);
+    expect(streamChapter).toHaveBeenNthCalledWith(1, "project-1", 1, expect.any(AbortSignal));
+    expect(streamChapter).toHaveBeenNthCalledWith(2, "project-2", 1, expect.any(AbortSignal));
+  });
+
+  it("clears the old chapter identity while a new project list is still loading", async () => {
+    const projectTwoList = deferred<ChapterListItem[]>();
+    const streamChapter = vi.fn(() => stream<StreamMessage>());
+    const listChapters = vi.fn((project: string) => project === "project-1"
+      ? Promise.resolve([chapterOne, chapterTwo])
+      : projectTwoList.promise);
+    mockApi({ listChapters, streamChapter });
+    const { rerender, onProgress, onBack } = renderWriter({ totalChapters: 2 });
+    expect(await screen.findByRole("button", { name: "重新生成第2章" })).toBeInTheDocument();
+
+    rerender(<ChapterWriter projectId="project-2" totalChapters={1} onProgress={onProgress} onBack={onBack} />);
+    expect(await screen.findByRole("button", { name: "读取章节中..." })).toBeDisabled();
+    expect(screen.queryByText(chapterOne.title)).not.toBeInTheDocument();
+    expect(screen.queryByText(chapterTwo.title)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "读取章节中..." }));
+    expect(streamChapter).not.toHaveBeenCalled();
+
+    await act(async () => projectTwoList.resolve([]));
+    expect(await screen.findByRole("button", { name: "生成第1章" })).toBeEnabled();
+  });
+
+  it("rejects an old stream refresh after a project ABA switch", async () => {
+    const oldRefresh = deferred<ChapterListItem[]>();
+    let projectOneReads = 0;
+    const freshChapter = { ...chapterOne, title: "新会话权威章节" };
+    const listChapters = vi.fn((project: string) => {
+      if (project === "project-2") return Promise.resolve([]);
+      projectOneReads += 1;
+      if (projectOneReads === 1) return Promise.resolve([]);
+      if (projectOneReads === 2) return oldRefresh.promise;
+      return Promise.resolve([freshChapter]);
+    });
+    const streamChapter = vi.fn(() => stream<StreamMessage>(
+      { type: "complete", chapter_num: 1, word_count: 10 }
+    ));
+    mockApi({ listChapters, streamChapter });
+    const { rerender, onProgress, onBack } = renderWriter({ totalChapters: 1 });
+    await userEvent.click(await screen.findByRole("button", { name: "生成第1章" }));
+    await waitFor(() => expect(projectOneReads).toBe(2));
+
+    rerender(<ChapterWriter projectId="project-2" totalChapters={1} onProgress={onProgress} onBack={onBack} />);
+    await screen.findByRole("button", { name: "生成第1章" });
+    rerender(<ChapterWriter projectId="project-1" totalChapters={1} onProgress={onProgress} onBack={onBack} />);
+    expect(await screen.findByText("新会话权威章节")).toBeInTheDocument();
+
+    await act(async () => oldRefresh.resolve([{ ...chapterOne, title: "旧刷新章节" }]));
+    await act(async () => Promise.resolve());
+    expect(screen.queryByText("旧刷新章节")).not.toBeInTheDocument();
+    expect(screen.getByText("新会话权威章节")).toBeInTheDocument();
+    expect(onProgress).not.toHaveBeenCalled();
+    expect(streamChapter).toHaveBeenCalledTimes(1);
+  });
+
   it("records batch success and failure while preserving the default skip-existing flag", async () => {
     const listChapters = vi.fn().mockResolvedValue([chapterOne]);
     const streamBatchGenerate = vi.fn(() => stream<BatchStreamMessage>(
@@ -232,6 +419,76 @@ describe("ChapterWriter legacy compatibility characterization", () => {
     expect(streamBatchGenerate).toHaveBeenCalledTimes(1);
     expect(listChapters).toHaveBeenCalledTimes(2);
     expect(view.onProgress).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps batch controls and chapter selection locked until the terminal stream closes", async () => {
+    const batchStream = controlledStream<BatchStreamMessage>();
+    const refresh = deferred<ChapterListItem[]>();
+    const listChapters = vi.fn()
+      .mockResolvedValueOnce([chapterOne, chapterTwo])
+      .mockReturnValueOnce(refresh.promise);
+    const getChapter = vi.fn((_project: string, chapter: number) => Promise.resolve(
+      chapterDetail(chapter, chapter === 1 ? chapterOne.title : chapterTwo.title, `第${chapter}章正文`)
+    ));
+    mockApi({
+      listChapters,
+      getChapter,
+      streamBatchGenerate: vi.fn(() => batchStream.iterable),
+    });
+    renderWriter({ totalChapters: 2 });
+    await screen.findByText(chapterTwo.title);
+    await userEvent.click(screen.getByRole("button", { name: "一键生成所有章节" }));
+
+    await act(async () => batchStream.push({ type: "batch_complete", total_generated: 0, failed_chapters: [] }));
+    expect(await screen.findByRole("status")).toHaveTextContent("正在批量生成章节");
+    expect(screen.getByText(chapterTwo.title).closest("[aria-disabled='true']")).not.toBeNull();
+    await userEvent.click(screen.getByText(chapterTwo.title));
+    expect(getChapter).not.toHaveBeenCalled();
+
+    await act(async () => batchStream.finish());
+    await waitFor(() => expect(listChapters).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("status")).toHaveTextContent("正在批量生成章节");
+    expect(screen.getByText(chapterTwo.title).closest("[aria-disabled='true']")).not.toBeNull();
+    await userEvent.click(screen.getByText(chapterTwo.title));
+    expect(getChapter).not.toHaveBeenCalled();
+
+    await act(async () => refresh.resolve([chapterOne, chapterTwo]));
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "一键生成所有章节" })).toBeEnabled();
+    await userEvent.click(screen.getByText(chapterTwo.title));
+    expect(await screen.findByText("第2章正文")).toBeInTheDocument();
+    expect(getChapter).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts and clears batch output when only the chapter total changes", async () => {
+    const batchStream = controlledStream<BatchStreamMessage>();
+    let batchSignal: AbortSignal | undefined;
+    const streamBatchGenerate = vi.fn((_project: string, _skip: boolean, signal: AbortSignal) => {
+      batchSignal = signal;
+      return batchStream.iterable;
+    });
+    mockApi({
+      listChapters: vi.fn().mockResolvedValue([chapterOne]),
+      streamBatchGenerate,
+    });
+    const { rerender, onProgress, onBack } = renderWriter({ totalChapters: 2 });
+    await screen.findByText(chapterOne.title);
+    await userEvent.click(screen.getByRole("button", { name: "一键生成所有章节" }));
+    await act(async () => {
+      batchStream.push({ type: "batch_progress", current: 1, total: 1, chapter_num: 2 });
+      batchStream.push({ type: "content", chapter_num: 2, text: "旧批量正文" });
+      batchStream.push({ type: "complete", chapter_num: 2, word_count: 1100 });
+    });
+    expect(await screen.findByText("旧批量正文")).toBeInTheDocument();
+
+    rerender(<ChapterWriter projectId="project-1" totalChapters={1} onProgress={onProgress} onBack={onBack} />);
+    expect(batchSignal?.aborted).toBe(true);
+    await waitFor(() => expect(screen.queryByText("旧批量正文")).not.toBeInTheDocument());
+    expect(screen.queryByText("1100 字")).not.toBeInTheDocument();
+    await act(async () => batchStream.push({ type: "batch_complete", total_generated: 1, failed_chapters: [] }));
+    expect(alert).not.toHaveBeenCalled();
+    expect(onProgress).not.toHaveBeenCalled();
+    expect(streamBatchGenerate).toHaveBeenCalledTimes(1);
   });
 
   it("passes an explicit skip-existing change to one batch stream", async () => {
@@ -333,6 +590,76 @@ describe("ChapterWriter legacy compatibility characterization", () => {
     await waitFor(() => expect(alert).toHaveBeenCalledWith("保存失败: 写入失败"));
     expect(updateChapter).toHaveBeenCalledTimes(1);
     expect(screen.getByDisplayValue("保留正文，继续保留")).toBeInTheDocument();
+  });
+
+  it("freezes one save to its source chapter and blocks duplicate save or chapter selection", async () => {
+    const save = deferred<ChapterData>();
+    const getChapter = vi.fn((_project: string, chapter: number) => Promise.resolve(
+      chapterDetail(chapter, chapter === 1 ? chapterOne.title : chapterTwo.title, `第${chapter}章正文`)
+    ));
+    const updateChapter = vi.fn().mockReturnValue(save.promise);
+    mockApi({
+      listChapters: vi.fn().mockResolvedValue([chapterOne, chapterTwo]),
+      getChapter,
+      updateChapter,
+    });
+    const { onProgress } = renderWriter({ totalChapters: 2 });
+    await userEvent.click(await screen.findByText(chapterOne.title));
+    await screen.findByText("第1章正文");
+    await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+    const title = screen.getAllByRole("textbox").find((node) => node.tagName === "INPUT")!;
+    const body = screen.getByDisplayValue("第1章正文");
+    await userEvent.clear(title);
+    await userEvent.type(title, "冻结标题");
+    await userEvent.clear(body);
+    await userEvent.type(body, "冻结正文");
+    const saveButton = screen.getByRole("button", { name: "保存修改" });
+    await userEvent.click(saveButton);
+    await userEvent.click(saveButton);
+    await userEvent.click(screen.getByText(chapterTwo.title));
+
+    expect(updateChapter).toHaveBeenCalledTimes(1);
+    expect(updateChapter).toHaveBeenCalledWith("project-1", 1, { title: "冻结标题", content: "冻结正文" });
+    expect(getChapter).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status")).toHaveTextContent("正在保存第 1 章");
+    await act(async () => save.resolve(chapterDetail(1, "冻结标题", "冻结正文")));
+    await waitFor(() => expect(onProgress).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("冻结正文")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByText(chapterTwo.title));
+    expect(await screen.findByText("第2章正文")).toBeInTheDocument();
+    expect(getChapter).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not apply a deferred old-project save result to a new project", async () => {
+    const save = deferred<ChapterData>();
+    const listChapters = vi.fn().mockResolvedValue([chapterOne]);
+    const updateChapter = vi.fn().mockReturnValue(save.promise);
+    mockApi({
+      listChapters,
+      getChapter: vi.fn().mockResolvedValue(chapterDetail(1, chapterOne.title, "旧项目正文")),
+      updateChapter,
+    });
+    const { rerender, onProgress, onBack } = renderWriter({ totalChapters: 1 });
+    await userEvent.click(await screen.findByText(chapterOne.title));
+    await screen.findByText("旧项目正文");
+    await userEvent.click(screen.getByRole("button", { name: "编辑" }));
+    const body = screen.getByDisplayValue("旧项目正文");
+    await userEvent.clear(body);
+    await userEvent.type(body, "旧项目待保存正文");
+    await userEvent.click(screen.getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(updateChapter).toHaveBeenCalledTimes(1));
+
+    rerender(<ChapterWriter projectId="project-2" totalChapters={1} onProgress={onProgress} onBack={onBack} />);
+    await screen.findByRole("button", { name: "重新生成第1章" });
+    await act(async () => save.resolve(chapterDetail(1, "旧标题", "旧项目待保存正文")));
+    await act(async () => Promise.resolve());
+
+    expect(screen.queryByText("旧项目待保存正文")).not.toBeInTheDocument();
+    expect(onProgress).not.toHaveBeenCalled();
+    expect(alert).not.toHaveBeenCalled();
+    expect(listChapters.mock.calls.filter(([project]) => project === "project-1")).toHaveLength(1);
+    expect(updateChapter).toHaveBeenCalledWith("project-1", 1, expect.objectContaining({ content: "旧项目待保存正文" }));
   });
 
   it("distributes a total with a remainder and saves the exact chapter targets once", async () => {
