@@ -742,7 +742,7 @@ export default function ForeshadowPlanningPage() {
   if (!projectId) return <div className="card empty-state" role="alert">项目地址无效。</div>;
 
   return (
-    <div className="foreshadow-page" aria-busy={listLoading || busy} onClickCapture={(event) => {
+    <div className="foreshadow-page foreshadow-page--studio" aria-busy={listLoading || busy} onClickCapture={(event) => {
       if (!hasDraft || !(event.target instanceof Element) || !event.target.closest("a")) return;
       if (!window.confirm("当前还有未提交的计划或事实表单。离开页面将放弃这些内容，是否继续？")) {
         event.preventDefault(); event.stopPropagation();
@@ -795,7 +795,7 @@ export default function ForeshadowPlanningPage() {
           {list?.next_cursor && <button className="btn btn-secondary" disabled={listMoreLoading} onClick={() => void loadList(true)}>{listMoreLoading ? "正在加载…" : "加载更多"}</button>}
         </aside>
 
-        <main className="card foreshadow-detail-panel">
+        <section className="card foreshadow-detail-panel" aria-label="伏笔详情">
           <button className="btn btn-secondary foreshadow-mobile-back" onClick={returnToList}>← 返回伏笔列表</button>
           {!selectedId && <div className="foreshadow-empty"><strong>选择一个伏笔查看计划和作者确认事实</strong></div>}
           {detailLoading && <p>正在加载伏笔详情…</p>}
@@ -813,7 +813,7 @@ export default function ForeshadowPlanningPage() {
               openConfirm({ title: action === "archive" ? "归档伏笔" : "恢复伏笔", body, confirmLabel: action === "archive" ? "确认归档" : "确认恢复", run: () => { closeConfirm(); if (user) void execute(operation({ userId: user.id, projectId, type: action === "archive" ? "foreshadow_archive" : "foreshadow_restore", lifecycleId: detail.id, resourceId: null, payload }), action === "archive" ? "伏笔已移至归档列表；计划和事实未被自动改变。" : "伏笔已恢复为活动状态。"); } });
             }}
           />}
-        </main>
+        </section>
       </div>
 
       {confirmAction && <div className="foreshadow-dialog-backdrop"><section ref={confirmDialogRef} className="foreshadow-dialog" role="alertdialog" aria-modal="true" aria-labelledby="foreshadow-confirm-title"><h2 id="foreshadow-confirm-title" ref={confirmTitleRef} tabIndex={-1}>{confirmAction.title}</h2><p>{confirmAction.body}</p><div><button className="btn btn-secondary" onClick={closeConfirm}>取消</button><button className="btn btn-primary" onClick={confirmAction.run}>{confirmAction.confirmLabel}</button></div></section></div>}

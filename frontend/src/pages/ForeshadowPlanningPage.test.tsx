@@ -71,11 +71,48 @@ function renderPage(overrides: Record<string, unknown> = {}) {
 describe("ForeshadowPlanningPage", () => {
   beforeEach(() => { vi.restoreAllMocks(); sessionStorage.clear(); authState.userId = "user-1"; });
 
+  it("renders the studio shell without a nested main and keeps initial browsing read-only", async () => {
+    const getPlanning = vi.fn().mockResolvedValue(plan);
+    const listForeshadows = vi.fn().mockResolvedValue(list());
+    const getForeshadow = vi.fn().mockResolvedValue(lifecycle());
+    const bindForeshadow = vi.fn();
+    const changeForeshadowState = vi.fn();
+    const createForeshadowPlan = vi.fn();
+    const changeForeshadowPlanState = vi.fn();
+    const recordForeshadowFact = vi.fn();
+    const retractForeshadowFact = vi.fn();
+
+    renderPage({
+      getPlanning,
+      listForeshadows,
+      getForeshadow,
+      bindForeshadow,
+      changeForeshadowState,
+      createForeshadowPlan,
+      changeForeshadowPlanState,
+      recordForeshadowFact,
+      retractForeshadowFact,
+    });
+
+    const heading = await screen.findByRole("heading", { name: "伏笔管理" });
+    expect(heading.closest(".foreshadow-page--studio")).not.toBeNull();
+    expect(screen.queryByRole("main")).not.toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "伏笔详情" })).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "未来计划" });
+    expect(getPlanning).toHaveBeenCalledTimes(1);
+    expect(listForeshadows).toHaveBeenCalledTimes(1);
+    expect(getForeshadow).toHaveBeenCalledTimes(1);
+    for (const write of [bindForeshadow, changeForeshadowState, createForeshadowPlan, changeForeshadowPlanState, recordForeshadowFact, retractForeshadowFact]) {
+      expect(write).not.toHaveBeenCalled();
+    }
+  });
+
   it("shows the four authoritative states and keeps plans separate from author facts", async () => {
     renderPage();
     expect(await screen.findByRole("heading", { name: "伏笔管理" })).toBeInTheDocument();
-    expect(screen.getByText(/计划表示作者未来安排，不代表正文已经发生/)).toBeInTheDocument();
-    expect(screen.getByText(/系统尚未核对、生成或修改正文/)).toBeInTheDocument();
+    const boundary = screen.getByRole("region", { name: "伏笔事实边界" });
+    expect(within(boundary).getByText(/计划表示作者未来安排，不代表正文已经发生/)).toBeInTheDocument();
+    expect(within(boundary).getByText(/系统尚未核对、生成或修改正文/)).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "未来计划" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "作者确认事实" })).toBeInTheDocument();
     for (const label of ["未埋入", "已埋入", "待回收", "已回收"]) expect(screen.getAllByText(label).length).toBeGreaterThan(0);
