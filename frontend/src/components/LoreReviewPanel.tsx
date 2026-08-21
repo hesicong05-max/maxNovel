@@ -17,6 +17,7 @@ import type {
   LoreReviewStatus,
   LoreTypeDefinition,
 } from "@/types/lore";
+import "@/styles/lore-review-workspace.css";
 
 type Decision = Exclude<LoreReviewStatus, "pending">;
 type DraftPhase = "draft" | "outcome_unknown" | "maintenance" | "conflict" | "stale";

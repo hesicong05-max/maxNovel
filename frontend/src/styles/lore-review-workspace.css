@@ -1,0 +1,231 @@
+.lore-page--studio > .lore-review-panel > .lore-review-filters {
+  grid-template-columns: minmax(14rem, 2fr) repeat(2, minmax(9rem, 1fr)) auto;
+  gap: var(--studio-space-3);
+  margin: 0;
+  padding: var(--studio-space-4);
+  border-color: var(--studio-border);
+  border-radius: var(--studio-radius-lg);
+  background: var(--studio-surface);
+  box-shadow: none;
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-filters > label {
+  min-width: 0;
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-filters > label > span {
+  color: var(--studio-mist);
+  font-size: 0.76rem;
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-filters > label > :is(input, select),
+.lore-page--studio > .lore-review-panel > .lore-review-filters > .btn {
+  min-width: 0;
+  min-height: 2.75rem;
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace {
+  grid-template-columns: minmax(17rem, 20rem) minmax(0, 1fr);
+  gap: var(--studio-space-4);
+  min-height: 34rem;
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list,
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail {
+  min-width: 0;
+  border-color: var(--studio-border);
+  border-radius: var(--studio-radius-lg);
+  background: var(--studio-surface);
+  box-shadow: none;
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list {
+  align-content: start;
+  padding: var(--studio-space-3);
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-list-heading {
+  align-items: center;
+  padding: 0 var(--studio-space-1) var(--studio-space-3);
+  border-bottom: 1px solid var(--studio-border);
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-list-heading > h3 {
+  color: var(--studio-ink);
+  font-family: var(--font-serif);
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-list-heading > span {
+  color: var(--studio-mist);
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-card {
+  min-width: 0;
+  min-height: 5.25rem;
+  border-color: transparent;
+  border-radius: var(--studio-radius-md);
+  background: var(--studio-surface-muted);
+  transition: transform 140ms var(--studio-ease);
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-card:hover:not(:disabled),
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-card:focus-visible,
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-card.selected {
+  border-color: var(--studio-border-strong);
+  background: var(--studio-accent-soft);
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-card:disabled {
+  cursor: wait;
+  border-color: var(--studio-border);
+  transform: none;
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-card :is(.lore-card-top, strong, .lore-summary, .lore-meta) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-card .lore-type {
+  color: var(--studio-accent-strong);
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-card .lore-meta {
+  color: var(--studio-mist);
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-load-more {
+  min-height: 2.75rem;
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail {
+  align-content: start;
+  padding: clamp(1rem, 2.5vw, 2rem);
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail > .lore-detail-back {
+  min-height: 2.75rem;
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail > .lore-review-detail-header {
+  border-color: var(--studio-border);
+  border-radius: var(--studio-radius-md);
+  background: var(--studio-surface-muted);
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail > .lore-review-detail-header > :is(h2, p, strong) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail > .lore-review-detail-header > h2 {
+  color: var(--studio-ink);
+  font-family: var(--font-serif);
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail > .lore-review-detail-header > p {
+  color: var(--studio-mist);
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail > .lore-review-comparison {
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 0.9fr) minmax(0, 1fr);
+  gap: var(--studio-space-3);
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail > .lore-review-comparison > :is(.lore-review-endpoint, .lore-review-evidence) {
+  min-width: 0;
+  border-color: var(--studio-border);
+  border-radius: var(--studio-radius-md);
+  background: var(--studio-surface-muted);
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail > .lore-review-comparison > :is(.lore-review-endpoint, .lore-review-evidence) :is(h3, p, strong, span):not(.lore-note) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail > .lore-review-comparison > .lore-review-endpoint > details > summary {
+  min-height: 2.75rem;
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-list-heading > h3:focus-visible,
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-card:focus-visible,
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-load-more:focus-visible,
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail > .lore-detail-back:focus-visible,
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail > .lore-review-detail-header > h2:focus-visible,
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail > .lore-review-comparison > .lore-review-endpoint > details > summary:focus-visible,
+.lore-page--studio > .lore-review-panel > .lore-review-filters :is(input, select, button):focus-visible {
+  outline: 3px solid var(--studio-focus);
+  outline-offset: 3px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-card:hover:not(:disabled) {
+    transform: translateY(-2px);
+  }
+}
+
+.lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-card:active:not(:disabled) {
+  transform: translateY(1px) scale(0.99);
+}
+
+@media (max-width: 64rem) {
+  .lore-page--studio > .lore-review-panel > .lore-review-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .lore-page--studio > .lore-review-panel > .lore-review-workspace {
+    grid-template-columns: minmax(15rem, 17rem) minmax(0, 1fr);
+    gap: var(--studio-space-3);
+  }
+
+  .lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail > .lore-review-comparison {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 40rem) {
+  .lore-page--studio > .lore-review-panel > .lore-review-filters,
+  .lore-page--studio > .lore-review-panel > .lore-review-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .lore-page--studio > .lore-review-panel > .lore-review-workspace {
+    min-height: 0;
+  }
+
+  .lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list {
+    display: block;
+  }
+
+  .lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail {
+    display: grid;
+  }
+
+  .lore-page--studio > .lore-review-panel > .lore-review-filters > .btn {
+    width: 100%;
+  }
+
+  .lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-detail {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (pointer: coarse) {
+  .lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-card:hover:not(:disabled),
+  .lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-card:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-card {
+    transition: none;
+  }
+
+  .lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-card:hover:not(:disabled),
+  .lore-page--studio > .lore-review-panel > .lore-review-workspace > .lore-list > .lore-card:active:not(:disabled) {
+    transform: none;
+  }
+}

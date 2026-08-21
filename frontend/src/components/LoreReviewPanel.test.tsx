@@ -140,6 +140,40 @@ describe("LoreReviewPanel", () => {
     });
   });
 
+  it("keeps the studio shell read-only while browsing the queue and comparison", async () => {
+    const createManualLoreReview = vi.fn();
+    const previewLoreMerge = vi.fn();
+    const commitLoreMerge = vi.fn();
+    vi.spyOn(apiModule, "api", "get").mockReturnValue({
+      ...apiModule.api,
+      createManualLoreReview,
+      previewLoreMerge,
+      commitLoreMerge,
+    });
+    const api = apiModule.api;
+    const { container } = renderPanel();
+
+    const panel = screen.getByRole("region", { name: "重复与冲突线索" });
+    expect(panel).toHaveClass("lore-review-panel");
+    expect(panel.querySelector(":scope > .lore-review-filters")).toBeInTheDocument();
+    expect(panel.querySelector(":scope > .lore-review-workspace > .lore-list")).toBeInTheDocument();
+    expect(panel.querySelector(":scope > .lore-review-workspace > .lore-review-detail")).toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole("button", { name: /林岚 ↔ 林岚/ }));
+    expect(await screen.findByRole("region", { name: "两项设定对比" })).toBeInTheDocument();
+    await userEvent.click(screen.getAllByText("查看原始来源")[0]);
+
+    expect(api.listLoreReviews).toHaveBeenCalledTimes(1);
+    expect(api.getLoreReview).toHaveBeenCalledTimes(1);
+    expect(api.scanLoreReviews).not.toHaveBeenCalled();
+    expect(api.decideLoreReview).not.toHaveBeenCalled();
+    expect(createManualLoreReview).not.toHaveBeenCalled();
+    expect(previewLoreMerge).not.toHaveBeenCalled();
+    expect(commitLoreMerge).not.toHaveBeenCalled();
+    expect(container.querySelector(".lore-review-decision")).toBeInTheDocument();
+    expect(container.querySelector(".lore-manual-review-entry")).toBeInTheDocument();
+  });
+
   it("labels the clue as unconfirmed and shows versioned sources", async () => {
     renderPanel();
     await userEvent.click(await screen.findByRole("button", { name: /林岚 ↔ 林岚/ }));
