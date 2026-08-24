@@ -189,13 +189,15 @@ def sqlite_counts(database: Path) -> dict[str, int]:
 
 def main() -> int:
     args = parse_args()
-    api_base = args.api_base.rstrip("/")
+    backend_api_base = args.api_base.rstrip("/")
     frontend_url = args.frontend_url.rstrip("/") + "/"
+    browser_api_base = frontend_url.rstrip("/") + "/api"
     credentials = read_credentials(args.credentials_file)
     bootstrap_posts = 0
 
-    wait_for_json(f"{api_base}/health", {"status": "ok"}, args.wait_seconds)
+    wait_for_json(f"{backend_api_base}/health", {"status": "ok"}, args.wait_seconds)
     wait_for_frontend(frontend_url, args.wait_seconds)
+    wait_for_json(f"{browser_api_base}/health", {"status": "ok"}, args.wait_seconds)
 
     auth_payload = {
         "email": credentials["email"],
@@ -204,7 +206,7 @@ def main() -> int:
     }
     if args.initialize_user:
         status, _ = request_json(
-            f"{api_base}/auth/register",
+            f"{browser_api_base}/auth/register",
             method="POST",
             payload=auth_payload,
             expected=(200, 409),
@@ -212,28 +214,28 @@ def main() -> int:
         require(status in {200, 409}, "注册状态异常")
 
     _, login = request_json(
-        f"{api_base}/auth/login",
+        f"{browser_api_base}/auth/login",
         method="POST",
         payload={"email": credentials["email"], "password": credentials["password"]},
     )
     require(isinstance(login, dict) and isinstance(login.get("token"), str), "登录响应缺少 token")
     token = login["token"]
-    _, me = request_json(f"{api_base}/auth/me", token=token)
+    _, me = request_json(f"{browser_api_base}/auth/me", token=token)
     require(me.get("email") == credentials["email"], "登录账号与凭据不一致")
     require(me.get("username") == credentials["username"], "登录用户名与凭据不一致")
 
-    _, fixture = request_json(f"{api_base}/demo/v1/fixture", token=token)
+    _, fixture = request_json(f"{browser_api_base}/demo/v1/fixture", token=token)
     state = fixture.get("state")
     if state == "missing":
         require(args.bootstrap_if_missing, "fixture 缺失，未授权 bootstrap")
         request_json(
-            f"{api_base}/demo/v1/bootstrap",
+            f"{browser_api_base}/demo/v1/bootstrap",
             method="POST",
             payload={"fixture_version": 1, "operation_key": "demo:v1:bootstrap"},
             token=token,
         )
         bootstrap_posts = 1
-        _, fixture = request_json(f"{api_base}/demo/v1/fixture", token=token)
+        _, fixture = request_json(f"{browser_api_base}/demo/v1/fixture", token=token)
         state = fixture.get("state")
     require(state == "ready", f"fixture 未就绪：{state!r}")
     require(fixture.get("counts") == EXPECTED_COUNTS, "fixture 计数不精确")
@@ -254,29 +256,29 @@ def main() -> int:
     require(all(isinstance(fixture.get(key), str) and len(fixture[key]) == 32 for key in anchors), "fixture 锚点无效")
     project_id = fixture["project_id"]
 
-    _, project = request_json(f"{api_base}/projects/{project_id}", token=token)
+    _, project = request_json(f"{browser_api_base}/projects/{project_id}", token=token)
     require(project.get("id") == project_id, "项目详情身份不一致")
 
     _, lore = request_json(
-        f"{api_base}/projects/{project_id}/lore/elements?limit=30", token=token
+        f"{browser_api_base}/projects/{project_id}/lore/elements?limit=30", token=token
     )
     require(isinstance(lore.get("items"), list) and len(lore["items"]) == 7, "Lore 列表数量异常")
     require(any(item.get("id") == fixture["element_id"] for item in lore["items"]), "Lore 深链元素缺失")
 
-    _, planning = request_json(f"{api_base}/projects/{project_id}/planning", token=token)
+    _, planning = request_json(f"{browser_api_base}/projects/{project_id}/planning", token=token)
     require(planning.get("id") == fixture["plan_id"], "规划身份不一致")
     chapters = [chapter for part in planning.get("parts", []) for chapter in part.get("chapters", [])]
     require(len(chapters) == 2, "规划章节数量异常")
     require({chapter.get("id") for chapter in chapters} == {fixture["chapter_id"], fixture["second_chapter_id"]}, "规划章节锚点异常")
 
     _, foreshadows = request_json(
-        f"{api_base}/projects/{project_id}/planning/foreshadows?limit=50",
+        f"{browser_api_base}/projects/{project_id}/planning/foreshadows?limit=50",
         token=token,
     )
     require(len(foreshadows.get("items", [])) == 1, "伏笔生命周期数量异常")
     require(foreshadows["items"][0].get("id") == fixture["foreshadow_lifecycle_id"], "伏笔深链锚点异常")
 
-    _, openapi = request_json(api_base.removesuffix("/api") + "/openapi.json")
+    _, openapi = request_json(backend_api_base.removesuffix("/api") + "/openapi.json")
     paths = openapi.get("paths", {})
     require(all(path in paths for path in REQUIRED_DEMO_PATHS), "Demo 所需 API 路由缺失")
 

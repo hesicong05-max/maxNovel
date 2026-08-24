@@ -272,9 +272,9 @@ PY
 
 start_services() {
   local python_bin="$1" vite_bin="$2" stored_backend_port="$3" stored_frontend_port="$4"
-  local jwt_secret api_base frontend_url
+  local jwt_secret proxy_target frontend_url
   jwt_secret="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
-  api_base="http://127.0.0.1:${stored_backend_port}/api"
+  proxy_target="http://127.0.0.1:${stored_backend_port}"
   frontend_url="http://127.0.0.1:${stored_frontend_port}"
   local -a backend_env=(
     ENV_FILE=/dev/null
@@ -302,7 +302,7 @@ start_services() {
   )
   (
     cd "${FRONTEND_DIR}"
-    nohup env VITE_API_BASE_URL="${api_base}" VITE_SENTRY_DSN= "${vite_bin}" \
+    nohup env VITE_API_BASE_URL=/api DEMO_API_PROXY_TARGET="${proxy_target}" VITE_SENTRY_DSN= "${vite_bin}" \
       --host 127.0.0.1 --port "${stored_frontend_port}" --strictPort \
       >"${run_dir}/frontend.log" 2>&1 &
     echo $! > "${frontend_pid_file}"

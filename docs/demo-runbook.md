@@ -37,6 +37,8 @@ export VITE_BIN=/absolute/path/to/frontend/node_modules/.bin/vite
 - 十项 fixture 计数与固定样例一致
 - generation run、paid attempt、technical execution、candidate、selection、ForeshadowFact、legacy Chapter 全部为 0
 
+浏览器与健康检查都经前端同源 `/api` 代理访问后端；每个 run 的代理目标固定为该 run 自己的 loopback backend 端口。不要手工设置跨端口的 `VITE_API_BASE_URL`，也不要把代理目标指向外部主机。
+
 显式查看登录凭据：
 
 ```bash
@@ -58,6 +60,8 @@ export VITE_BIN=/absolute/path/to/frontend/node_modules/.bin/vite
 ```
 
 `stop` 只终止脚本记录且身份匹配的进程，保留数据库和日志。`resume` 要求当前 Git SHA 与创建环境时完全一致。端口被未知进程占用时脚本会停止，不会执行 `pkill`。
+
+代码修复或提交变化后，旧 run 会因 SHA 不一致而拒绝 `resume`。保留其目录、数据库和日志作为审计证据，并使用带版本后缀的新 run-id 建立替代环境；不得改写 marker、覆盖数据库或删除旧 run 来复用名称。
 
 运行产物位于：
 
@@ -100,6 +104,8 @@ Final-A/Final-B 冻结时应只有固定 fixture，generation、candidate、sele
 - 固定模拟、未调用 AI、无模型费用、不覆盖原稿、不确认伏笔事实的说明可见。
 - 项目名、章节名、设定名和候选长中文不截断、不遮挡、不撑破卡片。
 - Console 没有 warning/error。
+- Network 中项目、Lore、规划和伏笔请求均为当前 frontend origin 的 `/api/...`；不得出现跨端口 CORS/OPTIONS 或 `net::ERR_FAILED`。
+- 从全新浏览器会话首次点击步骤3、步骤4必须直接进入权威详情，不得先出现错误再靠预热或重试恢复。
 
 素材命名：
 

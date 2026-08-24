@@ -1,5 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "@/services/api";
@@ -52,7 +53,7 @@ function receipt(operationKey: string, operationType: ForeshadowMutationReceipt[
   return { receipt_id: id("receipt"), operation_key: operationKey, operation_type: operationType, replayed: false, project_id: projectId, lifecycle_id: value.id, previous_lifecycle_version: value.lock_version - 1, new_lifecycle_version: value.lock_version, event_id: id("event"), lifecycle: value, created_at: now };
 }
 
-function renderPage(overrides: Record<string, unknown> = {}) {
+function renderPage(overrides: Record<string, unknown> = {}, strictMode = false) {
   const mocked = {
     ...apiModule.api,
     getPlanning: vi.fn().mockResolvedValue(plan),
@@ -64,7 +65,8 @@ function renderPage(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
   vi.spyOn(apiModule, "api", "get").mockReturnValue(mocked as typeof apiModule.api);
-  render(<MemoryRouter initialEntries={[`/project/${projectId}/plan/foreshadows`]}><Routes><Route path="/project/:id/plan/foreshadows" element={<><ProjectSwitcher /><ForeshadowPlanningPage /></>} /></Routes></MemoryRouter>);
+  const page = <MemoryRouter initialEntries={[`/project/${projectId}/plan/foreshadows`]}><Routes><Route path="/project/:id/plan/foreshadows" element={<><ProjectSwitcher /><ForeshadowPlanningPage /></>} /></Routes></MemoryRouter>;
+  render(strictMode ? <StrictMode>{page}</StrictMode> : page);
   return mocked;
 }
 
@@ -105,6 +107,22 @@ describe("ForeshadowPlanningPage", () => {
     for (const write of [bindForeshadow, changeForeshadowState, createForeshadowPlan, changeForeshadowPlanState, recordForeshadowFact, retractForeshadowFact]) {
       expect(write).not.toHaveBeenCalled();
     }
+  });
+
+  it("ignores obsolete StrictMode planning and list failures after current reads succeed", async () => {
+    const getPlanning = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValue(plan);
+    const listForeshadows = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValue(list());
+    renderPage({ getPlanning, listForeshadows }, true);
+
+    expect(await screen.findByRole("heading", { name: "未来计划" })).toBeInTheDocument();
+    expect(screen.queryByText("Failed to fetch")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "核对服务器最新状态" })).not.toBeInTheDocument();
+    expect(getPlanning).toHaveBeenCalledTimes(2);
+    expect(listForeshadows).toHaveBeenCalledTimes(2);
   });
 
   it("shows the four authoritative states and keeps plans separate from author facts", async () => {
