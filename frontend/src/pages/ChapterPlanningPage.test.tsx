@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as apiModule from "@/services/api";
@@ -81,7 +82,7 @@ async function reorderReceipt(body: { operation_key: string; expected_structure_
   };
 }
 
-function renderPage(overrides: Record<string, unknown> = {}) {
+function renderPage(overrides: Record<string, unknown> = {}, strictMode = false) {
   const mocked = {
     ...apiModule.api,
     getPlanning: vi.fn().mockResolvedValue(plan),
@@ -94,7 +95,7 @@ function renderPage(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
   vi.spyOn(apiModule, "api", "get").mockReturnValue(mocked as typeof apiModule.api);
-  render(
+  const page = (
     <MemoryRouter initialEntries={["/project/project-1/plan/chapters"]}>
       <Routes>
         <Route path="/project/:id/plan/chapters" element={<ChapterPlanningPage />} />
@@ -102,6 +103,7 @@ function renderPage(overrides: Record<string, unknown> = {}) {
       </Routes>
     </MemoryRouter>
   );
+  render(strictMode ? <StrictMode>{page}</StrictMode> : page);
   return mocked;
 }
 
@@ -136,6 +138,18 @@ describe("ChapterPlanningPage", () => {
     expect(document.querySelector(".planning-page main")).not.toBeInTheDocument();
     await act(async () => { resolvePlan?.(plan); });
     expect(await screen.findByRole("navigation", { name: "篇章与章节结构" })).toBeInTheDocument();
+  });
+
+  it("ignores an obsolete StrictMode planning failure after the current request succeeds", async () => {
+    const getPlanning = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValue(plan);
+    renderPage({ getPlanning }, true);
+
+    expect(await screen.findByRole("navigation", { name: "篇章与章节结构" })).toBeInTheDocument();
+    expect(screen.queryByText("Failed to fetch")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "刷新规划" })).not.toBeInTheDocument();
+    expect(getPlanning).toHaveBeenCalledTimes(2);
   });
 
   it("shows explicit initialization and never creates planning automatically", async () => {

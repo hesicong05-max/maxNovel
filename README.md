@@ -45,6 +45,10 @@ npm ci
 npm run dev  # http://localhost:5173，代理 /api 到 8000
 ```
 
+### 非生产最终 Demo
+
+最终 Demo 使用独立 SQLite、固定技术模拟和失败关闭的环境门禁，不需要真实 LLM。请严格按照 [最终 Demo 本地运行手册](docs/demo-runbook.md) 创建新的 run-id；不要复用开发或生产数据库。
+
 ### Docker 部署
 
 #### 前置准备
